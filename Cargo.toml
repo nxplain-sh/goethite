@@ -1,0 +1,64 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+# cargo-fuzz targets need nightly and libFuzzer; they live in their own workspace.
+exclude = ["fuzz"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.99"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/nxplain-sh/goethite"
+homepage = "https://nxplain-sh.github.io/goethite/"
+authors = ["goethite contributors"]
+publish = false
+
+[workspace.dependencies]
+# Internal crates.
+goethite-proto = { path = "crates/goethite-proto" }
+goethite-resolver = { path = "crates/goethite-resolver" }
+goethite-server = { path = "crates/goethite-server" }
+
+# External crates. Every addition must pass `cargo deny check` and be justified in the PR.
+anyhow = "1.0.104"
+clap = { version = "4.6.7", features = ["derive"] }
+hickory-proto = { version = "0.26.3", default-features = false, features = ["std"] }
+proptest = "1.11.0"
+serde = { version = "1.0.229", features = ["derive"] }
+thiserror = "2.0.21"
+tokio = "1.53.2"
+toml = { version = "1.1.6", default-features = false, features = ["std", "parse", "serde"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+[workspace.lints.rust]
+# Security rule: no unsafe code anywhere. goethite-proto, goethite-filter and
+# goethite-resolver additionally carry `#![forbid(unsafe_code)]` in their crate
+# roots so the guarantee survives a crate opting out of the workspace lints.
+unsafe_code = "forbid"
+missing_docs = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+unused_qualifications = "warn"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+must_use_candidate = "allow"
+
+# Security rule: never panic on data from the wire, config or API. Denied in all
+# non-test code (clippy.toml allows them inside tests).
+unwrap_used = "deny"
+expect_used = "deny"
+indexing_slicing = "deny"
+panic = "deny"
+string_slice = "deny"
+get_unwrap = "deny"
+arithmetic_side_effects = "deny"
+unreachable = "deny"
+todo = "deny"
+unimplemented = "deny"
+
+# Log with `tracing`, never print.
+dbg_macro = "deny"
+print_stdout = "deny"
+print_stderr = "deny"

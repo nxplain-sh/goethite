@@ -1,0 +1,45 @@
+# cargo-deny: https://embarkstudios.github.io/cargo-deny/
+#
+# `cargo deny check` runs in CI. Every new dependency must pass it and be
+# justified in the pull request description (AGENTS.md, "Security rules").
+
+[graph]
+# Platforms goethite runs on (Linux) and is developed on (macOS).
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-unknown-linux-musl",
+    "aarch64-unknown-linux-musl",
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+]
+all-features = true
+
+[advisories]
+# Vulnerable, unsound, unmaintained and yanked crates all fail the check.
+# An ignored advisory needs a comment with the reason and when to revisit it.
+yanked = "deny"
+ignore = []
+
+[licenses]
+# Licenses compatible with shipping goethite under MIT OR Apache-2.0.
+# Unicode-3.0 covers the ICU crates behind IDNA name handling.
+allow = [
+    "Apache-2.0",
+    "MIT",
+    "Unicode-3.0",
+]
+confidence-threshold = 0.93
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# Internal path dependencies (publish = false) are not wildcards.
+allow-wildcard-paths = true
+highlight = "all"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

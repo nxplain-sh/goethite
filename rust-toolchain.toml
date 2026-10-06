@@ -1,0 +1,6 @@
+# The pinned toolchain is also the MSRV (`rust-version` in Cargo.toml).
+# CI checks that the two stay in sync. Nightly is only used for fuzzing.
+[toolchain]
+channel = "1.99.0"
+components = ["rustfmt", "clippy"]
+profile = "minimal"
