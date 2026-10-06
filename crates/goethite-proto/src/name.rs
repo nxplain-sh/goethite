@@ -56,8 +56,9 @@ impl Name {
     }
 
     /// The number of labels, not counting the root.
-    pub fn label_count(&self) -> u8 {
-        self.0.num_labels()
+    pub fn label_count(&self) -> usize {
+        // Not hickory's `num_labels`, which leaves out a leading `*`.
+        self.0.iter().count()
     }
 }
 
@@ -128,6 +129,12 @@ mod tests {
         let shown = name.to_string();
         assert!(!shown.contains('\n'));
         assert_eq!(shown, "evil\\012log.te\\.st.");
+    }
+
+    #[test]
+    fn label_count_includes_wildcards() {
+        let name = Name::from_labels([&b"*"[..], b"goethite", b"test"]).unwrap();
+        assert_eq!(name.label_count(), 3);
     }
 
     #[test]

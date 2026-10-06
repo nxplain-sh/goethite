@@ -1,6 +1,6 @@
 //! The codec trait, its errors and the decode policy shared by implementations.
 
-use std::fmt;
+use std::fmt::{self, Write as _};
 
 use crate::message::HEADER_LEN;
 use crate::{Edns, Opcode, Query, Response, ResponseCode};
@@ -49,15 +49,21 @@ pub trait DnsCodec: Send + Sync {
 ///
 /// The decode policy, applied before any expensive parsing:
 ///
-/// - shorter than a header, a response (`QR` set), or unparseable: drop it
-///   ([`DecodeError::response`] is `None`). Never answering responses
-///   prevents reflection loops between servers.
+/// - shorter than a header, a response (`QR` set), or a question that cannot
+///   be read: drop it ([`DecodeError::response`] is `None`). Never answering
+///   responses prevents reflection loops between servers.
 /// - opcode other than `QUERY`: answer `NOTIMP`.
 /// - not exactly one question, or any answer or authority records, or more
 ///   than two additional records: answer `FORMERR`. Checking the header
 ///   counts first also stops a 12-byte message from making the parser
 ///   allocate for 65,535 records.
+/// - a readable question but an unreadable additional section (two OPT
+///   records, a malformed EDNS option, a truncated OPT record): answer
+///   `FORMERR`, as RFC 6891 and RFC 7871 require.
 /// - EDNS version other than 0: answer `BADVERS`.
+///
+/// Error replies are header-only (plus an OPT record for `BADVERS`), so they
+/// are never larger than the message that caused them.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum DecodeError {
@@ -78,6 +84,14 @@ pub enum DecodeError {
         "query must have one question, no answer or authority records and at most two additional records"
     )]
     FormatError(ErrorContext),
+    /// The question is readable but the additional section is not.
+    #[error("malformed additional section: {source}")]
+    MalformedAdditional {
+        /// Header fields of the query.
+        context: ErrorContext,
+        /// What the parser reported.
+        source: WireError,
+    },
     /// The query uses an EDNS version other than 0.
     #[error("EDNS version {version} is not supported")]
     BadVersion {
@@ -100,7 +114,9 @@ impl DecodeError {
         match self {
             Self::TooShort { .. } | Self::NotAQuery | Self::Malformed(_) => None,
             Self::NotImplemented(c) => Some(reply(c, ResponseCode::NOT_IMP, None)),
-            Self::FormatError(c) => Some(reply(c, ResponseCode::FORM_ERR, None)),
+            Self::FormatError(context) | Self::MalformedAdditional { context, .. } => {
+                Some(reply(context, ResponseCode::FORM_ERR, None))
+            }
             Self::BadVersion { context, .. } => {
                 Some(reply(context, ResponseCode::BAD_VERS, Some(Edns::ours())))
             }
@@ -145,16 +161,30 @@ impl WireError {
 }
 
 impl fmt::Display for WireError {
+    /// Writes the message with everything except printable ASCII escaped.
+    ///
+    /// The underlying text can quote bytes from the wire (names, option
+    /// data), and this ends up in logs: escaping keeps newlines, terminal
+    /// escape sequences and bidirectional overrides out of them.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
+        for c in self.0.to_string().chars() {
+            if c == ' ' || c.is_ascii_graphic() {
+                f.write_char(c)?;
+            } else {
+                write!(f, "{}", c.escape_default())?;
+            }
+        }
+        Ok(())
     }
 }
 
 impl fmt::Debug for WireError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "WireError({})", self.0)
+        write!(f, "WireError({self})")
     }
 }
+
+impl std::error::Error for WireError {}
 
 /// The fixed 12-byte header, read without trusting anything after it.
 #[derive(Clone, Copy, Debug)]
@@ -216,5 +246,20 @@ impl RawHeader {
             return Err(DecodeError::FormatError(header.context()));
         }
         Ok(header)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wire_error_text_is_escaped() {
+        let err = WireError::new(std::io::Error::other(
+            "a.b\nINJECTED \x1b[31m\u{fc}\u{202e}",
+        ));
+        let shown = err.to_string();
+        assert_eq!(shown, "a.b\\nINJECTED \\u{1b}[31m\\u{fc}\\u{202e}");
+        assert!(shown.chars().all(|c| c.is_ascii_graphic() || c == ' '));
     }
 }

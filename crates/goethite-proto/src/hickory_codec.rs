@@ -4,7 +4,7 @@
 
 use hickory_proto::op::{self, Message, MessageType, OpCode};
 use hickory_proto::rr::{self, DNSClass, RData, rdata};
-use hickory_proto::serialize::binary::{BinEncodable, BinEncoder};
+use hickory_proto::serialize::binary::{BinDecodable, BinDecoder, BinEncodable, BinEncoder};
 
 use crate::codec::RawHeader;
 use crate::{
@@ -19,8 +19,17 @@ pub struct HickoryCodec;
 impl DnsCodec for HickoryCodec {
     fn decode_query(&self, wire: &[u8]) -> Result<Query, DecodeError> {
         let header = RawHeader::check_query(wire)?;
-        let message =
-            Message::from_vec(wire).map_err(|e| DecodeError::Malformed(WireError::new(e)))?;
+        let message = Message::from_vec(wire).map_err(|e| {
+            let source = WireError::new(e);
+            if question_is_readable(wire) {
+                DecodeError::MalformedAdditional {
+                    context: header.context(),
+                    source,
+                }
+            } else {
+                DecodeError::Malformed(source)
+            }
+        })?;
 
         // `check_query` guarantees exactly one question in the header, and the
         // parser read exactly that many.
@@ -90,6 +99,12 @@ impl DnsCodec for HickoryCodec {
         out.clear();
         Err(EncodeError::TooLarge { len, max_len })
     }
+}
+
+/// Whether the header and question parse, i.e. the problem is further on.
+fn question_is_readable(wire: &[u8]) -> bool {
+    let mut decoder = BinDecoder::new(wire);
+    op::Header::read(&mut decoder).is_ok() && op::Query::read(&mut decoder).is_ok()
 }
 
 fn emit(message: &Message, out: &mut Vec<u8>) -> Result<(), EncodeError> {
@@ -239,14 +254,66 @@ mod tests {
         }
     }
 
+    /// Header (12) + `goethite.test.` (15) + type and class (4).
+    const SAMPLE_QUESTION_END: usize = 31;
+
     #[test]
-    fn truncated_body_is_dropped() {
+    fn truncated_question_is_dropped() {
         let wire = encode(&sample_query());
-        for len in 12..wire.len() {
+        for len in 12..SAMPLE_QUESTION_END {
             let err = HickoryCodec.decode_query(&wire[..len]).unwrap_err();
             assert!(matches!(err, DecodeError::Malformed(_)), "len {len}");
             assert!(err.response().is_none());
         }
+    }
+
+    #[test]
+    fn truncated_additional_section_gets_formerr() {
+        let wire = encode(&sample_query());
+        for len in SAMPLE_QUESTION_END..wire.len() {
+            let err = HickoryCodec.decode_query(&wire[..len]).unwrap_err();
+            assert!(
+                matches!(err, DecodeError::MalformedAdditional { .. }),
+                "len {len}"
+            );
+            assert_eq!(err.response().unwrap().rcode, ResponseCode::FORM_ERR);
+        }
+    }
+
+    /// The sample query with ARCOUNT 2 and a second OPT record appended.
+    fn with_extra_additional(record: &[u8]) -> Vec<u8> {
+        let mut wire = encode(&sample_query());
+        wire[11] = 2;
+        wire.extend_from_slice(record);
+        wire
+    }
+
+    #[test]
+    fn duplicate_opt_records_get_formerr() {
+        // RFC 6891 6.1.1: more than one OPT record MUST get FORMERR.
+        let opt = [0, 0, 41, 0x04, 0xd0, 0, 0, 0, 0, 0, 0];
+        let err = HickoryCodec
+            .decode_query(&with_extra_additional(&opt))
+            .unwrap_err();
+        assert!(matches!(err, DecodeError::MalformedAdditional { .. }));
+        let response = err.response().unwrap();
+        assert_eq!(response.rcode, ResponseCode::FORM_ERR);
+        assert_eq!(response.id, 0x1234);
+    }
+
+    #[test]
+    fn malformed_client_subnet_gets_formerr() {
+        // RFC 7871 7.1.2: an inconsistent ECS option MUST get FORMERR. Source
+        // prefix 40 is impossible for IPv4.
+        let mut wire = encode(&Query {
+            edns: None,
+            ..sample_query()
+        });
+        wire[11] = 1;
+        wire.extend_from_slice(&[0, 0, 41, 0x04, 0xd0, 0, 0, 0, 0, 0, 12]);
+        wire.extend_from_slice(&[0, 8, 0, 8, 0, 1, 40, 0, 192, 0, 2, 1]);
+        let err = HickoryCodec.decode_query(&wire).unwrap_err();
+        assert_eq!(err.response().unwrap().rcode, ResponseCode::FORM_ERR);
     }
 
     #[test]

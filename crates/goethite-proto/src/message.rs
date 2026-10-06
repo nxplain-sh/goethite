@@ -154,8 +154,9 @@ pub struct Response {
 impl Response {
     /// An empty response to `query` with the given code.
     ///
-    /// Copies the ID, `RD`, `CD` and question, and includes goethite's own
-    /// EDNS parameters if the query used EDNS.
+    /// Copies the ID, `RD`, `CD` and question. If the query used EDNS, the
+    /// response carries goethite's own EDNS parameters with the query's `DO`
+    /// bit copied, as RFC 3225 requires.
     pub fn for_query(query: &Query, rcode: ResponseCode) -> Self {
         Self {
             id: query.id,
@@ -168,7 +169,10 @@ impl Response {
             rcode,
             question: Some(query.question.clone()),
             answers: Vec::new(),
-            edns: query.edns.map(|_| Edns::ours()),
+            edns: query.edns.map(|edns| Edns {
+                dnssec_ok: edns.dnssec_ok,
+                ..Edns::ours()
+            }),
         }
     }
 
@@ -245,7 +249,13 @@ mod tests {
         assert!(r.recursion_desired);
         assert!(r.checking_disabled);
         assert_eq!(r.question.as_ref(), Some(&q.question));
-        assert_eq!(r.edns, Some(Edns::ours()));
+        assert_eq!(
+            r.edns,
+            Some(Edns {
+                udp_payload_size: MAX_UDP_PAYLOAD,
+                dnssec_ok: true,
+            })
+        );
         assert_eq!(r.rcode, ResponseCode::REFUSED);
     }
 }

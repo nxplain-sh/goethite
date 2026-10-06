@@ -167,6 +167,7 @@ async fn other_types_of_the_test_name_get_nodata() {
         .await
         .unwrap();
     assert_eq!(response.metadata.response_code, ResponseCode::NoError);
+    assert_eq!(response.metadata.id, 4);
     assert_eq!(response.answers, vec![]);
     server.shutdown().await;
 }
@@ -180,7 +181,8 @@ async fn garbage_is_dropped_and_the_server_keeps_answering() {
         b"\x00\x01",
         // A plausible header, then a name that is a dangling compression pointer.
         &[0, 8, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 0, 1, 0, 1],
-        &valid[..valid.len() - 3],
+        // Cut off inside the question.
+        &valid[..20],
     ];
     for wire in garbage {
         assert!(udp_exchange(server.udp, wire).await.is_none(), "{wire:?}");
@@ -210,6 +212,14 @@ async fn malformed_queries_with_a_valid_header_get_error_responses() {
     let no_question = [0, 6, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0];
     let response = udp_exchange(server.udp, &no_question).await.unwrap();
     assert_eq!(response.metadata.id, 6);
+    assert_eq!(response.metadata.response_code, ResponseCode::FormErr);
+
+    // A readable question but a cut-off OPT record: FORMERR.
+    let valid = query(8, "goethite.test.", RecordType::A);
+    let response = udp_exchange(server.udp, &valid[..valid.len() - 3])
+        .await
+        .unwrap();
+    assert_eq!(response.metadata.id, 8);
     assert_eq!(response.metadata.response_code, ResponseCode::FormErr);
 
     // A NOTIFY: NOTIMP.

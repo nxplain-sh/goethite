@@ -46,15 +46,21 @@ its public API.
 
   | Input                                                        | Result                                     |
   | ------------------------------------------------------------ | ------------------------------------------ |
-  | Shorter than a header, unparseable or truncated              | `DecodeError`: dropped and logged at debug |
+  | Shorter than a header, or the question cannot be read        | `DecodeError`: dropped and logged at debug |
   | QR=1 (a response)                                            | Dropped, to prevent reflection and loops   |
   | opcode other than QUERY                                      | NOTIMP                                     |
   | QDCOUNT other than 1, any answer or authority records, or more than 2 additional records | FORMERR |
+  | Readable question, unreadable additional section (two OPT records, malformed EDNS option, truncated OPT) | FORMERR (RFC 6891, RFC 7871) |
   | EDNS version other than 0                                    | BADVERS                                    |
 
   The header counts are checked before hickory parses anything. hickory pre-allocates vectors
   from the header counts, so without this check a 12-byte message claiming 65,535 questions makes
-  it allocate megabytes before failing.
+  it allocate megabytes before failing. Error replies are header-only (plus OPT for BADVERS), so
+  they are never larger than the message that caused them.
+
+- hickory-proto logs its own warnings about some malformed input (for example EDNS options with a
+  wrong length), quoting the attacker's bytes. The binary turns `hickory_proto` logging off unless
+  `RUST_LOG` names it. Error text that goethite does log is escaped to printable ASCII.
 
 - Size limits: UDP queries are read into a 4096-byte buffer. Responses advertise an EDNS UDP size
   of 1232 and are fitted to the client's limit (512 bytes without EDNS).
