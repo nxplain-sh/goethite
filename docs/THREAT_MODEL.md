@@ -65,12 +65,14 @@ for that phase and not implemented yet. Phases follow the roadmap in
 | ------------------------------------------- | ------------------------------------------------------------------------------------------------- | ----- | ------- |
 | Crash or panic from malformed packets (B1)  | Bounded parsing in `goethite-proto`. Clippy denies `unwrap`/`expect`/`panic`/indexing/string slicing in non-test code. Malformed packets are dropped and logged at debug. | 0 | done |
 | Memory exhaustion from tiny packets (B1)    | Header counts are checked before full parsing (QDCOUNT must be 1, no answer or authority records, at most 2 additional), so a 12-byte message cannot trigger large allocations | 0 | done |
-| Log injection via crafted names (B1)        | Names are written in escaped ASCII presentation format (`\DDD`), so control characters and newlines from the wire never reach log lines verbatim | 0 | done |
+| Log injection via crafted names (B1)        | Names are written in escaped ASCII presentation format (`\DDD`), and parser error text is escaped to printable ASCII, so control characters, newlines and terminal escapes from the wire never reach log lines verbatim | 0 | done |
+| Log flooding / amplification (B1)           | hickory-proto's own warnings (which quote packet bytes at several times the packet size) are off by default; goethite logs rejected messages at debug only | 0 | done |
 | Memory-safety bugs                          | `unsafe_code = "forbid"` workspace-wide, plus `#![forbid(unsafe_code)]` in proto/filter/resolver   | 0     | done    |
 | Parser bugs found too late                  | cargo-fuzz target `decode_query` (round-trip property), weekly CI fuzz run, proptest round-trip and garbage-input tests | 0 | done |
 | Reflection / response loops (B1)            | Messages with QR=1 (responses) are dropped, never answered                                         | 0     | done    |
 | Oversized UDP responses / amplification     | UDP responses fit the client's limit (512 without EDNS, at most the advertised EDNS size). goethite advertises 1232 and sets TC when truncating. | 0 | done |
 | TCP resource exhaustion (B1)                | TCP connection cap, idle timeout, 2-byte length framing (RFC 7766)                                 | 0     | done    |
+| One client holding every TCP slot (B1)      | Per-client connection limits, closing the oldest idle connection when full, a shorter first-byte timeout under load (RFC 7766 §6.2.3). Today a single host that opens `max_tcp_connections` idle connections blocks TCP (and TC=1 fallback) for everyone | 1 | planned |
 | Accidental exposure of a dev build          | Development default listens on `127.0.0.1:15353`                                                   | 0     | done    |
 | Config typos silently changing behaviour    | Unknown TOML fields are rejected. The config file size is bounded.                                 | 0     | done    |
 | Supply chain (B7)                           | `cargo deny` (licenses, advisories, bans, sources) and `cargo audit` in CI. GitHub Actions pinned to commit SHAs. Minimal workflow permissions. | 0 | done |

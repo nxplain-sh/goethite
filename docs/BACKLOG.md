@@ -39,6 +39,10 @@ When an item is picked up, move it into an issue or PR and delete it from this l
   (query, response, frame) at the 64 KiB message limit. Revisit together with RFC 7766
   out-of-order pipelining and a per-connection query limit.
 - **[P1] `goethite check-config`** to validate a config file without starting the server.
+- **[P1] Per-client TCP fairness.** One host can open `max_tcp_connections` idle connections and
+  block TCP (including TC=1 fallback) for everyone until they time out. Add per-source-IP limits,
+  close the oldest idle connection when full, and use a shorter first-byte timeout under load
+  (RFC 7766 §6.2.3).
 
 ## Phase 2: v0.2 control
 
