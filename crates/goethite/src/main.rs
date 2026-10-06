@@ -51,10 +51,21 @@ fn main() -> ExitCode {
 }
 
 /// Logs to stderr. `RUST_LOG` overrides the default level (`info`).
+///
+/// hickory-proto logs its own warnings about malformed wire data, quoting
+/// attacker-controlled bytes at a much larger size than the packet. goethite
+/// reports rejected messages itself, so hickory stays silent unless `RUST_LOG`
+/// names it explicitly.
 fn init_logging() {
-    let filter = EnvFilter::builder()
+    let directives = std::env::var(EnvFilter::DEFAULT_ENV).unwrap_or_default();
+    let mut filter = EnvFilter::builder()
         .with_default_directive(LevelFilter::INFO.into())
-        .from_env_lossy();
+        .parse_lossy(&directives);
+    if !directives.contains("hickory")
+        && let Ok(quiet) = "hickory_proto=off".parse()
+    {
+        filter = filter.add_directive(quiet);
+    }
     // Only fails if a global subscriber is already set, which never happens here.
     let _ = tracing_subscriber::fmt()
         .with_env_filter(filter)

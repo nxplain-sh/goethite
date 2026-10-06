@@ -163,13 +163,26 @@ mod serving {
     fn ask(server: SocketAddr, name: &str) -> Message {
         let mut query = Message::new(0x5353, MessageType::Query, OpCode::Query);
         query.add_query(Query::query(Name::from_str(name).unwrap(), RecordType::A));
+        ask_raw(server, &query.to_vec().unwrap())
+    }
 
+    fn ask_raw(server: SocketAddr, wire: &[u8]) -> Message {
         let socket = UdpSocket::bind("127.0.0.1:0").unwrap();
         socket.set_read_timeout(Some(WAIT)).unwrap();
-        socket.send_to(&query.to_vec().unwrap(), server).unwrap();
+        socket.send_to(wire, server).unwrap();
         let mut buf = [0; 512];
         let len = socket.recv(&mut buf).unwrap();
         Message::from_vec(&buf[..len]).unwrap()
+    }
+
+    /// A query for `goethite.test. A` whose OPT record carries an EDNS option
+    /// that claims 5 bytes but has 2. hickory-proto logs a warning for it.
+    fn query_with_malformed_edns_option() -> Vec<u8> {
+        let mut wire = vec![0x01, 0x01, 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 1];
+        wire.extend_from_slice(b"\x08goethite\x04test\x00\x00\x01\x00\x01");
+        wire.extend_from_slice(&[0, 0, 41, 0x04, 0xd0, 0, 0, 0, 0, 0, 6]);
+        wire.extend_from_slice(&[0, 10, 0, 5, 1, 2]);
+        wire
     }
 
     fn serves_then_stops_on(signal: &str) {
@@ -189,11 +202,18 @@ mod serving {
             ask(udp, "example.com.").metadata.response_code,
             ResponseCode::Refused
         );
+        let odd = ask_raw(udp, &query_with_malformed_edns_option());
+        assert_eq!(odd.metadata.id, 0x0101);
 
         server.signal(signal);
         server.wait_for_log(&format!("received SIG{signal}"));
         server.wait_for_log("stopped");
         assert!(server.wait_for_exit().success());
+        assert!(
+            !server.log.iter().any(|line| line.contains("hickory_proto")),
+            "hickory-proto logged at the default level: {:#?}",
+            server.log
+        );
     }
 
     #[test]
