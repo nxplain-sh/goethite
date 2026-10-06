@@ -1,0 +1,25 @@
+{
+  "name": "goethite-site",
+  "private": true,
+  "type": "module",
+  "description": "Project website and docs for goethite (Astro Starlight, deployed to GitHub Pages).",
+  "license": "MIT OR Apache-2.0",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "astro": "astro"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "0.42.5",
+    "@fontsource-variable/jetbrains-mono": "5.3.0",
+    "@fontsource-variable/space-grotesk": "5.3.0",
+    "astro": "7.3.6"
+  },
+  "overrides": {
+    "postcss-selector-parser": "7.1.6"
+  }
+}

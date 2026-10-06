@@ -1,0 +1,50 @@
+---
+title: goethite
+description: A self-hosted, clustered, security-hardened DNS filtering resolver written in Rust.
+template: splash
+hero:
+  tagline: |
+    A self-hosted, clustered, security-hardened DNS filtering resolver written in Rust.
+    Block ads and trackers for your whole network, without giving up security, speed or uptime.
+    <br /><br /><span class="gt-status">Status: pre-alpha · Phase 0</span>
+  actions:
+    - text: Quick start
+      link: quick-start/
+      icon: right-arrow
+      variant: primary
+    - text: View on GitHub
+      link: https://github.com/nxplain-sh/goethite
+      icon: external
+      variant: secondary
+---
+
+import { Card, CardGrid, Aside } from '@astrojs/starlight/components';
+
+<Aside type="caution" title="Pre-alpha">
+	goethite is not ready for use. Today it answers one hardcoded test query. Everything below is
+	a design goal, not a feature.
+</Aside>
+
+## What goethite aims to be
+
+<CardGrid>
+	<Card title="Security first" icon="padlock">
+		Memory-safe Rust with no `unsafe` in the parsing and resolving core, no panics on network
+		input, fuzzed parsers, and a written threat model.
+	</Card>
+	<Card title="Fast and bounded" icon="rocket">
+		Sub-millisecond cached answers and million-rule filter lists in a small, bounded memory
+		footprint, with every claim backed by a reproducible benchmark.
+	</Card>
+	<Card title="Highly available" icon="random">
+		Every node resolves on its own. Clustering adds replicated config, a floating IP and
+		zero-downtime reloads and upgrades.
+	</Card>
+	<Card title="Everyday filtering" icon="list-format">
+		Hosts files, domain lists and AdGuard-style rules, per-client groups and schedules, CNAME
+		uncloaking and safe search.
+	</Card>
+</CardGrid>
+
+The [roadmap](https://github.com/nxplain-sh/goethite/blob/main/AGENTS.md#roadmap-respect-the-order)
+lists what lands in which phase.
