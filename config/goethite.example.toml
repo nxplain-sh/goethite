@@ -1,0 +1,14 @@
+# goethite configuration (example)
+#
+# Run with:  goethite run --config config/goethite.example.toml
+#
+# This file only bootstraps a node. Unknown keys are rejected, so a typo is an
+# error rather than a silently ignored setting. Every key is optional; the
+# values below are the defaults.
+
+[server]
+# Address for DNS over UDP and TCP. Port 15353 on loopback lets development
+# builds run without root (5353 is avoided: it is multicast DNS and usually
+# taken). Production uses port 53, e.g. "0.0.0.0:53" or "[::]:53". Use an IP
+# address here, not a hostname.
+listen = "127.0.0.1:15353"

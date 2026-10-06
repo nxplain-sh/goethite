@@ -1,0 +1,28 @@
+[package]
+name = "goethite"
+description = "A self-hosted, clustered, security-hardened DNS filtering resolver."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+goethite-resolver.workspace = true
+goethite-server.workspace = true
+serde.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal"] }
+toml.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+hickory-proto.workspace = true
+
+[lints]
+workspace = true
