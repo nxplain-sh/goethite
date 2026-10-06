@@ -1,0 +1,21 @@
+[package]
+name = "goethite-proto"
+description = "DNS wire format for goethite: small owned types and a codec trait over hickory-proto."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+hickory-proto.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true
