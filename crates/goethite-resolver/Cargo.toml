@@ -1,0 +1,17 @@
+[package]
+name = "goethite-resolver"
+description = "Resolution for goethite: local records today; cache, forwarding, recursion and DNSSEC later."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+goethite-proto.workspace = true
+
+[lints]
+workspace = true
