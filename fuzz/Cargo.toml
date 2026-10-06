@@ -1,0 +1,29 @@
+[package]
+name = "goethite-fuzz"
+description = "cargo-fuzz targets for goethite. Every parser gets one."
+version = "0.0.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+goethite-proto = { path = "../crates/goethite-proto" }
+libfuzzer-sys = "0.4.13"
+
+# Fuzz targets need nightly and libFuzzer, so they are their own workspace
+# (the root workspace excludes this directory).
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "decode_query"
+path = "fuzz_targets/decode_query.rs"
+test = false
+doc = false
+bench = false
+
+[profile.release]
+debug = 1
