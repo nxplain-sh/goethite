@@ -1,0 +1,19 @@
+# Rust
+/target/
+
+# Fuzzing (seeds live in fuzz/seeds/ and are committed)
+/fuzz/target/
+/fuzz/corpus/
+/fuzz/artifacts/
+/fuzz/coverage/
+
+# Website
+/site/node_modules/
+/site/dist/
+/site/.astro/
+
+# Editors and OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
