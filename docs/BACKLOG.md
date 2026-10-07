@@ -57,6 +57,9 @@ When an item is picked up, move it into an issue or PR and delete it from this l
 - **[later] Regular-expression rules.** They cannot live in the FST; they would need a separate,
   bounded matcher (e.g. a size-limited `regex-automata` DFA) run only after the FST.
 - **[P1] Re-read the config file on SIGHUP**, not only the filter lists.
+- **[P2] List status in the API:** last download time, result, rule counts and the reason a
+  download was rejected, and a way to trigger an update now.
+- **[later] Signed or hash-pinned lists**, for list sources that publish signatures.
 - **[P1] Name parsing for filter lists.** `Name::from_str` only accepts host-style names (no
   escapes, no wildcards). Filter syntax needs wildcards and may need RFC 1035 escapes; extend the
   parser (and its `parse_name` fuzz target) rather than adding a second one.

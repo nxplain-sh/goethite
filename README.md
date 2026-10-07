@@ -12,8 +12,9 @@ zero-downtime upgrades. It is named after the iron-oxide mineral that is a main 
 
 **Pre-alpha, Phase 1 in progress.** goethite forwards queries to the upstream resolvers you
 configure, over DNS over TLS, DNS over HTTPS or plain DNS, with failover; caches the answers; and
-blocks names from hosts files, domain lists and AdGuard-style rules in local files. Downloading and
-updating lists comes next. See the roadmap
+blocks names from hosts files, domain lists and AdGuard-style rules, from local files or downloaded
+and refreshed over HTTPS. Hardening for production (privilege drop, systemd unit, rate limiting)
+comes next. See the roadmap
 in [`AGENTS.md`](AGENTS.md#roadmap-respect-the-order).
 
 ## Quick start (development)
