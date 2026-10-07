@@ -1,0 +1,9 @@
+! AdGuard-style list
+[Adblock Plus 2.0]
+||ads.example^
+@@||good.ads.example^
+|exact.example^
+*.cdn.example
+||zip^
+/regex[0-9]/
+||mod.example^$important

@@ -1,0 +1,6 @@
+# domains
+ads.example
+tracker.example.
+*.wild.example
+not valid!
+bücher.example

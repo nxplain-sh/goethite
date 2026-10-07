@@ -10,6 +10,7 @@ publish = false
 cargo-fuzz = true
 
 [dependencies]
+goethite-filter = { path = "../crates/goethite-filter" }
 goethite-proto = { path = "../crates/goethite-proto" }
 libfuzzer-sys = "0.4.13"
 
@@ -28,6 +29,13 @@ bench = false
 [[bin]]
 name = "decode_response"
 path = "fuzz_targets/decode_response.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_list"
+path = "fuzz_targets/parse_list.rs"
 test = false
 doc = false
 bench = false

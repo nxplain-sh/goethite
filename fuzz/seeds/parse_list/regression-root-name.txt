@@ -1,0 +1,9 @@
+å # in”ine
+0.0.0/0 PNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNip6-loopback
+^
+@@||good.ads.example^
+|exact.example^
+*.cdn.example
+||ze ~ in”ine
+0ip^
+..
