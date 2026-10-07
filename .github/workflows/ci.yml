@@ -101,6 +101,8 @@ jobs:
           tool: cargo-deny@0.20.2
           fallback: none
       - run: cargo deny check advisories bans licenses sources
+      - name: cargo deny (fuzz workspace)
+        run: cargo deny --manifest-path fuzz/Cargo.toml check advisories bans licenses sources
 
   audit:
     name: cargo-audit
@@ -116,3 +118,5 @@ jobs:
           tool: cargo-audit@0.22.2
           fallback: none
       - run: cargo audit --deny warnings
+      - name: cargo audit (fuzz workspace)
+        run: cargo audit --deny warnings --file fuzz/Cargo.lock

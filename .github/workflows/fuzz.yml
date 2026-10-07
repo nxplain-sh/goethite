@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       seconds:
-        description: Seconds to run each target
+        description: Seconds to run each target (1 to 3600)
         required: false
         default: "300"
 
@@ -20,6 +20,8 @@ jobs:
   fuzz:
     name: fuzz ${{ matrix.target }}
     runs-on: ubuntu-24.04
+    # Fuzzing is capped at 3600 s; this leaves room for building the tools.
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -41,7 +43,11 @@ jobs:
           TARGET: ${{ matrix.target }}
           SECONDS_PER_TARGET: ${{ inputs.seconds || '300' }}
         run: |
-          [[ "$SECONDS_PER_TARGET" =~ ^[0-9]+$ ]] || { echo "::error::seconds must be a number"; exit 1; }
+          # libFuzzer treats 0 as "no limit", so require 1 to 3600.
+          if ! [[ "$SECONDS_PER_TARGET" =~ ^[1-9][0-9]{0,3}$ ]] || (( SECONDS_PER_TARGET > 3600 )); then
+            echo "::error::seconds must be between 1 and 3600"
+            exit 1
+          fi
           mkdir -p "fuzz/corpus/$TARGET"
           cargo +nightly fuzz run "$TARGET" "fuzz/corpus/$TARGET" "fuzz/seeds/$TARGET" -- \
             -max_total_time="$SECONDS_PER_TARGET"
@@ -52,3 +58,6 @@ jobs:
           name: fuzz-artifacts-${{ matrix.target }}
           path: fuzz/artifacts/${{ matrix.target }}
           if-no-files-found: ignore
+          # The repository is public: keep crash inputs only as long as needed
+          # to reproduce them (see SECURITY.md).
+          retention-days: 7

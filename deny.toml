@@ -31,6 +31,12 @@ allow = [
 ]
 confidence-threshold = 0.93
 
+# libfuzzer-sys bundles LLVM's libFuzzer (NCSA). It is only used by the fuzz
+# targets in fuzz/, which CI checks with --manifest-path, and never ships.
+[[licenses.exceptions]]
+crate = "libfuzzer-sys"
+allow = ["NCSA"]
+
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
