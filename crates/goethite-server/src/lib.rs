@@ -1,10 +1,12 @@
 //! DNS listeners for goethite.
 //!
 //! Serves DNS over UDP and TCP (RFC 7766 length-prefixed framing) on one
-//! address. Every limit is explicit: datagram size, concurrent TCP
-//! connections, how long a TCP connection may sit idle, and how long shutdown
-//! waits for in-flight TCP queries. Later phases add DoT, DoH and DoQ, and
-//! per-core `SO_REUSEPORT` sockets.
+//! address. Every UDP query is resolved in its own task, so a slow upstream
+//! never holds up other clients. Every limit is explicit: datagram size,
+//! queries in flight, concurrent TCP connections, how long a TCP connection
+//! may sit idle, and how long shutdown waits for queries in progress. Later
+//! milestones add per-core `SO_REUSEPORT` sockets, and later phases DoT, DoH
+//! and DoQ listeners.
 
 use std::fmt;
 use std::future::Future;
@@ -34,12 +36,16 @@ const ACCEPT_ERROR_BACKOFF: Duration = Duration::from_millis(100);
 pub struct ServerConfig {
     /// Address for both the UDP socket and the TCP listener.
     pub listen: SocketAddr,
+    /// Most UDP queries being resolved at once; more are dropped, as an
+    /// overloaded resolver should. Values above tokio's semaphore limit are
+    /// clamped.
+    pub max_inflight_udp_queries: usize,
     /// Most TCP connections served at once; more are closed on accept.
     /// Values above tokio's semaphore limit (`usize::MAX >> 3`) are clamped.
     pub max_tcp_connections: usize,
     /// How long a TCP connection may wait for, or take to send, a query.
     pub tcp_idle_timeout: Duration,
-    /// How long shutdown waits for in-flight TCP queries before closing them.
+    /// How long shutdown waits for queries in progress before abandoning them.
     pub shutdown_grace: Duration,
 }
 
@@ -48,6 +54,7 @@ impl ServerConfig {
     pub fn new(listen: SocketAddr) -> Self {
         Self {
             listen,
+            max_inflight_udp_queries: 2048,
             max_tcp_connections: 256,
             tcp_idle_timeout: Duration::from_secs(10),
             shutdown_grace: Duration::from_secs(5),
@@ -154,7 +161,7 @@ impl Server {
     }
 
     /// Serves until `shutdown` completes, then stops accepting new work,
-    /// waits up to [`ServerConfig::shutdown_grace`] for in-flight TCP queries
+    /// waits up to [`ServerConfig::shutdown_grace`] for queries in progress
     /// and returns.
     ///
     /// # Errors
@@ -173,6 +180,7 @@ impl Server {
         listeners.spawn(serve_udp(
             self.udp,
             Arc::clone(&self.engine),
+            self.config.clone(),
             stop_rx.clone(),
         ));
         listeners.spawn(serve_tcp(self.tcp, self.engine, self.config, stop_rx));
@@ -280,14 +288,29 @@ impl Engine {
     }
 }
 
-async fn serve_udp(socket: UdpSocket, engine: Arc<Engine>, mut stop: watch::Receiver<bool>) {
+async fn serve_udp(
+    socket: UdpSocket,
+    engine: Arc<Engine>,
+    config: ServerConfig,
+    mut stop: watch::Receiver<bool>,
+) {
+    let socket = Arc::new(socket);
+    let slots = Arc::new(Semaphore::new(
+        config.max_inflight_udp_queries.min(Semaphore::MAX_PERMITS),
+    ));
+    let mut inflight = JoinSet::new();
     // One spare byte tells an oversized datagram from one that fits exactly.
     let mut buf = vec![0_u8; MAX_UDP_QUERY_LEN + 1];
-    let mut out = Vec::with_capacity(usize::from(MAX_UDP_PAYLOAD));
     loop {
         let (len, peer) = tokio::select! {
             biased;
             () = stopped(&mut stop) => break,
+            Some(joined) = inflight.join_next(), if !inflight.is_empty() => {
+                if let Err(err) = joined {
+                    error!(%err, "udp query task failed");
+                }
+                continue;
+            }
             received = socket.recv_from(&mut buf) => match received {
                 Ok(received) => received,
                 Err(err) => {
@@ -300,11 +323,35 @@ async fn serve_udp(socket: UdpSocket, engine: Arc<Engine>, mut stop: watch::Rece
             debug!(%peer, "dropped oversized udp datagram");
             continue;
         };
-        if engine.answer(wire, Transport::Udp, peer, &mut out).await
-            && let Err(err) = socket.send_to(&out, peer).await
-        {
-            debug!(%peer, %err, "udp send failed");
-        }
+        let Ok(permit) = Arc::clone(&slots).try_acquire_owned() else {
+            debug!(%peer, "too many udp queries in flight, dropping");
+            continue;
+        };
+        let wire = wire.to_vec();
+        let socket = Arc::clone(&socket);
+        let engine = Arc::clone(&engine);
+        inflight.spawn(async move {
+            let _permit = permit;
+            let mut out = Vec::with_capacity(usize::from(MAX_UDP_PAYLOAD));
+            if engine.answer(&wire, Transport::Udp, peer, &mut out).await
+                && let Err(err) = socket.send_to(&out, peer).await
+            {
+                debug!(%peer, %err, "udp send failed");
+            }
+        });
+    }
+    drain("udp queries", inflight, config.shutdown_grace).await;
+}
+
+/// Waits up to `grace` for `tasks` to finish, then aborts the rest.
+async fn drain(what: &str, mut tasks: JoinSet<()>, grace: Duration) {
+    let finish = async { while tasks.join_next().await.is_some() {} };
+    if timeout(grace, finish).await.is_err() {
+        debug!(
+            remaining = tasks.len(),
+            "abandoning {what} after the grace period"
+        );
+        tasks.shutdown().await;
     }
 }
 
@@ -355,14 +402,7 @@ async fn serve_tcp(
     }
 
     drop(listener);
-    let drain = async { while connections.join_next().await.is_some() {} };
-    if timeout(config.shutdown_grace, drain).await.is_err() {
-        debug!(
-            remaining = connections.len(),
-            "closing tcp connections after the grace period"
-        );
-        connections.shutdown().await;
-    }
+    drain("tcp connections", connections, config.shutdown_grace).await;
 }
 
 async fn serve_tcp_connection(
@@ -416,7 +456,10 @@ async fn serve_tcp_connection(
         }
 
         // A dropped message means the peer is not speaking DNS: hang up.
-        if !engine.answer(&query, Transport::Tcp, peer, &mut response).await {
+        if !engine
+            .answer(&query, Transport::Tcp, peer, &mut response)
+            .await
+        {
             break;
         }
         let Ok(len) = u16::try_from(response.len()) else {

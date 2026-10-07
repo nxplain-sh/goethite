@@ -13,7 +13,7 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::str::FromStr;
 use std::time::Duration;
 
-use goethite_resolver::{Resolver, test_record};
+use goethite_resolver::{Forwarder, ForwarderConfig, Resolver, UpstreamConfig, test_record};
 use goethite_server::{Server, ServerConfig, ServerError};
 use hickory_proto::op::{Edns, Message, MessageType, OpCode, Query, ResponseCode};
 use hickory_proto::rr::{Name, RData, RecordType, rdata::A};
@@ -40,9 +40,12 @@ impl Running {
 }
 
 async fn start_with(config: impl FnOnce(&mut ServerConfig)) -> Running {
+    start_resolving(config, Resolver::new(vec![test_record().unwrap()])).await
+}
+
+async fn start_resolving(config: impl FnOnce(&mut ServerConfig), resolver: Resolver) -> Running {
     let mut server_config = ServerConfig::new("127.0.0.1:0".parse().unwrap());
     config(&mut server_config);
-    let resolver = Resolver::new(vec![test_record().unwrap()]);
     let server = Server::bind(server_config, resolver).await.unwrap();
     let udp = server.udp_local_addr().unwrap();
     let tcp = server.tcp_local_addr().unwrap();
@@ -325,4 +328,160 @@ async fn binding_a_busy_address_fails() {
     let result = Server::bind(config, Resolver::new(Vec::new())).await;
     assert!(matches!(result, Err(ServerError::Bind { .. })));
     server.shutdown().await;
+}
+
+/// A fake upstream on loopback that answers every query with `ip` after
+/// `delay`, or never if `ip` is `None`.
+async fn upstream(ip: Option<Ipv4Addr>, delay: Duration) -> SocketAddr {
+    let socket = std::sync::Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
+    let addr = socket.local_addr().unwrap();
+    tokio::spawn(async move {
+        let mut buf = vec![0; 65_535];
+        loop {
+            let (len, peer) = socket.recv_from(&mut buf).await.unwrap();
+            let Some(ip) = ip else { continue };
+            let query = Message::from_vec(&buf[..len]).unwrap();
+            let socket = std::sync::Arc::clone(&socket);
+            tokio::spawn(async move {
+                tokio::time::sleep(delay).await;
+                let mut reply =
+                    Message::new(query.metadata.id, MessageType::Response, OpCode::Query);
+                reply.add_queries(query.queries.clone());
+                let name = query.queries[0].name().clone();
+                reply.add_answer(hickory_proto::rr::Record::from_rdata(
+                    name,
+                    300,
+                    RData::A(A(ip)),
+                ));
+                socket
+                    .send_to(&reply.to_vec().unwrap(), peer)
+                    .await
+                    .unwrap();
+            });
+        }
+    });
+    addr
+}
+
+fn forwarding_to(upstream: SocketAddr, attempt: Duration) -> Resolver {
+    let mut config = ForwarderConfig::new(vec![UpstreamConfig::udp(upstream)]);
+    config.attempt_timeout = attempt;
+    config.total_timeout = attempt;
+    Resolver::new(vec![test_record().unwrap()]).with_forwarder(Forwarder::new(config).unwrap())
+}
+
+#[tokio::test]
+async fn other_names_are_forwarded_upstream() {
+    let upstream = upstream(Some(Ipv4Addr::new(192, 0, 2, 80)), Duration::ZERO).await;
+    let server = start_resolving(|_| {}, forwarding_to(upstream, Duration::from_secs(2))).await;
+
+    let over_udp = udp_exchange(server.udp, &query(20, "example.com.", RecordType::A))
+        .await
+        .unwrap();
+    let mut stream = TcpStream::connect(server.tcp).await.unwrap();
+    tcp_send(&mut stream, &query(21, "example.com.", RecordType::A)).await;
+    let over_tcp = tcp_receive(&mut stream).await;
+
+    for (response, id) in [(over_udp, 20), (over_tcp, 21)] {
+        assert_eq!(response.metadata.id, id);
+        assert_eq!(response.metadata.response_code, ResponseCode::NoError);
+        assert!(response.metadata.recursion_available);
+        assert!(!response.metadata.authoritative);
+        assert_eq!(
+            response.answers[0].data,
+            RData::A(A(Ipv4Addr::new(192, 0, 2, 80)))
+        );
+    }
+    // The local name is still answered locally, now with RA set.
+    let local = udp_exchange(server.udp, &query(22, "goethite.test.", RecordType::A))
+        .await
+        .unwrap();
+    assert_test_answer(&local, 22);
+    assert!(local.metadata.recursion_available);
+    drop(stream);
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_slow_upstream_does_not_block_other_queries() {
+    let upstream = upstream(
+        Some(Ipv4Addr::new(192, 0, 2, 81)),
+        Duration::from_millis(800),
+    )
+    .await;
+    let server = start_resolving(|_| {}, forwarding_to(upstream, Duration::from_secs(3))).await;
+    let slow = tokio::spawn(udp_exchange_waiting(
+        server.udp,
+        query(23, "slow.example.", RecordType::A),
+    ));
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let started = tokio::time::Instant::now();
+    let local = udp_exchange(server.udp, &query(24, "goethite.test.", RecordType::A))
+        .await
+        .unwrap();
+    assert_test_answer(&local, 24);
+    assert!(started.elapsed() < Duration::from_millis(500));
+    let slow = slow.await.unwrap().unwrap();
+    assert_eq!(
+        slow.answers[0].data,
+        RData::A(A(Ipv4Addr::new(192, 0, 2, 81)))
+    );
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn queries_beyond_the_inflight_limit_are_dropped() {
+    let silent = upstream(None, Duration::ZERO).await;
+    let server = start_resolving(
+        |config| config.max_inflight_udp_queries = 1,
+        forwarding_to(silent, Duration::from_millis(1500)),
+    )
+    .await;
+    let stuck = tokio::spawn(udp_exchange_waiting(
+        server.udp,
+        query(25, "stuck.example.", RecordType::A),
+    ));
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    // The only slot is taken, so even a local name is dropped for now.
+    assert!(
+        udp_exchange(server.udp, &query(26, "goethite.test.", RecordType::A))
+            .await
+            .is_none()
+    );
+    // Once the stuck query gives up (SERVFAIL), the slot is free again.
+    let failed = stuck.await.unwrap().unwrap();
+    assert_eq!(failed.metadata.response_code, ResponseCode::ServFail);
+    let local = udp_exchange(server.udp, &query(27, "goethite.test.", RecordType::A))
+        .await
+        .unwrap();
+    assert_test_answer(&local, 27);
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn shutdown_abandons_slow_queries_after_the_grace_period() {
+    let silent = upstream(None, Duration::ZERO).await;
+    let server = start_resolving(
+        |config| config.shutdown_grace = Duration::from_millis(200),
+        forwarding_to(silent, Duration::from_secs(30)),
+    )
+    .await;
+    let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    socket
+        .send_to(&query(28, "stuck.example.", RecordType::A), server.udp)
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let started = tokio::time::Instant::now();
+    server.shutdown().await;
+    assert!(started.elapsed() < Duration::from_secs(3));
+}
+
+/// Like `udp_exchange`, but waits up to five seconds for the answer.
+async fn udp_exchange_waiting(server: SocketAddr, wire: Vec<u8>) -> Option<Message> {
+    let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    socket.send_to(&wire, server).await.unwrap();
+    let mut buf = vec![0; 65_535];
+    let len = timeout(WAIT, socket.recv(&mut buf)).await.ok()?.unwrap();
+    Some(Message::from_vec(&buf[..len]).unwrap())
 }
