@@ -131,7 +131,7 @@ dependencies = [
 
 [[package]]
 name = "goethite-filter"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "fst",
  "goethite-proto",
@@ -149,7 +149,7 @@ dependencies = [
 
 [[package]]
 name = "goethite-proto"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "hickory-proto",
  "thiserror",
