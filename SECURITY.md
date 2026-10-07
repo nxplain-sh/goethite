@@ -8,6 +8,9 @@ Report vulnerabilities privately through GitHub's private vulnerability reportin
 
 <https://github.com/nxplain-sh/goethite/security/advisories/new>
 
+If that form is unavailable, open an issue that asks the maintainers for a private contact
+and contains **no details** about the problem. We will reply with a private channel.
+
 Please include:
 
 - the affected component (crate, listener, CLI, website, CI workflow) and commit or version
@@ -27,6 +30,13 @@ goethite is a pre-alpha project maintained by volunteers. Best effort applies:
   fix before you publish details. We will publish a GitHub Security Advisory once a fix is
   available and credit you unless you prefer otherwise.
 - There is no bug bounty.
+
+## Fuzzing in public CI
+
+The weekly fuzz job runs in this public repository, so a crash it finds is visible in the
+workflow logs and artifacts (kept for 7 days). While goethite is pre-alpha with no releases, we
+accept that trade-off. Before the first release, fuzzing moves to a private setup. Crashes you
+find yourself should still be reported privately as described above.
 
 ## Supported versions
 

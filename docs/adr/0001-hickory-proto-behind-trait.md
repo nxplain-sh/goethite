@@ -28,7 +28,9 @@ its public API.
 
 - Types:
   - `Name`: always valid on the wire, with case-insensitive equality and hashing. Its `Display`
-    escapes unsafe bytes, so names from the wire cannot inject newlines into logs.
+    writes RFC 1035 presentation format with decimal `\DDD` escapes (hickory's own output uses
+    octal), so names from the wire cannot inject newlines into logs. `FromStr` accepts only
+    host-style labels (letters, digits, `-`, `_`), with no escapes or wildcards.
   - `RecordType`, `RecordClass`, `Opcode`, `ResponseCode`: transparent newtypes over the wire
     value, so unknown values round-trip.
   - `Query`: id, the RD, CD and AD flags, exactly one `Question`, and optional `Edns` (UDP payload
@@ -50,13 +52,20 @@ its public API.
   | QR=1 (a response)                                            | Dropped, to prevent reflection and loops   |
   | opcode other than QUERY                                      | NOTIMP                                     |
   | QDCOUNT other than 1, any answer or authority records, or more than 2 additional records | FORMERR |
-  | Readable question, unreadable additional section (two OPT records, malformed EDNS option, truncated OPT) | FORMERR (RFC 6891, RFC 7871) |
+  | Readable question, malformed additional section: truncated or unparseable records, a second OPT record, an EDNS option running past the OPT record, a COOKIE of the wrong length, a client-subnet address that does not match its prefix | FORMERR (RFC 6891, RFC 7871, RFC 7873) |
   | EDNS version other than 0                                    | BADVERS                                    |
 
   The header counts are checked before hickory parses anything. hickory pre-allocates vectors
   from the header counts, so without this check a 12-byte message claiming 65,535 questions makes
-  it allocate megabytes before failing. Error replies are header-only (plus OPT for BADVERS), so
-  they are never larger than the message that caused them.
+  it allocate megabytes before failing. A second, allocation-free walk then reads the question and
+  each additional record, so an unreadable question is told apart from a bad additional section,
+  and EDNS options are checked (hickory skips options with a wrong length silently). Error replies
+  are header-only (plus OPT for BADVERS), so they are never larger than the message that caused
+  them. IXFR queries that carry the client's SOA in the authority section get FORMERR from the
+  header check; zone transfers are refused anyway.
+
+- Encoding refuses values the wire cannot carry (an extended response code without EDNS, an opcode
+  above 15) instead of letting hickory truncate them.
 
 - hickory-proto logs its own warnings about some malformed input (for example EDNS options with a
   wrong length), quoting the attacker's bytes. The binary turns `hickory_proto` logging off unless

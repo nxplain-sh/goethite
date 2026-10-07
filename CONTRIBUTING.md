@@ -12,7 +12,7 @@ agents alike.
 - Supply-chain tools: `cargo install --locked cargo-deny cargo-audit`
 - Fuzzing: `cargo install --locked cargo-fuzz`
 - `dig` (from bind-utils / dnsutils) for manual checks
-- Node.js 22.12 or newer, only if you work on the website in `site/`
+- Node.js 22.19 or newer, only if you work on the website in `site/` (CI uses Node 24)
 
 ## Build, test, lint
 
@@ -23,11 +23,14 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 ```
 
-Supply chain (licenses, advisories, banned crates, sources):
+Supply chain (licenses, advisories, banned crates, sources), for the main workspace and the
+separate fuzz workspace:
 
 ```sh
 cargo deny check
 cargo audit
+cargo deny --manifest-path fuzz/Cargo.toml check
+cargo audit --file fuzz/Cargo.lock
 ```
 
 Run the server and query it:
@@ -53,17 +56,21 @@ Every parser gets a fuzz target. Targets live in `fuzz/fuzz_targets/` and use
 
 | Target         | What it does                                                                                 |
 | -------------- | -------------------------------------------------------------------------------------------- |
-| `decode_query` | Decodes bytes via `goethite-proto`. On success, re-encodes, decodes again and asserts the two results are equal, including the case of the name. Every response goethite would send must fit in 512 bytes. |
+| `decode_query` | Decodes bytes via `goethite-proto`. On success, re-encodes, decodes again and asserts the two results are equal, including the case of the name, and that the name displays as printable ASCII. Every response goethite would send must fit in 512 bytes. |
+| `parse_name`   | Parses text as a domain name. On success, the name's display must parse back to the same name. |
 
-Seeds are committed in `fuzz/seeds/decode_query/`, and `crates/goethite-proto/tests/fuzz_seeds.rs`
-checks that each one still decodes the way its name says. The working corpus (`fuzz/corpus/`) and
-crash artifacts (`fuzz/artifacts/`) are gitignored.
+Seeds are committed in `fuzz/seeds/<target>/`, and `crates/goethite-proto/tests/fuzz_seeds.rs`
+checks that each one still behaves the way its name says. The working corpus (`fuzz/corpus/`) and
+crash artifacts (`fuzz/artifacts/`) are gitignored, so create the corpus directory first.
 
-Run for 60 seconds, writing new inputs to the working corpus and reading the seeds:
+Run a target for 60 seconds, writing new inputs to the working corpus and reading the seeds:
 
 ```sh
+mkdir -p fuzz/corpus/decode_query
 cargo +nightly fuzz run decode_query fuzz/corpus/decode_query fuzz/seeds/decode_query -- -max_total_time=60
 ```
+
+Use the same commands with `parse_name` for the other target.
 
 Reproduce and minimize a crash:
 
@@ -74,7 +81,11 @@ cargo +nightly fuzz tmin decode_query fuzz/artifacts/decode_query/<crash-file>
 
 Every fixed crash gets a regression unit test in `goethite-proto` with the minimized input.
 
-CI runs each target weekly (and on manual dispatch) for 5 minutes and uploads any crash artifacts.
+CI runs each target weekly (and on manual dispatch) for 5 minutes and uploads any crash artifacts,
+kept for 7 days. The repository is public, so a crash found by CI is public from that moment: while
+goethite is pre-alpha with no releases we accept that. Before the first release, fuzzing moves to
+a private setup (see [`docs/BACKLOG.md`](docs/BACKLOG.md)). If you find a crash locally, report it
+privately as described in [`SECURITY.md`](SECURITY.md).
 
 ### Adding a fuzz target
 
@@ -127,13 +138,25 @@ The full list is in [`AGENTS.md`](AGENTS.md). The short version:
 ## Website
 
 The project site lives in `site/` (Astro Starlight) and deploys to GitHub Pages from `main` via
-`.github/workflows/pages.yml`.
+`.github/workflows/pages.yml`. Deployment needs Pages enabled with source "GitHub Actions" (see
+[Repository settings](#repository-settings-maintainers)).
 
 ```sh
 cd site
 npm ci --ignore-scripts
 npm run dev
 ```
+
+## Repository settings (maintainers)
+
+Two one-time settings on `nxplain-sh/goethite` that the repository cannot set itself:
+
+- **GitHub Pages:** Settings → Pages → Build and deployment → Source: **GitHub Actions**
+  (or `gh api -X POST repos/nxplain-sh/goethite/pages -f build_type=workflow`). Without it the
+  deploy job in `pages.yml` fails.
+- **Private vulnerability reporting:** Settings → Code security → Private vulnerability
+  reporting → Enable (or `gh api -X PUT repos/nxplain-sh/goethite/private-vulnerability-reporting`).
+  [`SECURITY.md`](SECURITY.md) relies on it.
 
 ## Pull request checklist
 
