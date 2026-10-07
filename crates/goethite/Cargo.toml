@@ -13,6 +13,7 @@ publish.workspace = true
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
+goethite-filter.workspace = true
 goethite-resolver.workspace = true
 goethite-server.workspace = true
 serde.workspace = true

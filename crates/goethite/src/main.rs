@@ -1,15 +1,17 @@
 //! The goethite binary: command-line interface, configuration and wiring.
 
 mod config;
+mod filters;
 
 use std::future::Future;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use goethite_resolver::{Cache, Forwarder, ForwarderConfig, Resolver, test_record};
+use goethite_resolver::{Blocking, Cache, Forwarder, ForwarderConfig, Resolver, test_record};
 use goethite_server::{Server, ServerConfig};
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
@@ -101,13 +103,54 @@ fn run(config_path: &Path) -> Result<()> {
             .context("invalid [[upstream]] configuration")?;
         let cache = Cache::new(config.cache.to_cache_config());
         info!(max_entries = config.cache.max_entries, "cache");
-        let resolver = Resolver::new(vec![test_record()?])
+        let mut resolver = Resolver::new(vec![test_record()?])
             .with_cache(cache)
             .with_forwarder(forwarder);
+        if config.filter.enabled {
+            let section = config.filter.clone();
+            let filter = tokio::task::spawn_blocking(move || filters::build(&section))
+                .await
+                .context("building the filter failed")?;
+            let blocking = Arc::new(Blocking::new(
+                filter,
+                config.filter.block_response.to_block_response(),
+                config.filter.blocked_ttl,
+            ));
+            reload_on_hangup(Arc::clone(&blocking), config.filter.clone())?;
+            resolver = resolver.with_blocking(blocking);
+        } else {
+            info!("filtering is turned off");
+        }
         let server = Server::bind(ServerConfig::new(config.server.listen), resolver).await?;
         server.run(shutdown).await?;
         Ok(())
     })
+}
+
+/// Rebuilds the filter from the list files on every SIGHUP. The config file
+/// itself is not re-read.
+#[cfg(unix)]
+fn reload_on_hangup(blocking: Arc<Blocking>, section: config::FilterSection) -> Result<()> {
+    use tokio::signal::unix::{SignalKind, signal};
+
+    let mut hangup = signal(SignalKind::hangup()).context("cannot handle SIGHUP")?;
+    tokio::spawn(async move {
+        while hangup.recv().await.is_some() {
+            info!("received SIGHUP, reloading filter lists");
+            filters::reload(&blocking, section.clone()).await;
+        }
+    });
+    Ok(())
+}
+
+/// Filter reloads need SIGHUP; non-Unix platforms are for development only.
+#[cfg(not(unix))]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "same signature as the Unix version"
+)]
+fn reload_on_hangup(_blocking: Arc<Blocking>, _section: config::FilterSection) -> Result<()> {
+    Ok(())
 }
 
 /// Completes on the first SIGINT or SIGTERM.

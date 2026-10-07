@@ -7,10 +7,12 @@
 use std::fs::File;
 use std::io::Read;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use goethite_resolver::{CacheConfig, MAX_ENTRIES, MAX_UPSTREAMS, Transport, UpstreamConfig};
+use goethite_resolver::{
+    BlockResponse, CacheConfig, MAX_ENTRIES, MAX_UPSTREAMS, Transport, UpstreamConfig,
+};
 use serde::{Deserialize, Deserializer};
 
 /// Config files larger than this many bytes are rejected.
@@ -29,6 +31,99 @@ pub struct Config {
     /// The `[cache]` table.
     #[serde(default)]
     pub cache: CacheSection,
+    /// The `[filter]` table.
+    #[serde(default)]
+    pub filter: FilterSection,
+}
+
+/// The most `[[filter.list]]` tables accepted.
+const MAX_LISTS: usize = 64;
+
+/// The most inline `filter.rules` accepted.
+const MAX_INLINE_RULES: usize = 10_000;
+
+/// The `[filter]` table.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, default)]
+pub struct FilterSection {
+    /// Whether filtering is on at all.
+    pub enabled: bool,
+    /// How blocked names are answered.
+    pub block_response: BlockResponseSetting,
+    /// Time to live of the `0.0.0.0` / `::` records for blocked names.
+    pub blocked_ttl: u32,
+    /// Rules written directly in the config, in any supported syntax.
+    pub rules: Vec<String>,
+    /// The `[[filter.list]]` tables: rule list files.
+    pub list: Vec<ListSection>,
+}
+
+impl Default for FilterSection {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            block_response: BlockResponseSetting::default(),
+            blocked_ttl: 10,
+            rules: Vec::new(),
+            list: Vec::new(),
+        }
+    }
+}
+
+impl FilterSection {
+    fn validate(&self) -> Result<()> {
+        if self.list.len() > MAX_LISTS {
+            bail!(
+                "{} filter lists configured; at most {MAX_LISTS} are supported",
+                self.list.len()
+            );
+        }
+        if self.rules.len() > MAX_INLINE_RULES {
+            bail!(
+                "{} inline filter rules; at most {MAX_INLINE_RULES} are supported (use a list file)",
+                self.rules.len()
+            );
+        }
+        if self.blocked_ttl > MAX_NEGATIVE_TTL_LIMIT {
+            bail!(
+                "filter.blocked_ttl is {}; at most {MAX_NEGATIVE_TTL_LIMIT} is supported",
+                self.blocked_ttl
+            );
+        }
+        Ok(())
+    }
+}
+
+/// One `[[filter.list]]` table.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ListSection {
+    /// Path of the list file (hosts, domains or AdGuard syntax, mixed freely).
+    pub path: PathBuf,
+}
+
+/// `filter.block_response`.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BlockResponseSetting {
+    /// `0.0.0.0` / `::`, empty for other types.
+    #[default]
+    NullIp,
+    /// `NXDOMAIN`.
+    Nxdomain,
+    /// `REFUSED`.
+    Refused,
+}
+
+impl BlockResponseSetting {
+    /// The resolver's view of this setting.
+    pub fn to_block_response(self) -> BlockResponse {
+        match self {
+            Self::NullIp => BlockResponse::NullIp,
+            Self::Nxdomain => BlockResponse::NxDomain,
+            Self::Refused => BlockResponse::Refused,
+        }
+    }
 }
 
 /// The longest `max_ttl` accepted: one week.
@@ -273,6 +368,7 @@ impl Config {
         config
             .cache
             .validate()
+            .and_then(|()| config.filter.validate())
             .with_context(|| format!("invalid config file {}", path.display()))?;
         if config.upstream.len() > MAX_UPSTREAMS {
             bail!(
@@ -425,6 +521,37 @@ mod tests {
             let config = Config::parse(&format!("[cache]\n{bad}")).unwrap();
             assert!(config.cache.validate().is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn filter_settings() {
+        let config = Config::parse(
+            r#"
+            [filter]
+            block_response = "nxdomain"
+            rules = ["||ads.example^", "@@||ok.ads.example^"]
+
+            [[filter.list]]
+            path = "/var/lib/goethite/lists/hosts.txt"
+            "#,
+        )
+        .unwrap();
+        assert!(config.filter.enabled);
+        assert_eq!(
+            config.filter.block_response.to_block_response(),
+            BlockResponse::NxDomain
+        );
+        assert_eq!(config.filter.blocked_ttl, 10);
+        assert_eq!(config.filter.rules.len(), 2);
+        assert_eq!(
+            config.filter.list[0].path,
+            PathBuf::from("/var/lib/goethite/lists/hosts.txt")
+        );
+        assert!(config.filter.validate().is_ok());
+        assert!(Config::parse("[filter]\nblock_response = \"blackhole\"").is_err());
+        assert!(Config::parse("[[filter.list]]\nurl = \"x\"").is_err());
+        let ttl = Config::parse("[filter]\nblocked_ttl = 999999").unwrap();
+        assert!(ttl.filter.validate().is_err());
     }
 
     #[test]

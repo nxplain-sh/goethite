@@ -61,3 +61,27 @@ max_entries = 10000       # 0 turns the cache off; at most 1,000,000
 min_ttl = 0               # keep positive answers at least this long (seconds)
 max_ttl = 86400           # ... and at most this long (at most one week)
 max_negative_ttl = 3600   # NXDOMAIN and NODATA at most this long (at most one day)
+
+[filter]
+# Blocking. Rules come from list files and from `rules` below; hosts files,
+# plain domain lists and the core AdGuard syntax are all understood, mixed
+# freely:
+#
+#   0.0.0.0 ads.example     block exactly ads.example (hosts format)
+#   ads.example             block exactly ads.example (domain list)
+#   *.ads.example           block every name below ads.example
+#   ||ads.example^          block ads.example and every name below it
+#   |ads.example^           block exactly ads.example
+#   @@||good.example^       exception: never block good.example or below
+#
+# Lines goethite does not support yet (regular expressions, $modifiers) are
+# counted and skipped. Send SIGHUP to re-read the list files.
+enabled = true
+block_response = "null_ip"   # "null_ip" (0.0.0.0 / ::), "nxdomain" or "refused"
+blocked_ttl = 10             # TTL of the null-IP answers, in seconds
+rules = [
+  "||doubleclick.net^",
+]
+
+# [[filter.list]]
+# path = "/var/lib/goethite/lists/hosts.txt"

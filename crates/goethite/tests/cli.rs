@@ -101,8 +101,12 @@ mod serving {
 
     impl Running {
         fn start(test: &str, upstream: SocketAddr) -> Self {
+            Self::start_with(test, upstream, "")
+        }
+
+        fn start_with(test: &str, upstream: SocketAddr, extra: &str) -> Self {
             let config = format!(
-                "[server]\nlisten = \"127.0.0.1:0\"\n\n[[upstream]]\naddress = \"{upstream}\"\n"
+                "[server]\nlisten = \"127.0.0.1:0\"\n\n[[upstream]]\naddress = \"{upstream}\"\n{extra}"
             );
             let path = config_file(test, &config);
             let mut child = Command::new(BIN)
@@ -258,6 +262,39 @@ mod serving {
             "hickory-proto logged at the default level: {:#?}",
             server.log
         );
+    }
+
+    #[test]
+    fn blocks_listed_names_and_reloads_lists_on_sighup() {
+        let list = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("blocklist.txt");
+        std::fs::write(&list, "0.0.0.0 ads.example\n").unwrap();
+        let extra = format!(
+            "\n[filter]\nrules = [\"||tracker.example^\"]\n\n[[filter.list]]\npath = {:?}\n",
+            list.display().to_string()
+        );
+        let mut server = Running::start_with("blocks_and_reloads", upstream(), &extra);
+        let udp = field(&server.wait_for_log("listening"), "udp");
+        let null = RData::A(A(Ipv4Addr::UNSPECIFIED));
+        let forwarded = RData::A(A(Ipv4Addr::new(192, 0, 2, 53)));
+
+        assert_eq!(ask(udp, "ads.example.").answers[0].data, null);
+        assert_eq!(ask(udp, "x.tracker.example.").answers[0].data, null);
+        assert_eq!(ask(udp, "popup.example.").answers[0].data, forwarded);
+
+        std::fs::write(&list, "0.0.0.0 popup.example\n").unwrap();
+        server.signal("HUP");
+        server.wait_for_log("received SIGHUP");
+        server.wait_for_log("filter ready");
+        assert_eq!(ask(udp, "popup.example.").answers[0].data, null);
+        assert_eq!(ask(udp, "ads.example.").answers[0].data, forwarded);
+        assert_eq!(
+            ask(udp, "x.tracker.example.").answers[0].data,
+            null,
+            "config rules stay"
+        );
+
+        server.signal("TERM");
+        assert!(server.wait_for_exit().success());
     }
 
     #[test]
