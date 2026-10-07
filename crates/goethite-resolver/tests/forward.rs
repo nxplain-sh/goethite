@@ -14,9 +14,11 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use goethite_filter::{Filter, FilterBuilder};
 use goethite_proto::{Edns, Name, Query, Question, RecordClass, RecordType, ResponseCode};
 use goethite_resolver::{
-    Cache, CacheConfig, Forwarder, ForwarderConfig, Resolver, Transport, UpstreamConfig,
+    BlockResponse, Blocking, Cache, CacheConfig, Forwarder, ForwarderConfig, Resolver, Transport,
+    UpstreamConfig,
 };
 use hickory_proto::op::{self, Message, MessageType, OpCode};
 use hickory_proto::rr::{self, RData, rdata};
@@ -395,4 +397,49 @@ async fn failures_are_not_cached() {
     let response = resolver.resolve(&query("down.example.")).await;
     assert_eq!(response.rcode, ResponseCode::SERV_FAIL);
     assert!(resolver.cache().unwrap().is_empty());
+}
+
+fn filter(list: &str) -> Filter {
+    let mut builder = FilterBuilder::new();
+    builder.add_list(list);
+    builder.build().unwrap()
+}
+
+#[tokio::test]
+async fn blocked_names_never_reach_the_upstream() {
+    let upstream = fake(always(Ipv4Addr::new(192, 0, 2, 70)), silent()).await;
+    let blocking = Arc::new(Blocking::new(
+        filter("||ads.example^\n@@||ok.ads.example^\n"),
+        BlockResponse::NullIp,
+        10,
+    ));
+    let resolver = Resolver::new(Vec::new())
+        .with_blocking(Arc::clone(&blocking))
+        .with_cache(Cache::new(CacheConfig::default()))
+        .with_forwarder(forwarder(vec![UpstreamConfig::udp(upstream.addr)]));
+
+    let blocked = resolver.resolve(&query("x.ADS.example.")).await;
+    assert_eq!(blocked.rcode, ResponseCode::NO_ERROR);
+    assert_eq!(ip(&blocked), Some(Ipv4Addr::UNSPECIFIED.into()));
+    assert_eq!(blocked.answers[0].ttl(), 10);
+    assert!(blocked.recursion_available);
+
+    let exempt = resolver.resolve(&query("ok.ads.example.")).await;
+    assert_eq!(ip(&exempt), Some(Ipv4Addr::new(192, 0, 2, 70).into()));
+    assert_eq!(
+        upstream.seen_names().len(),
+        1,
+        "only the exception went upstream"
+    );
+
+    // A new filter applies at once, without a restart...
+    blocking.replace(Filter::empty());
+    let unblocked = resolver.resolve(&query("x.ads.example.")).await;
+    assert_eq!(ip(&unblocked), Some(Ipv4Addr::new(192, 0, 2, 70).into()));
+
+    // ...including to names whose answers are already cached.
+    blocking.replace(filter("||ok.ads.example^\n"));
+    let now_blocked = resolver.resolve(&query("ok.ads.example.")).await;
+    assert_eq!(ip(&now_blocked), Some(Ipv4Addr::UNSPECIFIED.into()));
+    assert_eq!(upstream.seen_names().len(), 2);
 }

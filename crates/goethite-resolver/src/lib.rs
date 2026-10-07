@@ -1,22 +1,28 @@
 //! Query resolution for goethite.
 //!
 //! The [`Resolver`] runs the resolution pipeline for one query: query-type
-//! policy, then local records, then forwarding to upstream resolvers. Later
-//! milestones add the cache and the filter check in front of forwarding, and
-//! later phases recursion with DNSSEC validation.
+//! policy, local records, the filter check, the cache, then forwarding to
+//! upstream resolvers. Later phases add client identification and groups in
+//! front, CNAME uncloaking, and recursion with DNSSEC validation.
 
 #![forbid(unsafe_code)]
 
+mod blocking;
 mod cache;
 mod forward;
 mod tls;
 
 use std::net::Ipv4Addr;
+use std::sync::Arc;
+
+use goethite_filter::Verdict;
+use tracing::debug;
 
 use goethite_proto::{
     Name, NameError, Query, Record, RecordClass, RecordType, Response, ResponseCode,
 };
 
+pub use blocking::{BlockResponse, Blocking};
 pub use cache::{Cache, CacheConfig, CacheStats, MAX_CACHED_RECORDS, MAX_CNAME_CHAIN, MAX_ENTRIES};
 pub use forward::{
     Forwarder, ForwarderConfig, ForwarderError, MAX_UPSTREAMS, Transport, UpstreamConfig,
@@ -60,6 +66,7 @@ pub(crate) fn restore_question_case(response: &mut Response, name: &Name) {
 /// Answers queries.
 pub struct Resolver {
     local: Vec<Record>,
+    blocking: Option<Arc<Blocking>>,
     cache: Option<Cache>,
     forwarder: Option<Forwarder>,
 }
@@ -70,9 +77,18 @@ impl Resolver {
     pub fn new(local: Vec<Record>) -> Self {
         Self {
             local,
+            blocking: None,
             cache: None,
             forwarder: None,
         }
+    }
+
+    /// Blocks what `blocking`'s filter blocks. The caller keeps its own
+    /// handle to swap in new filters.
+    #[must_use]
+    pub fn with_blocking(mut self, blocking: Arc<Blocking>) -> Self {
+        self.blocking = Some(blocking);
+        self
     }
 
     /// Answers forwarded queries from `cache` while they are fresh.
@@ -105,6 +121,8 @@ impl Resolver {
     ///   `REFUSED`, never forwarded;
     /// - a name with local records: those records of the asked type,
     ///   authoritatively, or an empty `NOERROR` (NODATA) if there are none;
+    /// - a name the filter blocks: the configured block response, even if an
+    ///   answer is cached;
     /// - a fresh cached answer, with TTLs counted down;
     /// - anything else: forwarded upstream (and cached if cacheable), or
     ///   `REFUSED` without a forwarder.
@@ -127,6 +145,12 @@ impl Resolver {
         }
         if let Some(response) = self.local_answer(query) {
             return response;
+        }
+        if let Some(blocking) = &self.blocking
+            && blocking.check(&question.name) == Verdict::Blocked
+        {
+            debug!(name = %question.name, qtype = %question.qtype, "blocked");
+            return blocking.respond(query);
         }
         let Some(forwarder) = &self.forwarder else {
             return Response::for_query(query, ResponseCode::REFUSED);
