@@ -30,7 +30,7 @@ thiserror = "2.0.21"
 tokio = "1.53.2"
 toml = { version = "1.1.6", default-features = false, features = ["std", "parse", "serde"] }
 tracing = "0.1.44"
-tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["std", "fmt", "ansi", "smallvec", "env-filter"] }
 
 [workspace.lints.rust]
 # Security rule: no unsafe code anywhere. goethite-proto, goethite-filter and
