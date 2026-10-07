@@ -4,7 +4,8 @@ description: Build goethite from source and query the development server.
 ---
 
 goethite is **pre-alpha**. It forwards queries to the upstream resolvers you configure, over plain
-DNS with failover. Caching, encrypted upstreams and filtering arrive in the next milestones.
+DNS with failover, and caches the answers. Encrypted upstreams and filtering arrive in the next
+milestones.
 
 ## Prerequisites
 
@@ -60,6 +61,9 @@ The header shows `ra` (recursion available) and the answer comes from Quad9:
 ;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 4242
 ;; flags: qr rd ra; QUERY: 1, ANSWER: 2, AUTHORITY: 0, ADDITIONAL: 1
 ```
+
+Ask again and the answer comes from goethite's cache: the query time drops to about 0 ms and the
+TTL has counted down. The `[cache]` table in the config sets its size and TTL limits.
 
 The same queries work over TCP:
 

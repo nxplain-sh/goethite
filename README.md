@@ -11,8 +11,8 @@ zero-downtime upgrades. It is named after the iron-oxide mineral that is a main 
 ## Status
 
 **Pre-alpha, Phase 1 in progress.** goethite forwards queries to the upstream resolvers you
-configure, over plain DNS with failover and spoofing defenses. Caching, encrypted upstreams and
-filtering come in the next Phase 1 milestones, so it is not yet a useful blocker. See the roadmap
+configure, over plain DNS with failover and spoofing defenses, and caches the answers. Encrypted
+upstreams and filtering come in the next Phase 1 milestones, so it is not yet a useful blocker. See the roadmap
 in [`AGENTS.md`](AGENTS.md#roadmap-respect-the-order).
 
 ## Quick start (development)
@@ -64,7 +64,8 @@ Ctrl-C or `SIGTERM` shuts the server down gracefully.
 | `fuzz/`                     | cargo-fuzz targets                                                      |
 | `docs/`                     | Threat model, ADRs, backlog                                             |
 
-Most crates are empty skeletons in Phase 0. `bench/` arrives with the first performance work.
+Several crates are still empty skeletons. Benchmarks and how to record them are in
+[`bench/`](bench/README.md).
 
 ## Documentation
 

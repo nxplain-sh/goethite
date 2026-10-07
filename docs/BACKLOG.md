@@ -24,7 +24,14 @@ When an item is picked up, move it into an issue or PR and delete it from this l
   slow forwarded query delays the ones pipelined behind it (RFC 7766 allows answering out of
   order).
 - **[P1] Less allocation per forwarded query.** Each exchange allocates a receive buffer and
-  re-encodes records through hickory; revisit with the cache benches.
+  re-encodes records through hickory; a cache hit clones its records to count TTLs down. Measure
+  with `bench/` before and after.
+- **[P2] Cache statistics in metrics.** `Cache::stats` counts hits and misses; export them (and
+  the entry count) once Prometheus metrics exist.
+- **[later] Serve-stale and prefetch** (RFC 8767): answer from an expired entry while refreshing it
+  in the background, and refresh popular entries shortly before they expire.
+- **[later] Smarter eviction.** The cache evicts the oldest entry first. Compare S3-FIFO or LRU
+  with the benches and a realistic query mix before changing it.
 - **[P1] OPT in FORMERR/NOTIMP responses.** Header-only error responses omit the OPT record even
   when the query carried one (RFC 6891 §7). Only BADVERS includes it today.
 - **[P1] SOA in negative answers.** NODATA for local names carries no SOA in the authority
