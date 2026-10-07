@@ -15,20 +15,44 @@ listen = "127.0.0.1:15353"
 # Upstream resolvers, tried in this order with failover. At least one is
 # required: goethite does not pick a resolver on your behalf.
 #
-#   address         IP address, optionally with a port (default 53)
-#   protocol        "udp" (retried over TCP when the answer is truncated,
-#                   the default) or "tcp"
+#   address         IP address, optionally with a port (default: 53 for udp
+#                   and tcp, 853 for tls, 443 for https). Not a hostname.
+#   protocol        "udp" (retried over TCP when the answer is truncated, the
+#                   default), "tcp", "tls" (DNS over TLS) or "https" (DNS over
+#                   HTTPS, HTTP/2)
+#   tls_name        for "tls": the name the server's certificate must be
+#                   valid for
+#   url             for "https": the query URL; its host is the name the
+#                   certificate must be valid for
 #   randomize_case  0x20 case randomization of query names, a defense against
 #                   spoofed answers (default true). Turn it off only for an
 #                   upstream that does not preserve the case of names.
 #
-# Quad9 (non-profit, does not log client IP addresses). Encrypted DoT and DoH
-# upstreams arrive in a later milestone.
+# Certificates are checked against the Mozilla root certificates bundled into
+# goethite, not the operating system's store.
+#
+# Quad9 (non-profit, does not log client IP addresses) over DNS over TLS:
 [[upstream]]
 address = "9.9.9.9"
+protocol = "tls"
+tls_name = "dns.quad9.net"
 
 [[upstream]]
 address = "149.112.112.112"
+protocol = "tls"
+tls_name = "dns.quad9.net"
+
+# The same service over DNS over HTTPS:
+#
+# [[upstream]]
+# address = "9.9.9.9"
+# protocol = "https"
+# url = "https://dns.quad9.net/dns-query"
+#
+# Plain DNS (unencrypted; visible to and changeable by anyone on the path):
+#
+# [[upstream]]
+# address = "9.9.9.9"
 
 [cache]
 # Answers from the upstreams are cached until their TTL runs out. These are

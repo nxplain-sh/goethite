@@ -108,16 +108,49 @@ impl CacheSection {
 #[derive(Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct UpstreamSection {
-    /// IP address, with an optional port (default 53). Hostnames are not
-    /// accepted: resolving them would need the resolver being configured.
-    #[serde(deserialize_with = "address_with_default_port")]
-    pub address: SocketAddr,
+    /// IP address, with an optional port (the protocol's standard port
+    /// otherwise). Hostnames are not accepted: resolving them would need the
+    /// resolver being configured.
+    pub address: Address,
     /// How the upstream is reached.
     #[serde(default)]
     pub protocol: Protocol,
+    /// For `tls`: the name the server's certificate must be valid for.
+    pub tls_name: Option<String>,
+    /// For `https`: the DoH query URL; its host is the certificate name.
+    pub url: Option<String>,
     /// 0x20 case randomization of query names.
     #[serde(default = "enabled")]
     pub randomize_case: bool,
+}
+
+/// An upstream IP address with an optional port.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Address {
+    /// The IP address.
+    pub ip: IpAddr,
+    /// The port, if one was given.
+    pub port: Option<u16>,
+}
+
+impl<'de> Deserialize<'de> for Address {
+    /// Accepts `9.9.9.9`, `9.9.9.9:853`, `2620:fe::fe` and `[2620:fe::fe]:853`.
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        if let Ok(addr) = text.parse::<SocketAddr>() {
+            return Ok(Self {
+                ip: addr.ip(),
+                port: Some(addr.port()),
+            });
+        }
+        text.parse::<IpAddr>()
+            .map(|ip| Self { ip, port: None })
+            .map_err(|_| {
+                serde::de::Error::custom(format!(
+                    "{text:?} is not an IP address with an optional port"
+                ))
+            })
+    }
 }
 
 /// The `protocol` of an upstream.
@@ -129,41 +162,63 @@ pub enum Protocol {
     Udp,
     /// Plain DNS over TCP only.
     Tcp,
+    /// DNS over TLS (RFC 7858), port 853 by default.
+    Tls,
+    /// DNS over HTTPS (RFC 8484), port 443 by default.
+    Https,
+}
+
+impl Protocol {
+    fn default_port(self) -> u16 {
+        match self {
+            Self::Udp | Self::Tcp => 53,
+            Self::Tls => 853,
+            Self::Https => 443,
+        }
+    }
 }
 
 impl UpstreamSection {
-    /// The resolver's view of this upstream.
+    /// The resolver's view of this upstream. Call [`Self::validate`] first.
     pub fn to_upstream(&self) -> UpstreamConfig {
+        let port = self
+            .address
+            .port
+            .unwrap_or_else(|| self.protocol.default_port());
         UpstreamConfig {
-            address: self.address,
+            address: SocketAddr::new(self.address.ip, port),
             transport: match self.protocol {
                 Protocol::Udp => Transport::Udp,
                 Protocol::Tcp => Transport::Tcp,
+                Protocol::Tls => Transport::Tls {
+                    server_name: self.tls_name.clone().unwrap_or_default(),
+                },
+                Protocol::Https => Transport::Https {
+                    url: self.url.clone().unwrap_or_default(),
+                },
             },
             randomize_case: self.randomize_case,
+        }
+    }
+
+    /// Checks that `tls_name` and `url` are given exactly where they belong.
+    fn validate(&self) -> Result<()> {
+        match (self.protocol, &self.tls_name, &self.url) {
+            (Protocol::Tls, None, _) => bail!("protocol \"tls\" needs tls_name"),
+            (Protocol::Https, _, None) => bail!("protocol \"https\" needs url"),
+            (Protocol::Udp | Protocol::Tcp | Protocol::Https, Some(_), _) => {
+                bail!("tls_name only applies to protocol \"tls\"")
+            }
+            (Protocol::Udp | Protocol::Tcp | Protocol::Tls, _, Some(_)) => {
+                bail!("url only applies to protocol \"https\"")
+            }
+            _ => Ok(()),
         }
     }
 }
 
 fn enabled() -> bool {
     true
-}
-
-/// Accepts `9.9.9.9`, `9.9.9.9:53`, `2620:fe::fe` and `[2620:fe::fe]:53`.
-fn address_with_default_port<'de, D: Deserializer<'de>>(
-    deserializer: D,
-) -> Result<SocketAddr, D::Error> {
-    let text = String::deserialize(deserializer)?;
-    if let Ok(addr) = text.parse::<SocketAddr>() {
-        return Ok(addr);
-    }
-    text.parse::<IpAddr>()
-        .map(|ip| SocketAddr::new(ip, 53))
-        .map_err(|_| {
-            serde::de::Error::custom(format!(
-                "{text:?} is not an IP address with an optional port"
-            ))
-        })
 }
 
 /// The `[server]` table.
@@ -226,6 +281,15 @@ impl Config {
                 config.upstream.len()
             );
         }
+        for (index, upstream) in config.upstream.iter().enumerate() {
+            upstream.validate().with_context(|| {
+                format!(
+                    "invalid [[upstream]] number {} in {}",
+                    index.saturating_add(1),
+                    path.display()
+                )
+            })?;
+        }
         Ok(config)
     }
 
@@ -245,7 +309,15 @@ mod tests {
         let config = Config::parse(example).unwrap();
         assert_eq!(config.server.listen, "127.0.0.1:15353".parse().unwrap());
         assert_eq!(config.upstream.len(), 2);
-        assert_eq!(config.upstream[0].address, "9.9.9.9:53".parse().unwrap());
+        let first = config.upstream[0].to_upstream();
+        assert_eq!(first.address, "9.9.9.9:853".parse().unwrap());
+        assert_eq!(
+            first.transport,
+            Transport::Tls {
+                server_name: "dns.quad9.net".into()
+            }
+        );
+        assert!(config.upstream.iter().all(|u| u.validate().is_ok()));
     }
 
     #[test]
@@ -259,18 +331,64 @@ mod tests {
             address = "[2620:fe::fe]:5353"
             protocol = "tcp"
             randomize_case = false
+
+            [[upstream]]
+            address = "9.9.9.9"
+            protocol = "tls"
+            tls_name = "dns.quad9.net"
+
+            [[upstream]]
+            address = "149.112.112.112:8443"
+            protocol = "https"
+            url = "https://dns.quad9.net/dns-query"
             "#,
         )
         .unwrap();
-        let [first, second] = &config.upstream[..] else {
-            panic!("two upstreams expected");
-        };
-        assert_eq!(first.address, "9.9.9.9:53".parse().unwrap());
-        assert_eq!(first.protocol, Protocol::Udp);
-        assert!(first.randomize_case);
-        assert_eq!(second.address, "[2620:fe::fe]:5353".parse().unwrap());
-        assert_eq!(second.to_upstream().transport, Transport::Tcp);
-        assert!(!second.randomize_case);
+        let upstreams: Vec<_> = config
+            .upstream
+            .iter()
+            .map(UpstreamSection::to_upstream)
+            .collect();
+        assert!(config.upstream.iter().all(|u| u.validate().is_ok()));
+        assert_eq!(upstreams[0].address, "9.9.9.9:53".parse().unwrap());
+        assert_eq!(upstreams[0].transport, Transport::Udp);
+        assert!(upstreams[0].randomize_case);
+        assert_eq!(upstreams[1].address, "[2620:fe::fe]:5353".parse().unwrap());
+        assert_eq!(upstreams[1].transport, Transport::Tcp);
+        assert!(!upstreams[1].randomize_case);
+        assert_eq!(upstreams[2].address, "9.9.9.9:853".parse().unwrap());
+        assert_eq!(
+            upstreams[2].transport,
+            Transport::Tls {
+                server_name: "dns.quad9.net".into()
+            }
+        );
+        assert_eq!(
+            upstreams[3].address,
+            "149.112.112.112:8443".parse().unwrap()
+        );
+        assert_eq!(
+            upstreams[3].transport,
+            Transport::Https {
+                url: "https://dns.quad9.net/dns-query".into()
+            }
+        );
+    }
+
+    #[test]
+    fn tls_name_and_url_belong_to_their_protocols() {
+        for bad in [
+            "protocol = \"tls\"",
+            "protocol = \"https\"",
+            "tls_name = \"dns.quad9.net\"",
+            "url = \"https://dns.quad9.net/dns-query\"",
+            "protocol = \"tls\"\nurl = \"https://dns.quad9.net/dns-query\"\ntls_name = \"x\"",
+            "protocol = \"https\"\ntls_name = \"x\"\nurl = \"https://x/\"",
+        ] {
+            let config =
+                Config::parse(&format!("[[upstream]]\naddress = \"9.9.9.9\"\n{bad}")).unwrap();
+            assert!(config.upstream[0].validate().is_err(), "{bad}");
+        }
     }
 
     #[test]
