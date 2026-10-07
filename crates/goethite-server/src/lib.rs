@@ -1,21 +1,27 @@
 //! DNS listeners for goethite.
 //!
-//! Serves DNS over UDP and TCP (RFC 7766 length-prefixed framing) on one
-//! address. Every UDP query is resolved in its own task, so a slow upstream
-//! never holds up other clients. Every limit is explicit: datagram size,
-//! queries in flight, concurrent TCP connections, how long a TCP connection
-//! may sit idle, and how long shutdown waits for queries in progress. Later
-//! milestones add per-core `SO_REUSEPORT` sockets, and later phases DoT, DoH
-//! and DoQ listeners.
+//! Serves DNS over UDP and TCP (RFC 7766 length-prefixed framing) on one or
+//! more addresses, with several `SO_REUSEPORT` UDP sockets per address on
+//! Linux (see [`Listeners`]). Every UDP query is resolved in its own task, so
+//! a slow upstream never holds up other clients. Every limit is explicit:
+//! datagram size, queries in flight, the UDP query rate per client network,
+//! concurrent TCP connections in total and per client, how long a TCP
+//! connection may sit idle, and how long shutdown waits for queries in
+//! progress. Later phases add DoT, DoH and DoQ listeners.
+
+mod bind;
+mod limits;
 
 use std::fmt;
 use std::future::Future;
 use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use goethite_proto::{DnsCodec, HickoryCodec, MAX_UDP_PAYLOAD, MIN_UDP_PAYLOAD};
+use goethite_proto::{
+    DnsCodec, HickoryCodec, MAX_UDP_PAYLOAD, MIN_UDP_PAYLOAD, Response, ResponseCode,
+};
 use goethite_resolver::Resolver;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
@@ -23,6 +29,10 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore, watch};
 use tokio::task::JoinSet;
 use tokio::time::timeout;
 use tracing::{debug, error, info, trace, warn};
+
+pub use crate::bind::{Listeners, MAX_LISTEN_ADDRESSES, MAX_UDP_SOCKETS, default_udp_sockets};
+use crate::limits::{ClientConnections, ClientSlot, Decision, RateLimiter};
+pub use crate::limits::{MAX_RATE_LIMITED_CLIENTS, RateLimitConfig};
 
 /// The largest UDP query accepted; larger datagrams are dropped.
 pub const MAX_UDP_QUERY_LEN: usize = 4096;
@@ -34,15 +44,24 @@ const ACCEPT_ERROR_BACKOFF: Duration = Duration::from_millis(100);
 /// Listener settings.
 #[derive(Clone, Debug)]
 pub struct ServerConfig {
-    /// Address for both the UDP socket and the TCP listener.
-    pub listen: SocketAddr,
-    /// Most UDP queries being resolved at once; more are dropped, as an
-    /// overloaded resolver should. Values above tokio's semaphore limit are
-    /// clamped.
+    /// Addresses to serve UDP and TCP on, at most [`MAX_LISTEN_ADDRESSES`].
+    pub listen: Vec<SocketAddr>,
+    /// UDP sockets per listen address on Linux, from 1 to
+    /// [`MAX_UDP_SOCKETS`]; other platforms always use one.
+    pub udp_sockets: usize,
+    /// Most UDP queries being resolved at once, over all sockets; more are
+    /// dropped, as an overloaded resolver should. Values above tokio's
+    /// semaphore limit are clamped.
     pub max_inflight_udp_queries: usize,
-    /// Most TCP connections served at once; more are closed on accept.
-    /// Values above tokio's semaphore limit (`usize::MAX >> 3`) are clamped.
+    /// Rate limiting of UDP queries per client network.
+    pub rate_limit: RateLimitConfig,
+    /// Most TCP connections served at once, over all listeners; more are
+    /// closed on accept. Values above tokio's semaphore limit
+    /// (`usize::MAX >> 3`) are clamped.
     pub max_tcp_connections: usize,
+    /// Most TCP connections served at once for one client (an IPv4 address
+    /// or an IPv6 /64); more are closed on accept.
+    pub max_tcp_connections_per_client: usize,
     /// How long a TCP connection may wait for, or take to send, a query.
     pub tcp_idle_timeout: Duration,
     /// How long shutdown waits for queries in progress before abandoning them.
@@ -51,11 +70,14 @@ pub struct ServerConfig {
 
 impl ServerConfig {
     /// Settings for `listen` with default limits.
-    pub fn new(listen: SocketAddr) -> Self {
+    pub fn new(listen: Vec<SocketAddr>) -> Self {
         Self {
             listen,
+            udp_sockets: default_udp_sockets(),
             max_inflight_udp_queries: 2048,
+            rate_limit: RateLimitConfig::default(),
             max_tcp_connections: 256,
+            max_tcp_connections_per_client: 16,
             tcp_idle_timeout: Duration::from_secs(10),
             shutdown_grace: Duration::from_secs(5),
         }
@@ -98,67 +120,112 @@ pub enum ServerError {
     /// A listener stopped before shutdown was requested.
     #[error("a listener stopped unexpectedly")]
     ListenerStopped,
+    /// No listen address was configured.
+    #[error("no listen addresses configured")]
+    NoListenAddresses,
+    /// More than [`MAX_LISTEN_ADDRESSES`] listen addresses were configured.
+    #[error("at most {MAX_LISTEN_ADDRESSES} listen addresses are supported, got {0}")]
+    TooManyListenAddresses(usize),
+    /// A bound socket could not be handed to the async runtime.
+    #[error("cannot register a socket with the async runtime")]
+    Register(#[source] io::Error),
+}
+
+/// The sockets of one listen address, registered with tokio.
+struct Address {
+    udp: Vec<UdpSocket>,
+    tcp: TcpListener,
 }
 
 /// Bound UDP and TCP sockets, ready to serve.
 pub struct Server {
-    udp: UdpSocket,
-    tcp: TcpListener,
+    addresses: Vec<Address>,
     engine: Arc<Engine>,
     config: ServerConfig,
 }
 
 impl Server {
-    /// Binds the UDP socket and TCP listener on `config.listen`. The
-    /// resolver is shared, e.g. with the filter list updater.
+    /// Binds the sockets for `config` (see [`Listeners::bind`]) and prepares
+    /// to serve them. The resolver is shared, e.g. with the filter list
+    /// updater.
     ///
     /// # Errors
     ///
-    /// Returns [`ServerError::Bind`] if either socket cannot be bound.
-    pub async fn bind(config: ServerConfig, resolver: Arc<Resolver>) -> Result<Self, ServerError> {
-        let addr = config.listen;
-        let udp = UdpSocket::bind(addr)
-            .await
-            .map_err(|source| ServerError::Bind {
-                transport: Transport::Udp,
-                addr,
-                source,
-            })?;
-        let tcp = TcpListener::bind(addr)
-            .await
-            .map_err(|source| ServerError::Bind {
-                transport: Transport::Tcp,
-                addr,
-                source,
-            })?;
+    /// Returns [`ServerError::Bind`] if a socket cannot be bound, or another
+    /// [`ServerError`] for an unusable configuration.
+    ///
+    /// # Panics
+    ///
+    /// Outside a tokio runtime with I/O enabled, as tokio does.
+    pub fn bind(config: ServerConfig, resolver: Arc<Resolver>) -> Result<Self, ServerError> {
+        let listeners = Listeners::bind(&config)?;
+        Self::new(listeners, config, resolver)
+    }
+
+    /// Prepares to serve sockets bound earlier, for example before the
+    /// process dropped its privileges.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ServerError::Register`] if a socket cannot be registered.
+    ///
+    /// # Panics
+    ///
+    /// Outside a tokio runtime with I/O enabled, as tokio does.
+    pub fn new(
+        listeners: Listeners,
+        config: ServerConfig,
+        resolver: Arc<Resolver>,
+    ) -> Result<Self, ServerError> {
+        let addresses = listeners
+            .addresses
+            .into_iter()
+            .map(|bound| {
+                Ok(Address {
+                    udp: bound
+                        .udp
+                        .into_iter()
+                        .map(UdpSocket::from_std)
+                        .collect::<io::Result<_>>()?,
+                    tcp: TcpListener::from_std(bound.tcp)?,
+                })
+            })
+            .collect::<io::Result<_>>()
+            .map_err(ServerError::Register)?;
         let engine = Arc::new(Engine {
             codec: Box::new(HickoryCodec),
             resolver,
         });
         Ok(Self {
-            udp,
-            tcp,
+            addresses,
             engine,
             config,
         })
     }
 
-    /// The address the UDP socket is bound to.
+    /// The address of each listen address's UDP sockets.
     ///
     /// # Errors
     ///
-    /// Returns the operating system's error if the address is unavailable.
-    pub fn udp_local_addr(&self) -> io::Result<SocketAddr> {
-        self.udp.local_addr()
+    /// Returns the operating system's error if an address is unavailable.
+    pub fn udp_local_addrs(&self) -> io::Result<Vec<SocketAddr>> {
+        self.addresses
+            .iter()
+            .filter_map(|address| address.udp.first())
+            .map(UdpSocket::local_addr)
+            .collect()
     }
 
-    /// The address the TCP listener is bound to.
+    /// The address of each TCP listener.
     ///
     /// # Errors
     ///
-    /// Returns the operating system's error if the address is unavailable.
-    pub fn tcp_local_addr(&self) -> io::Result<SocketAddr> {
-        self.tcp.local_addr()
+    /// Returns the operating system's error if an address is unavailable.
+    pub fn tcp_local_addrs(&self) -> io::Result<Vec<SocketAddr>> {
+        self.addresses
+            .iter()
+            .map(|address| address.tcp.local_addr())
+            .collect()
     }
 
     /// Serves until `shutdown` completes, then stops accepting new work,
@@ -170,21 +237,42 @@ impl Server {
     /// Returns [`ServerError::ListenerStopped`] if a listener ended before
     /// `shutdown` completed.
     pub async fn run(self, shutdown: impl Future<Output = ()>) -> Result<(), ServerError> {
-        info!(
-            udp = %DisplayAddr(self.udp.local_addr()),
-            tcp = %DisplayAddr(self.tcp.local_addr()),
-            "listening"
-        );
+        let config = &self.config;
+        let shared = Arc::new(Shared {
+            engine: self.engine,
+            udp_slots: Arc::new(Semaphore::new(
+                config.max_inflight_udp_queries.min(Semaphore::MAX_PERMITS),
+            )),
+            rate_limiter: RateLimiter::new(&config.rate_limit),
+            // `Semaphore::new` panics above its limit, so a huge setting is clamped.
+            tcp_slots: Arc::new(Semaphore::new(
+                config.max_tcp_connections.min(Semaphore::MAX_PERMITS),
+            )),
+            tcp_clients: ClientConnections::new(config.max_tcp_connections_per_client),
+            config: config.clone(),
+        });
+        if shared.rate_limiter.is_none() {
+            info!("udp rate limiting is turned off");
+        }
 
         let (stop_tx, stop_rx) = watch::channel(false);
         let mut listeners = JoinSet::new();
-        listeners.spawn(serve_udp(
-            self.udp,
-            Arc::clone(&self.engine),
-            self.config.clone(),
-            stop_rx.clone(),
-        ));
-        listeners.spawn(serve_tcp(self.tcp, self.engine, self.config, stop_rx));
+        for address in self.addresses {
+            info!(
+                udp = %DisplayAddr(address.udp.first().map_or_else(
+                    || Err(io::ErrorKind::NotFound.into()),
+                    UdpSocket::local_addr,
+                )),
+                udp_sockets = address.udp.len(),
+                tcp = %DisplayAddr(address.tcp.local_addr()),
+                "listening"
+            );
+            for socket in address.udp {
+                listeners.spawn(serve_udp(socket, Arc::clone(&shared), stop_rx.clone()));
+            }
+            listeners.spawn(serve_tcp(address.tcp, Arc::clone(&shared), stop_rx.clone()));
+        }
+        drop(stop_rx);
 
         let stopped_early = tokio::select! {
             () = shutdown => {
@@ -232,6 +320,16 @@ impl fmt::Display for DisplayAddr {
 async fn stopped(stop: &mut watch::Receiver<bool>) {
     // Discard the borrowed value so no lock guard outlives this call.
     let _ = stop.wait_for(|stop| *stop).await;
+}
+
+/// State shared by every listener.
+struct Shared {
+    engine: Arc<Engine>,
+    config: ServerConfig,
+    udp_slots: Arc<Semaphore>,
+    rate_limiter: Option<RateLimiter>,
+    tcp_slots: Arc<Semaphore>,
+    tcp_clients: Arc<ClientConnections>,
 }
 
 /// Decodes, resolves and encodes; shared by every listener.
@@ -287,19 +385,26 @@ impl Engine {
             }
         }
     }
+
+    /// Encodes an empty, truncated response to the query in `wire` into
+    /// `out`, telling a rate-limited client to retry over TCP. It is no
+    /// bigger than the query. Returns `false` if the query cannot be decoded.
+    fn truncated(&self, wire: &[u8], out: &mut Vec<u8>) -> bool {
+        let Ok(query) = self.codec.decode_query(wire) else {
+            return false;
+        };
+        let mut response = Response::for_query(&query, ResponseCode::NO_ERROR);
+        response.truncated = true;
+        self.codec
+            .encode_response(&response, usize::from(MIN_UDP_PAYLOAD), out)
+            .is_ok()
+    }
 }
 
-async fn serve_udp(
-    socket: UdpSocket,
-    engine: Arc<Engine>,
-    config: ServerConfig,
-    mut stop: watch::Receiver<bool>,
-) {
+async fn serve_udp(socket: UdpSocket, shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
     let socket = Arc::new(socket);
-    let slots = Arc::new(Semaphore::new(
-        config.max_inflight_udp_queries.min(Semaphore::MAX_PERMITS),
-    ));
     let mut inflight = JoinSet::new();
+    let mut slip = Vec::with_capacity(usize::from(MIN_UDP_PAYLOAD));
     // One spare byte tells an oversized datagram from one that fits exactly.
     let mut buf = vec![0_u8; MAX_UDP_QUERY_LEN + 1];
     loop {
@@ -324,13 +429,27 @@ async fn serve_udp(
             debug!(%peer, "dropped oversized udp datagram");
             continue;
         };
-        let Ok(permit) = Arc::clone(&slots).try_acquire_owned() else {
+        if let Some(limiter) = &shared.rate_limiter
+            && let (Decision::Limited { slip: send, first }, network) =
+                limiter.check(peer.ip(), Instant::now())
+        {
+            if first {
+                debug!(%peer, %network, "client is over the udp rate limit");
+            }
+            slip.clear();
+            // Sent without waiting: if the socket is busy, dropping is fine.
+            if send && shared.engine.truncated(wire, &mut slip) {
+                let _ = socket.try_send_to(&slip, peer);
+            }
+            continue;
+        }
+        let Ok(permit) = Arc::clone(&shared.udp_slots).try_acquire_owned() else {
             debug!(%peer, "too many udp queries in flight, dropping");
             continue;
         };
         let wire = wire.to_vec();
         let socket = Arc::clone(&socket);
-        let engine = Arc::clone(&engine);
+        let engine = Arc::clone(&shared.engine);
         inflight.spawn(async move {
             let _permit = permit;
             let mut out = Vec::with_capacity(usize::from(MAX_UDP_PAYLOAD));
@@ -341,7 +460,7 @@ async fn serve_udp(
             }
         });
     }
-    drain("udp queries", inflight, config.shutdown_grace).await;
+    drain("udp queries", inflight, shared.config.shutdown_grace).await;
 }
 
 /// Waits up to `grace` for `tasks` to finish, then aborts the rest.
@@ -356,16 +475,7 @@ async fn drain(what: &str, mut tasks: JoinSet<()>, grace: Duration) {
     }
 }
 
-async fn serve_tcp(
-    listener: TcpListener,
-    engine: Arc<Engine>,
-    config: ServerConfig,
-    mut stop: watch::Receiver<bool>,
-) {
-    // `Semaphore::new` panics above its limit, so a huge setting is clamped.
-    let slots = Arc::new(Semaphore::new(
-        config.max_tcp_connections.min(Semaphore::MAX_PERMITS),
-    ));
+async fn serve_tcp(listener: TcpListener, shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
     let mut connections = JoinSet::new();
     let connection_stop = stop.clone();
     loop {
@@ -386,24 +496,28 @@ async fn serve_tcp(
                         continue;
                     }
                 };
-                let Ok(permit) = Arc::clone(&slots).try_acquire_owned() else {
+                let Ok(permit) = Arc::clone(&shared.tcp_slots).try_acquire_owned() else {
                     debug!(%peer, "tcp connection limit reached, closing connection");
+                    continue;
+                };
+                let Some(client) = shared.tcp_clients.try_acquire(peer.ip()) else {
+                    debug!(%peer, "per-client tcp connection limit reached, closing connection");
                     continue;
                 };
                 connections.spawn(serve_tcp_connection(
                     stream,
                     peer,
-                    Arc::clone(&engine),
-                    config.tcp_idle_timeout,
+                    Arc::clone(&shared.engine),
+                    shared.config.tcp_idle_timeout,
                     connection_stop.clone(),
-                    permit,
+                    (permit, client),
                 ));
             }
         }
     }
 
     drop(listener);
-    drain("tcp connections", connections, config.shutdown_grace).await;
+    drain("tcp connections", connections, shared.config.shutdown_grace).await;
 }
 
 async fn serve_tcp_connection(
@@ -412,7 +526,7 @@ async fn serve_tcp_connection(
     engine: Arc<Engine>,
     idle_timeout: Duration,
     mut stop: watch::Receiver<bool>,
-    _permit: OwnedSemaphorePermit,
+    _slots: (OwnedSemaphorePermit, ClientSlot),
 ) {
     if let Err(err) = stream.set_nodelay(true) {
         debug!(%peer, %err, "cannot disable Nagle's algorithm");

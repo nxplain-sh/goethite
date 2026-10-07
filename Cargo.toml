@@ -35,6 +35,7 @@ proptest = "1.11.0"
 rand = { version = "0.10.3", default-features = false, features = ["std", "thread_rng"] }
 rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
 serde = { version = "1.0.229", features = ["derive"] }
+socket2 = { version = "0.6.5", features = ["all"] }
 thiserror = "2.0.21"
 tokio = "1.53.2"
 tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12"] }

@@ -9,8 +9,6 @@ When an item is picked up, move it into an issue or PR and delete it from this l
 - **[P1] Privilege drop and hardened systemd unit.** Drop to an unprivileged user after binding
   port 53. Ship a systemd unit with `NoNewPrivileges`, `CAP_NET_BIND_SERVICE` only, and protected
   paths.
-- **[P1] `SO_REUSEPORT` per-core sockets** for UDP and TCP listeners.
-- **[P1] Response rate limiting (RRL).**
 - **[P1] Config hot reload** via `arc-swap`, without dropping queries.
 - **[P1] `bench/` directory** with criterion benches and dnsperf/resperf scripts, ahead of the
   first performance claim.
@@ -43,7 +41,6 @@ When an item is picked up, move it into an issue or PR and delete it from this l
   configurable.
 - **[P1] Configurable local records and rewrites** replacing the hardcoded `goethite.test.` record
   (the "local rewrites" pipeline stage).
-- **[P1] Several listen addresses** (for example IPv4 and IPv6) instead of a single `listen`.
 - **[P1] Rate-limit per-packet debug logs** (dropped and rejected messages) so a flood with
   `RUST_LOG=debug` cannot drown the log.
 - **[P1] TCP per-connection memory.** Each connection can hold up to about 192 KiB of buffers
@@ -62,10 +59,16 @@ When an item is picked up, move it into an issue or PR and delete it from this l
 - **[P1] Name parsing for filter lists.** `Name::from_str` only accepts host-style names (no
   escapes, no wildcards). Filter syntax needs wildcards and may need RFC 1035 escapes; extend the
   parser (and its `parse_name` fuzz target) rather than adding a second one.
-- **[P1] Per-client TCP fairness.** One host can open `max_tcp_connections` idle connections and
-  block TCP (including TC=1 fallback) for everyone until they time out. Add per-source-IP limits,
-  close the oldest idle connection when full, and use a shorter first-byte timeout under load
-  (RFC 7766 §6.2.3).
+- **[P1] TCP fairness under load.** Per-client limits exist, but many hosts together can still
+  hold every slot until their idle timeout. Close the oldest idle connection when full and use a
+  shorter first-byte timeout under load (RFC 7766 §6.2.3).
+- **[P1] Source address on wildcard UDP listeners.** On a host with several addresses, a socket
+  bound to `0.0.0.0` or `[::]` answers from the address the kernel picks, which may not be the one
+  the query was sent to. Needs `IP_PKTINFO` / `IPV6_RECVPKTINFO`; until then, list specific
+  addresses on multihomed hosts.
+- **[P2] Rate limiting exemptions for trusted networks** (beyond loopback), and rate limiting
+  statistics in metrics.
+- **[P3] Binding the floating IP before it is assigned** (`IP_FREEBIND`), for VRRP backups.
 
 ## Phase 2: v0.2 control
 

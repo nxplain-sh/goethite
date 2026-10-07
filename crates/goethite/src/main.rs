@@ -16,7 +16,7 @@ use clap::{Parser, Subcommand};
 use goethite_resolver::{
     Blocking, Cache, Forwarder, ForwarderConfig, Resolver, TlsRoots, test_record, tls_client_config,
 };
-use goethite_server::{Server, ServerConfig};
+use goethite_server::{Listeners, Server};
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::filter::LevelFilter;
@@ -95,6 +95,10 @@ fn run(config_path: &Path) -> Result<()> {
         "starting goethite"
     );
     let config = Config::load(config_path)?;
+    let server_config = config.server.to_server_config();
+    // Bound while the process is still single-threaded, before the runtime
+    // starts, so privileges can be dropped once the sockets exist.
+    let listeners = Listeners::bind(&server_config)?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -147,11 +151,7 @@ fn run(config_path: &Path) -> Result<()> {
                 download::Downloader::new(Arc::clone(&resolver), tls, filters::MAX_LIST_LEN);
             filters::spawn_updates(blocking, config.filter.clone(), downloader);
         }
-        let server = Server::bind(
-            ServerConfig::new(config.server.listen),
-            Arc::clone(&resolver),
-        )
-        .await?;
+        let server = Server::new(listeners, server_config, Arc::clone(&resolver))?;
         server.run(shutdown).await?;
         Ok(())
     })

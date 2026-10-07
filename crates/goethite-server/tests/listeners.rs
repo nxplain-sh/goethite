@@ -14,7 +14,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use goethite_resolver::{Forwarder, ForwarderConfig, Resolver, UpstreamConfig, test_record};
-use goethite_server::{Server, ServerConfig, ServerError};
+use goethite_server::{Listeners, RateLimitConfig, Server, ServerConfig, ServerError};
 use hickory_proto::op::{Edns, Message, MessageType, OpCode, Query, ResponseCode};
 use hickory_proto::rr::{Name, RData, RecordType, rdata::A};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -39,18 +39,16 @@ impl Running {
     }
 }
 
-async fn start_with(config: impl FnOnce(&mut ServerConfig)) -> Running {
-    start_resolving(config, Resolver::new(vec![test_record().unwrap()])).await
+fn start_with(config: impl FnOnce(&mut ServerConfig)) -> Running {
+    start_resolving(config, Resolver::new(vec![test_record().unwrap()]))
 }
 
-async fn start_resolving(config: impl FnOnce(&mut ServerConfig), resolver: Resolver) -> Running {
-    let mut server_config = ServerConfig::new("127.0.0.1:0".parse().unwrap());
+fn start_resolving(config: impl FnOnce(&mut ServerConfig), resolver: Resolver) -> Running {
+    let mut server_config = ServerConfig::new(vec!["127.0.0.1:0".parse().unwrap()]);
     config(&mut server_config);
-    let server = Server::bind(server_config, std::sync::Arc::new(resolver))
-        .await
-        .unwrap();
-    let udp = server.udp_local_addr().unwrap();
-    let tcp = server.tcp_local_addr().unwrap();
+    let server = Server::bind(server_config, std::sync::Arc::new(resolver)).unwrap();
+    let udp = server.udp_local_addrs().unwrap()[0];
+    let tcp = server.tcp_local_addrs().unwrap()[0];
     let (stop, stopped) = oneshot::channel::<()>();
     let task = tokio::spawn(server.run(async {
         let _ = stopped.await;
@@ -63,8 +61,8 @@ async fn start_resolving(config: impl FnOnce(&mut ServerConfig), resolver: Resol
     }
 }
 
-async fn start() -> Running {
-    start_with(|_| {}).await
+fn start() -> Running {
+    start_with(|_| {})
 }
 
 fn query(id: u16, name: &str, record_type: RecordType) -> Vec<u8> {
@@ -127,7 +125,7 @@ fn assert_test_answer(response: &Message, id: u16) {
 
 #[tokio::test]
 async fn udp_answers_the_test_name() {
-    let server = start().await;
+    let server = start();
     let response = udp_exchange(server.udp, &query(1, "goethite.test.", RecordType::A))
         .await
         .unwrap();
@@ -138,7 +136,7 @@ async fn udp_answers_the_test_name() {
 
 #[tokio::test]
 async fn tcp_answers_the_test_name() {
-    let server = start().await;
+    let server = start();
     let mut stream = TcpStream::connect(server.tcp).await.unwrap();
     tcp_send(&mut stream, &query(2, "goethite.test.", RecordType::A)).await;
     assert_test_answer(&tcp_receive(&mut stream).await, 2);
@@ -148,7 +146,7 @@ async fn tcp_answers_the_test_name() {
 
 #[tokio::test]
 async fn other_names_are_refused() {
-    let server = start().await;
+    let server = start();
     let wire = query(3, "example.com.", RecordType::A);
 
     let over_udp = udp_exchange(server.udp, &wire).await.unwrap();
@@ -167,7 +165,7 @@ async fn other_names_are_refused() {
 
 #[tokio::test]
 async fn other_types_of_the_test_name_get_nodata() {
-    let server = start().await;
+    let server = start();
     let response = udp_exchange(server.udp, &query(4, "goethite.test.", RecordType::AAAA))
         .await
         .unwrap();
@@ -179,7 +177,7 @@ async fn other_types_of_the_test_name_get_nodata() {
 
 #[tokio::test]
 async fn garbage_is_dropped_and_the_server_keeps_answering() {
-    let server = start().await;
+    let server = start();
     let valid = query(5, "goethite.test.", RecordType::A);
     let garbage: [&[u8]; 4] = [
         b"",
@@ -212,7 +210,7 @@ async fn garbage_is_dropped_and_the_server_keeps_answering() {
 
 #[tokio::test]
 async fn malformed_queries_with_a_valid_header_get_error_responses() {
-    let server = start().await;
+    let server = start();
     // A header with no question: FORMERR.
     let no_question = [0, 6, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0];
     let response = udp_exchange(server.udp, &no_question).await.unwrap();
@@ -239,7 +237,7 @@ async fn malformed_queries_with_a_valid_header_get_error_responses() {
 
 #[tokio::test]
 async fn tcp_serves_several_queries_per_connection() {
-    let server = start().await;
+    let server = start();
     let mut stream = TcpStream::connect(server.tcp).await.unwrap();
     tcp_send(&mut stream, &query(10, "goethite.test.", RecordType::A)).await;
     tcp_send(&mut stream, &query(11, "example.com.", RecordType::A)).await;
@@ -253,7 +251,7 @@ async fn tcp_serves_several_queries_per_connection() {
 
 #[tokio::test]
 async fn tcp_connections_beyond_the_limit_are_closed() {
-    let server = start_with(|config| config.max_tcp_connections = 1).await;
+    let server = start_with(|config| config.max_tcp_connections = 1);
     let mut first = TcpStream::connect(server.tcp).await.unwrap();
     // Make sure the server has accepted the first connection.
     tcp_send(&mut first, &query(12, "goethite.test.", RecordType::A)).await;
@@ -271,7 +269,7 @@ async fn tcp_connections_beyond_the_limit_are_closed() {
 
 #[tokio::test]
 async fn huge_connection_limits_are_clamped_not_fatal() {
-    let server = start_with(|config| config.max_tcp_connections = usize::MAX).await;
+    let server = start_with(|config| config.max_tcp_connections = usize::MAX);
     let mut stream = TcpStream::connect(server.tcp).await.unwrap();
     tcp_send(&mut stream, &query(16, "goethite.test.", RecordType::A)).await;
     assert_test_answer(&tcp_receive(&mut stream).await, 16);
@@ -281,7 +279,7 @@ async fn huge_connection_limits_are_clamped_not_fatal() {
 
 #[tokio::test]
 async fn zone_transfers_and_meta_types_are_not_answered_with_data() {
-    let server = start().await;
+    let server = start();
     let mut stream = TcpStream::connect(server.tcp).await.unwrap();
     tcp_send(&mut stream, &query(17, "goethite.test.", RecordType::AXFR)).await;
     let axfr = tcp_receive(&mut stream).await;
@@ -298,7 +296,7 @@ async fn zone_transfers_and_meta_types_are_not_answered_with_data() {
 
 #[tokio::test]
 async fn idle_tcp_connections_are_closed() {
-    let server = start_with(|config| config.tcp_idle_timeout = Duration::from_millis(200)).await;
+    let server = start_with(|config| config.tcp_idle_timeout = Duration::from_millis(200));
     let mut stream = TcpStream::connect(server.tcp).await.unwrap();
     assert_closed(&mut stream).await;
     server.shutdown().await;
@@ -306,7 +304,7 @@ async fn idle_tcp_connections_are_closed() {
 
 #[tokio::test]
 async fn shutdown_closes_listeners_and_idle_connections() {
-    let server = start().await;
+    let server = start();
     let (udp, tcp) = (server.udp, server.tcp);
     let mut idle = TcpStream::connect(tcp).await.unwrap();
     tcp_send(&mut idle, &query(14, "goethite.test.", RecordType::A)).await;
@@ -325,10 +323,133 @@ async fn shutdown_closes_listeners_and_idle_connections() {
 
 #[tokio::test]
 async fn binding_a_busy_address_fails() {
-    let server = start().await;
-    let config = ServerConfig::new(server.tcp);
-    let result = Server::bind(config, std::sync::Arc::new(Resolver::new(Vec::new()))).await;
+    let server = start();
+    let config = ServerConfig::new(vec![server.tcp]);
+    let result = Server::bind(config, std::sync::Arc::new(Resolver::new(Vec::new())));
     assert!(matches!(result, Err(ServerError::Bind { .. })));
+    server.shutdown().await;
+}
+
+#[test]
+fn listen_addresses_are_bounded() {
+    let none = ServerConfig::new(Vec::new());
+    assert!(matches!(
+        Listeners::bind(&none),
+        Err(ServerError::NoListenAddresses)
+    ));
+    let many = ServerConfig::new(vec!["127.0.0.1:0".parse().unwrap(); 17]);
+    assert!(matches!(
+        Listeners::bind(&many),
+        Err(ServerError::TooManyListenAddresses(17))
+    ));
+}
+
+#[tokio::test]
+async fn serves_every_listen_address() {
+    let localhost: SocketAddr = "127.0.0.1:0".parse().unwrap();
+    // Bound before the runtime is involved, as the binary does.
+    let config = ServerConfig::new(vec![localhost, localhost]);
+    let listeners = Listeners::bind(&config).unwrap();
+    let udp = listeners.udp_local_addrs().unwrap();
+    let tcp = listeners.tcp_local_addrs().unwrap();
+    assert_eq!((udp.len(), tcp.len()), (2, 2));
+    assert_ne!(udp[0], udp[1]);
+    let resolver = std::sync::Arc::new(Resolver::new(vec![test_record().unwrap()]));
+    let server = Server::new(listeners, config, resolver).unwrap();
+    let (stop, stopped) = oneshot::channel::<()>();
+    let task = tokio::spawn(server.run(async {
+        let _ = stopped.await;
+    }));
+    for (id, (&udp, &tcp)) in (40..).zip(udp.iter().zip(&tcp)) {
+        let answer = udp_exchange(udp, &query(id, "goethite.test.", RecordType::A)).await;
+        assert_test_answer(&answer.unwrap(), id);
+        let mut stream = TcpStream::connect(tcp).await.unwrap();
+        tcp_send(&mut stream, &query(id, "goethite.test.", RecordType::A)).await;
+        assert_test_answer(&tcp_receive(&mut stream).await, id);
+    }
+    stop.send(()).unwrap();
+    timeout(WAIT, task).await.unwrap().unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn several_udp_sockets_all_answer() {
+    // On Linux these are SO_REUSEPORT sockets sharing the port, and the
+    // kernel spreads clients over them; elsewhere there is one socket.
+    let server = start_with(|config| config.udp_sockets = 4);
+    let udp = server.udp;
+    let mut exchanges = tokio::task::JoinSet::new();
+    for id in 0..64 {
+        let wire = query(id, "goethite.test.", RecordType::A);
+        exchanges.spawn(async move { (id, udp_exchange_waiting(udp, wire).await) });
+    }
+    while let Some(joined) = exchanges.join_next().await {
+        let (id, answer) = joined.unwrap();
+        assert_test_answer(&answer.unwrap(), id);
+    }
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn tcp_connections_per_client_are_limited() {
+    let server = start_with(|config| config.max_tcp_connections_per_client = 1);
+    let mut first = TcpStream::connect(server.tcp).await.unwrap();
+    tcp_send(&mut first, &query(50, "goethite.test.", RecordType::A)).await;
+    tcp_receive(&mut first).await;
+
+    let mut second = TcpStream::connect(server.tcp).await.unwrap();
+    assert_closed(&mut second).await;
+    tcp_send(&mut first, &query(51, "goethite.test.", RecordType::A)).await;
+    assert_test_answer(&tcp_receive(&mut first).await, 51);
+
+    // Closing the first connection frees the client's slot.
+    drop(first);
+    let mut third = None;
+    for _ in 0..50 {
+        let mut stream = TcpStream::connect(server.tcp).await.unwrap();
+        tcp_send(&mut stream, &query(52, "goethite.test.", RecordType::A)).await;
+        let mut len = [0; 2];
+        if timeout(WAIT, stream.read_exact(&mut len))
+            .await
+            .unwrap()
+            .is_ok()
+        {
+            third = Some(());
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(third.is_some(), "the slot was not released");
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn rate_limited_udp_clients_are_told_to_use_tcp() {
+    let server = start_with(|config| {
+        config.rate_limit = RateLimitConfig {
+            queries_per_second: 1,
+            burst: 2,
+            slip: 1,
+            exempt_loopback: false,
+            ..RateLimitConfig::default()
+        };
+    });
+    for id in [60, 61] {
+        let answer = udp_exchange(server.udp, &query(id, "goethite.test.", RecordType::A)).await;
+        assert_test_answer(&answer.unwrap(), id);
+    }
+    let limited = udp_exchange(server.udp, &query(62, "goethite.test.", RecordType::A))
+        .await
+        .unwrap();
+    assert_eq!(limited.metadata.id, 62);
+    assert!(limited.metadata.truncation, "TC is set");
+    assert_eq!(limited.answers, vec![]);
+    assert_eq!(limited.queries.len(), 1, "the question is echoed");
+
+    // TCP is not rate limited.
+    let mut stream = TcpStream::connect(server.tcp).await.unwrap();
+    tcp_send(&mut stream, &query(63, "goethite.test.", RecordType::A)).await;
+    assert_test_answer(&tcp_receive(&mut stream).await, 63);
+    drop(stream);
     server.shutdown().await;
 }
 
@@ -375,7 +496,7 @@ fn forwarding_to(upstream: SocketAddr, attempt: Duration) -> Resolver {
 #[tokio::test]
 async fn other_names_are_forwarded_upstream() {
     let upstream = upstream(Some(Ipv4Addr::new(192, 0, 2, 80)), Duration::ZERO).await;
-    let server = start_resolving(|_| {}, forwarding_to(upstream, Duration::from_secs(2))).await;
+    let server = start_resolving(|_| {}, forwarding_to(upstream, Duration::from_secs(2)));
 
     let over_udp = udp_exchange(server.udp, &query(20, "example.com.", RecordType::A))
         .await
@@ -411,7 +532,7 @@ async fn a_slow_upstream_does_not_block_other_queries() {
         Duration::from_millis(800),
     )
     .await;
-    let server = start_resolving(|_| {}, forwarding_to(upstream, Duration::from_secs(3))).await;
+    let server = start_resolving(|_| {}, forwarding_to(upstream, Duration::from_secs(3)));
     let slow = tokio::spawn(udp_exchange_waiting(
         server.udp,
         query(23, "slow.example.", RecordType::A),
@@ -437,8 +558,7 @@ async fn queries_beyond_the_inflight_limit_are_dropped() {
     let server = start_resolving(
         |config| config.max_inflight_udp_queries = 1,
         forwarding_to(silent, Duration::from_millis(1500)),
-    )
-    .await;
+    );
     let stuck = tokio::spawn(udp_exchange_waiting(
         server.udp,
         query(25, "stuck.example.", RecordType::A),
@@ -466,8 +586,7 @@ async fn shutdown_abandons_slow_queries_after_the_grace_period() {
     let server = start_resolving(
         |config| config.shutdown_grace = Duration::from_millis(200),
         forwarding_to(silent, Duration::from_secs(30)),
-    )
-    .await;
+    );
     let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
     socket
         .send_to(&query(28, "stuck.example.", RecordType::A), server.udp)

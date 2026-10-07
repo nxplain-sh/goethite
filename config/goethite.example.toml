@@ -6,11 +6,36 @@
 # error rather than a silently ignored setting.
 
 [server]
-# Address for DNS over UDP and TCP. Port 15353 on loopback lets development
-# builds run without root (5353 is avoided: it is multicast DNS and usually
-# taken). Production uses port 53, e.g. "0.0.0.0:53" or "[::]:53". Use an IP
-# address here, not a hostname. This is the default.
+# Addresses for DNS over UDP and TCP: one, or a list. Port 15353 on loopback
+# lets development builds run without root (5353 is avoided: it is multicast
+# DNS and usually taken). Production uses port 53, for example
+#   listen = ["0.0.0.0:53", "[::]:53"]
+# IPv6 addresses only accept IPv6, so list both families to serve both. Use IP
+# addresses here, not hostnames. This is the default.
 listen = "127.0.0.1:15353"
+
+# On Linux each listen address gets several UDP sockets (SO_REUSEPORT), one per
+# CPU core unless set here (1 to 64). Other platforms use one.
+# udp_sockets = 4
+
+# TCP connections served at once, in total and from one client (an IPv4
+# address or an IPv6 /64). These are the defaults.
+max_tcp_connections = 256
+max_tcp_connections_per_client = 16
+
+# UDP queries per second per client network. A client over the limit has its
+# queries dropped, except every slip-th one, which gets an empty truncated
+# answer so a real client retries over TCP (TCP is not rate limited). This
+# stops goethite from being used to flood a spoofed address with answers.
+# Loopback clients are never limited. These are the defaults; set
+# queries_per_second = 0 to turn rate limiting off.
+[server.rate_limit]
+queries_per_second = 300
+burst = 1000
+slip = 2
+ipv4_prefix = 32       # clients in the same /32 share a limit (each address)
+ipv6_prefix = 64       # clients in the same /64 share a limit
+max_clients = 65536    # client networks tracked at once
 
 # Upstream resolvers, tried in this order with failover. At least one is
 # required: goethite does not pick a resolver on your behalf.

@@ -15,9 +15,11 @@ Resolution pipeline: client identification → policy/group lookup → local rew
 (including CNAME uncloaking) → cache → upstream (forward or recursive) → DNSSEC validation →
 response.
 
-Today (Phase 1, milestone 5) goethite has UDP/TCP listeners, a built-in `goethite.test.` record,
-forwarding to configured upstreams over DNS over TLS, DNS over HTTPS or plain DNS with failover,
-a cache, and filtering from local and downloaded lists that are refreshed on a schedule.
+Today (Phase 1, milestone 6) goethite has UDP/TCP listeners on one or more addresses with
+per-client rate and connection limits, a built-in `goethite.test.` record, forwarding to
+configured upstreams over DNS over TLS, DNS over HTTPS or plain DNS with failover, DNS rebinding
+protection, a cache, and filtering from local and downloaded lists that are refreshed on a
+schedule.
 
 ### Trust boundaries
 
@@ -74,7 +76,7 @@ for that phase and not implemented yet. Phases follow the roadmap in
 | Reflection / response loops (B1)            | Messages with QR=1 (responses) are dropped, never answered                                         | 0     | done    |
 | Oversized UDP responses / amplification     | UDP responses fit the client's limit (512 without EDNS, at most the advertised EDNS size). goethite advertises 1232 and sets TC when truncating. | 0 | done |
 | TCP resource exhaustion (B1)                | TCP connection cap, idle timeout, 2-byte length framing (RFC 7766)                                 | 0     | done    |
-| One client holding every TCP slot (B1)      | Per-client connection limits, closing the oldest idle connection when full, a shorter first-byte timeout under load (RFC 7766 §6.2.3). Today a single host that opens `max_tcp_connections` idle connections blocks TCP (and TC=1 fallback) for everyone | 1 | planned |
+| One client holding every TCP slot (B1)      | At most 16 connections per client (an IPv4 address or an IPv6 /64) by default, out of 256; idle connections close after 10 s. Many hosts together can still fill the slots: closing the oldest idle connection when full and a shorter first-byte timeout under load (RFC 7766 §6.2.3) are in the backlog | 1 | partial |
 | Accidental exposure of a dev build          | Development default listens on `127.0.0.1:15353`                                                   | 0     | done    |
 | Config typos silently changing behaviour    | Unknown TOML fields are rejected. The config file size is bounded.                                 | 0     | done    |
 | Supply chain (B7)                           | `cargo deny` (licenses, advisories, bans, sources) and `cargo audit` in CI for the main and the fuzz workspace. GitHub Actions pinned to commit SHAs. Minimal workflow permissions. | 0 | done |
@@ -87,7 +89,8 @@ for that phase and not implemented yet. Phases follow the roadmap in
 | Cache memory exhaustion (B1, B2)            | A bounded number of entries (configurable, at most 1,000,000), answers with more than 32 records are not cached, oldest entries are evicted first, shards are chosen with a per-process random hash key | 1 | done |
 | On-path tampering / snooping upstream (B2)  | DoT and DoH upstreams with rustls (TLS 1.2+, ring), certificates checked against the bundled Mozilla roots for an explicitly configured name; no bootstrap resolution; DoH requires HTTP/2, status 200, the DNS content type and caps bodies at 64 KiB ([ADR 0003](adr/0003-upstream-tls.md)) | 1 | done |
 | DNS rebinding (B2)                          | Forwarded answers for names outside the configured private domains (`lan`, `home.arpa`, `internal`, `local` by default) lose their A and AAAA records with RFC 1918, carrier-NAT, loopback, link-local, unspecified or unique-local addresses (IPv4-mapped forms included), before caching. On by default | 1 | done |
-| Abuse as a DoS amplifier / query floods     | Response rate limiting (RRL)                                                                       | 1     | planned |
+| Abuse as a DoS amplifier / query floods (B1) | UDP rate limiting per client network (each IPv4 address and IPv6 /64 by default: 300 queries/s, bursts of 1000), applied before a query is resolved, so floods reach neither the cache nor the upstreams. Every second limited query gets an empty TC=1 answer no bigger than the query, so real clients retry over TCP and spoofed victims get no amplification. The table of client networks is bounded (65,536); when full, untracked networks share one bucket. Loopback is exempt (it cannot be spoofed from the network) | 1 | done |
+| Another local process taking part of port 53 (B6) | `SO_REUSEPORT` is set only when several UDP sockets share an address (Linux); the kernel only lets sockets of the same user join, so goethite should run as its own user | 1 | done |
 | Process compromise impact (B6)              | Drop privileges after binding port 53. Hardened systemd unit (no new privileges, `CAP_NET_BIND_SERVICE` only, protected paths). | 1 | planned |
 | Hostile filter lists (B3)                   | Local files: at most 128 MiB per list, 4096-byte lines, 5,000,000 rules; unsupported and invalid lines are counted and skipped, never guessed at (no regex engine to exhaust); rules naming the root are refused; compiled off the async runtime and swapped in atomically, keeping the old filter if compiling fails; the parser and compiler are fuzzed (`parse_list`) and checked against a rule-by-rule reference | 1 | done |
 | Hostile list downloads (B3)                 | HTTPS only (redirects too), certificates checked against the bundled roots, list hosts resolved through goethite's own upstreams; 128 MiB and two-minute limits; a download replaces the last good copy only if it holds rules and more rules than junk; copies written atomically and kept for offline starts | 1 | done |

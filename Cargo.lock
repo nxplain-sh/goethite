@@ -508,6 +508,7 @@ dependencies = [
  "goethite-proto",
  "goethite-resolver",
  "hickory-proto",
+ "socket2",
  "thiserror",
  "tokio",
  "tracing",

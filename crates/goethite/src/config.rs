@@ -4,6 +4,8 @@
 //! exists it becomes the source of truth. Unknown keys are rejected so a typo
 //! never silently falls back to a default.
 
+use std::collections::HashSet;
+use std::fmt;
 use std::fs::File;
 use std::io::Read;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -16,6 +18,10 @@ use goethite_resolver::{
     BlockResponse, CacheConfig, DEFAULT_PRIVATE_DOMAINS, MAX_ENTRIES, MAX_UPSTREAMS,
     RebindingProtection, Transport, UpstreamConfig,
 };
+use goethite_server::{
+    MAX_LISTEN_ADDRESSES, MAX_RATE_LIMITED_CLIENTS, MAX_UDP_SOCKETS, RateLimitConfig, ServerConfig,
+};
+use serde::de::{self, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 
 /// Config files larger than this many bytes are rejected.
@@ -349,7 +355,7 @@ impl<'de> Deserialize<'de> for Address {
         text.parse::<IpAddr>()
             .map(|ip| Self { ip, port: None })
             .map_err(|_| {
-                serde::de::Error::custom(format!(
+                de::Error::custom(format!(
                     "{text:?} is not an IP address with an optional port"
                 ))
             })
@@ -424,27 +430,201 @@ fn enabled() -> bool {
     true
 }
 
+/// The most TCP connections that can be configured.
+const MAX_TCP_CONNECTIONS_LIMIT: usize = 100_000;
+
 /// The `[server]` table.
 #[derive(Debug, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, default)]
 pub struct ServerSection {
-    /// Address for DNS over UDP and TCP.
-    #[serde(default = "default_listen")]
-    pub listen: SocketAddr,
+    /// Addresses for DNS over UDP and TCP: one, or a list.
+    #[serde(deserialize_with = "listen_addresses")]
+    pub listen: Vec<SocketAddr>,
+    /// UDP sockets per listen address on Linux; one per CPU core if unset.
+    pub udp_sockets: Option<usize>,
+    /// Most TCP connections at once.
+    pub max_tcp_connections: usize,
+    /// Most TCP connections at once from one client.
+    pub max_tcp_connections_per_client: usize,
+    /// The `[server.rate_limit]` table.
+    pub rate_limit: RateLimitSection,
 }
 
 impl Default for ServerSection {
     fn default() -> Self {
+        let defaults = ServerConfig::new(Vec::new());
         Self {
-            listen: default_listen(),
+            // Development default: an unprivileged port on loopback, so no
+            // root is needed. Not 5353, which is multicast DNS (mDNSResponder,
+            // Avahi) on most desktops.
+            listen: vec![SocketAddr::from((Ipv4Addr::LOCALHOST, 15353))],
+            udp_sockets: None,
+            max_tcp_connections: defaults.max_tcp_connections,
+            max_tcp_connections_per_client: defaults.max_tcp_connections_per_client,
+            rate_limit: RateLimitSection::default(),
         }
     }
 }
 
-/// Development default: an unprivileged port on loopback, so no root is needed.
-/// Not 5353, which is multicast DNS (mDNSResponder, Avahi) on most desktops.
-fn default_listen() -> SocketAddr {
-    SocketAddr::from((Ipv4Addr::LOCALHOST, 15353))
+impl ServerSection {
+    fn validate(&self) -> Result<()> {
+        if self.listen.is_empty() {
+            bail!("server.listen is empty; give at least one address");
+        }
+        if self.listen.len() > MAX_LISTEN_ADDRESSES {
+            bail!("server.listen has more than {MAX_LISTEN_ADDRESSES} addresses");
+        }
+        let mut seen = HashSet::new();
+        if let Some(duplicate) = self.listen.iter().find(|addr| !seen.insert(**addr)) {
+            bail!("server.listen has {duplicate} twice");
+        }
+        if let Some(sockets) = self.udp_sockets
+            && !(1..=MAX_UDP_SOCKETS).contains(&sockets)
+        {
+            bail!("server.udp_sockets is {sockets}; it must be between 1 and {MAX_UDP_SOCKETS}");
+        }
+        if !(1..=MAX_TCP_CONNECTIONS_LIMIT).contains(&self.max_tcp_connections) {
+            bail!(
+                "server.max_tcp_connections is {}; it must be between 1 and {MAX_TCP_CONNECTIONS_LIMIT}",
+                self.max_tcp_connections
+            );
+        }
+        if !(1..=self.max_tcp_connections).contains(&self.max_tcp_connections_per_client) {
+            bail!(
+                "server.max_tcp_connections_per_client is {}; it must be between 1 and \
+                 server.max_tcp_connections ({})",
+                self.max_tcp_connections_per_client,
+                self.max_tcp_connections
+            );
+        }
+        self.rate_limit.validate()
+    }
+
+    /// The listener settings.
+    pub fn to_server_config(&self) -> ServerConfig {
+        let mut config = ServerConfig::new(self.listen.clone());
+        if let Some(sockets) = self.udp_sockets {
+            config.udp_sockets = sockets;
+        }
+        config.max_tcp_connections = self.max_tcp_connections;
+        config.max_tcp_connections_per_client = self.max_tcp_connections_per_client;
+        config.rate_limit = self.rate_limit.to_rate_limit_config();
+        config
+    }
+}
+
+/// Reads `listen`: one address, or a list of them.
+fn listen_addresses<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<SocketAddr>, D::Error> {
+    struct Addresses;
+
+    fn parse<E: de::Error>(text: &str) -> Result<SocketAddr, E> {
+        text.parse().map_err(|_| {
+            E::custom(format!(
+                "invalid listen address {text:?}: expected an IP address and a port, \
+                 such as \"0.0.0.0:53\" or \"[::]:53\""
+            ))
+        })
+    }
+
+    impl<'de> Visitor<'de> for Addresses {
+        type Value = Vec<SocketAddr>;
+
+        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("an address such as \"0.0.0.0:53\", or a list of them")
+        }
+
+        fn visit_str<E: de::Error>(self, text: &str) -> Result<Self::Value, E> {
+            parse(text).map(|addr| vec![addr])
+        }
+
+        fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+            let mut addresses = Vec::new();
+            while let Some(text) = seq.next_element::<String>()? {
+                if addresses.len() >= MAX_LISTEN_ADDRESSES {
+                    return Err(de::Error::custom(format!(
+                        "at most {MAX_LISTEN_ADDRESSES} listen addresses are supported"
+                    )));
+                }
+                addresses.push(parse(&text)?);
+            }
+            Ok(addresses)
+        }
+    }
+
+    deserializer.deserialize_any(Addresses)
+}
+
+/// The `[server.rate_limit]` table.
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, default)]
+pub struct RateLimitSection {
+    /// Average UDP queries per second per client network; 0 turns it off.
+    pub queries_per_second: u32,
+    /// Queries a client network may send at once.
+    pub burst: u32,
+    /// Every `slip`-th limited query gets a truncated answer; 0 for none.
+    pub slip: u32,
+    /// Leading bits of an IPv4 address that make a client network.
+    pub ipv4_prefix: u8,
+    /// Leading bits of an IPv6 address that make a client network.
+    pub ipv6_prefix: u8,
+    /// Client networks tracked at once.
+    pub max_clients: usize,
+}
+
+impl Default for RateLimitSection {
+    fn default() -> Self {
+        let defaults = RateLimitConfig::default();
+        Self {
+            queries_per_second: defaults.queries_per_second,
+            burst: defaults.burst,
+            slip: defaults.slip,
+            ipv4_prefix: defaults.ipv4_prefix,
+            ipv6_prefix: defaults.ipv6_prefix,
+            max_clients: defaults.max_clients,
+        }
+    }
+}
+
+impl RateLimitSection {
+    fn validate(&self) -> Result<()> {
+        const MAX_RATE: u32 = 1_000_000;
+        if self.queries_per_second > MAX_RATE {
+            bail!("server.rate_limit.queries_per_second is above {MAX_RATE}");
+        }
+        if self.burst == 0 || self.burst > MAX_RATE {
+            bail!("server.rate_limit.burst must be between 1 and {MAX_RATE}");
+        }
+        if self.slip > 10 {
+            bail!("server.rate_limit.slip must be between 0 and 10");
+        }
+        if !(8..=32).contains(&self.ipv4_prefix) {
+            bail!("server.rate_limit.ipv4_prefix must be between 8 and 32");
+        }
+        if !(16..=128).contains(&self.ipv6_prefix) {
+            bail!("server.rate_limit.ipv6_prefix must be between 16 and 128");
+        }
+        if !(16..=MAX_RATE_LIMITED_CLIENTS).contains(&self.max_clients) {
+            bail!(
+                "server.rate_limit.max_clients must be between 16 and {MAX_RATE_LIMITED_CLIENTS}"
+            );
+        }
+        Ok(())
+    }
+
+    fn to_rate_limit_config(&self) -> RateLimitConfig {
+        RateLimitConfig {
+            queries_per_second: self.queries_per_second,
+            burst: self.burst,
+            slip: self.slip,
+            ipv4_prefix: self.ipv4_prefix,
+            ipv6_prefix: self.ipv6_prefix,
+            max_clients: self.max_clients,
+            ..RateLimitConfig::default()
+        }
+    }
 }
 
 impl Config {
@@ -474,8 +654,9 @@ impl Config {
             );
         }
         config
-            .cache
+            .server
             .validate()
+            .and_then(|()| config.cache.validate())
             .and_then(|()| config.filter.validate())
             .and_then(|()| config.security.rebinding_protection().map(drop))
             .with_context(|| format!("invalid config file {}", path.display()))?;
@@ -516,7 +697,8 @@ mod tests {
     fn example_config_is_valid() {
         let example = include_str!("../../../config/goethite.example.toml");
         let config = Config::parse(example).unwrap();
-        assert_eq!(config.server.listen, "127.0.0.1:15353".parse().unwrap());
+        assert_eq!(config.server.listen, ["127.0.0.1:15353".parse().unwrap()]);
+        assert!(config.server.validate().is_ok());
         assert_eq!(config.upstream.len(), 2);
         let first = config.upstream[0].to_upstream();
         assert_eq!(first.address, "9.9.9.9:853".parse().unwrap());
@@ -756,7 +938,57 @@ mod tests {
     #[test]
     fn listen_accepts_ipv6() {
         let config = Config::parse("[server]\nlisten = \"[::1]:53\"").unwrap();
-        assert_eq!(config.server.listen, "[::1]:53".parse().unwrap());
+        assert_eq!(config.server.listen, ["[::1]:53".parse().unwrap()]);
+    }
+
+    #[test]
+    fn listen_accepts_a_list() {
+        let config = Config::parse("[server]\nlisten = [\"0.0.0.0:53\", \"[::]:53\"]").unwrap();
+        assert_eq!(
+            config.server.listen,
+            ["0.0.0.0:53".parse().unwrap(), "[::]:53".parse().unwrap()]
+        );
+        assert!(config.server.validate().is_ok());
+        let err =
+            Config::parse("[server]\nlisten = [\"0.0.0.0:53\", \"localhost:53\"]").unwrap_err();
+        assert!(err.to_string().contains("\"localhost:53\""), "{err}");
+        let many = (0..17)
+            .map(|i| format!("\"127.0.0.1:{}\"", 1000 + i))
+            .collect::<Vec<_>>();
+        let err = Config::parse(&format!("[server]\nlisten = [{}]", many.join(", "))).unwrap_err();
+        assert!(err.to_string().contains("at most 16"), "{err}");
+    }
+
+    #[test]
+    fn server_limits_are_checked() {
+        for (bad, expected) in [
+            ("listen = []", "server.listen is empty"),
+            (
+                "listen = [\"127.0.0.1:53\", \"127.0.0.1:53\"]",
+                "127.0.0.1:53 twice",
+            ),
+            ("udp_sockets = 0", "server.udp_sockets"),
+            ("udp_sockets = 65", "server.udp_sockets"),
+            ("max_tcp_connections = 0", "server.max_tcp_connections"),
+            (
+                "max_tcp_connections = 8\nmax_tcp_connections_per_client = 9",
+                "max_tcp_connections_per_client",
+            ),
+            ("rate_limit.burst = 0", "burst"),
+            ("rate_limit.slip = 11", "slip"),
+            ("rate_limit.ipv4_prefix = 33", "ipv4_prefix"),
+            ("rate_limit.ipv6_prefix = 8", "ipv6_prefix"),
+            ("rate_limit.max_clients = 1", "max_clients"),
+        ] {
+            let config = Config::parse(&format!("[server]\n{bad}")).unwrap();
+            let err = config.server.validate().unwrap_err();
+            assert!(err.to_string().contains(expected), "{bad}: {err:#}");
+        }
+        let off = Config::parse("[server.rate_limit]\nqueries_per_second = 0").unwrap();
+        assert!(off.server.validate().is_ok());
+        let server = off.server.to_server_config();
+        assert_eq!(server.rate_limit.queries_per_second, 0);
+        assert!(server.rate_limit.exempt_loopback);
     }
 
     #[test]
