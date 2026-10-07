@@ -56,6 +56,13 @@ impl Name {
         self.0.is_root()
     }
 
+    /// Whether this name is `zone` or lies below it, comparing whole labels
+    /// and ignoring case: `www.example.com.` is within `example.com.`, but
+    /// `badexample.com.` is not.
+    pub fn is_within(&self, zone: &Name) -> bool {
+        zone.0.zone_of(&self.0)
+    }
+
     /// Whether both names are equal including the case of every letter.
     pub fn eq_exact(&self, other: &Name) -> bool {
         self.0.eq_case(&other.0)
@@ -222,6 +229,16 @@ mod tests {
             shown.chars().all(|c| c == ' ' || c.is_ascii_graphic()),
             "{shown}"
         );
+    }
+
+    #[test]
+    fn is_within_compares_whole_labels() {
+        let name = |s: &str| s.parse::<Name>().unwrap();
+        assert!(name("www.Example.com").is_within(&name("example.COM")));
+        assert!(name("example.com").is_within(&name("example.com")));
+        assert!(name("example.com").is_within(&Name::root()));
+        assert!(!name("badexample.com").is_within(&name("example.com")));
+        assert!(!name("example.com").is_within(&name("www.example.com")));
     }
 
     #[test]
