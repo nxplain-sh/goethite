@@ -64,6 +64,20 @@ jobs:
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: cargo test --workspace --all-features --locked
+      # Switching users needs root; the regular run skips this test.
+      - name: Test dropping privileges as root
+        run: |
+          bin=$(cargo test --workspace --all-features --locked --no-run --message-format=json \
+            | jq -r 'select(.reason == "compiler-artifact" and .target.name == "cli" and .profile.test) | .executable')
+          sudo GOETHITE_ROOT_TESTS=1 "${bin:?}" --exact serving::switches_to_the_configured_user_when_root \
+            2>&1 | tee "$RUNNER_TEMP/root-tests.txt"
+          sudo chown -R "$(id -u):$(id -g)" target
+          grep -q "test result: ok. 1 passed" "$RUNNER_TEMP/root-tests.txt"
+      - name: Check the systemd unit
+        run: |
+          sed "s|/usr/bin/goethite|$PWD/target/debug/goethite|" dist/systemd/goethite.service \
+            > "$RUNNER_TEMP/goethite.service"
+          systemd-analyze verify "$RUNNER_TEMP/goethite.service"
 
   msrv:
     name: MSRV

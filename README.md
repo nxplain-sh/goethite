@@ -13,8 +13,9 @@ zero-downtime upgrades. It is named after the iron-oxide mineral that is a main 
 **Pre-alpha, Phase 1 in progress.** goethite forwards queries to the upstream resolvers you
 configure, over DNS over TLS, DNS over HTTPS or plain DNS, with failover; caches the answers; and
 blocks names from hosts files, domain lists and AdGuard-style rules, from local files or downloaded
-and refreshed over HTTPS. Hardening for production (privilege drop, systemd unit, rate limiting)
-comes next. See the roadmap
+and refreshed over HTTPS. It protects against DNS rebinding, rate limits clients, drops its
+privileges after binding port 53, and ships a hardened systemd unit
+([`dist/systemd/`](dist/systemd/goethite.service)). See the roadmap
 in [`AGENTS.md`](AGENTS.md#roadmap-respect-the-order).
 
 ## Quick start (development)
@@ -47,7 +48,8 @@ by `RUST_LOG` (default `info`; malformed packets are logged at `debug`):
 RUST_LOG=debug cargo run -- run --config config/goethite.example.toml
 ```
 
-Ctrl-C or `SIGTERM` shuts the server down gracefully.
+Ctrl-C or `SIGTERM` shuts the server down gracefully. `goethite check-config --config <path>`
+checks a config file and its filter lists without starting the server.
 
 ## Repository layout
 
@@ -65,6 +67,7 @@ Ctrl-C or `SIGTERM` shuts the server down gracefully.
 | `web/`                      | Embedded web UI (placeholder until Phase 2)                             |
 | `site/`                     | Project website and docs (Astro Starlight), deployed to GitHub Pages    |
 | `fuzz/`                     | cargo-fuzz targets                                                      |
+| `dist/`                     | Deployment files: the hardened systemd unit                             |
 | `docs/`                     | Threat model, ADRs, backlog                                             |
 
 Several crates are still empty skeletons. Benchmarks and how to record them are in

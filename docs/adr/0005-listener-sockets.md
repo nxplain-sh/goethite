@@ -15,8 +15,10 @@ resolver reachable by spoofed packets can be used to flood a victim with answers
 ## Decision
 
 - `Listeners::bind` binds every socket with the standard library, through socket2, before the
-  runtime is built; `Server::new` registers them with tokio later. The binary binds, then (in a
-  later change) drops privileges, then starts the runtime, all while it has a single thread.
+  runtime is built; `Server::new` registers them with tokio later. The binary binds, then drops
+  privileges (switching user when started as root, emptying its capability sets and setting
+  `no_new_privs`), then starts the runtime: the system calls that change credentials only affect
+  the calling thread on Linux, so this happens while the process has a single thread.
 - `listen` takes several addresses. IPv6 sockets are IPv6-only, so `0.0.0.0:53` and `[::]:53` can
   be listened on side by side, and each family is explicit.
 - On Linux each address gets several UDP sockets with `SO_REUSEPORT`, one per core by default (at

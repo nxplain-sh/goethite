@@ -1,6 +1,6 @@
 ---
 title: Security settings
-description: DNS rebinding protection, rate limiting and connection limits, all on by default.
+description: DNS rebinding protection, rate limiting, connection limits and privilege dropping.
 ---
 
 goethite is built to be safe by default: the protections on this page are on unless you turn them
@@ -86,3 +86,31 @@ nothing for 10 seconds is closed.
 max_tcp_connections = 256
 max_tcp_connections_per_client = 16
 ```
+
+## Privileges
+
+goethite needs privileges only to bind port 53. It binds its sockets first, before starting any
+thread, then gives the privileges up:
+
+- **Under systemd**, with the unit in
+  [`dist/systemd/goethite.service`](https://github.com/nxplain-sh/goethite/blob/main/dist/systemd/goethite.service),
+  goethite runs as a dynamic, unprivileged user that may only bind ports below 1024, and gives that
+  up once its sockets are bound. The unit also makes the file system read-only except
+  `/var/lib/goethite` (keep downloaded lists there with `cache_dir = "/var/lib/goethite/lists"`),
+  hides other processes and devices, allows only IP sockets and filters system calls.
+  `systemd-analyze security goethite` rates it 1.5, "OK"; what remains is what a DNS server needs,
+  such as Internet sockets.
+- **Started as root** without systemd, set the user to switch to:
+
+  ```toml
+  [server]
+  user = "goethite"   # looked up in /etc/passwd
+  ```
+
+  goethite switches to that user and its primary group, drops supplementary groups, and checks
+  that it cannot become root again. Started as root without `user`, it logs a warning.
+
+Either way, goethite then empties its capability sets and sets `no_new_privs`, so it cannot gain
+privileges again, even by running a program. The filter lists and their `cache_dir` must be
+readable, and the `cache_dir` writable, by the user goethite runs as. Dropping privileges is
+supported on Linux; on other platforms, which are for development only, `server.user` is an error.

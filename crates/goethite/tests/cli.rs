@@ -151,10 +151,16 @@ mod serving {
         }
 
         fn start_with(test: &str, upstream: SocketAddr, extra: &str) -> Self {
-            let config = format!(
-                "[server]\nlisten = \"127.0.0.1:0\"\n\n[[upstream]]\naddress = \"{upstream}\"\n{extra}"
-            );
-            let path = config_file(test, &config);
+            Self::start_config(
+                test,
+                &format!(
+                    "[server]\nlisten = \"127.0.0.1:0\"\n\n[[upstream]]\naddress = \"{upstream}\"\n{extra}"
+                ),
+            )
+        }
+
+        fn start_config(test: &str, config: &str) -> Self {
+            let path = config_file(test, config);
             let mut child = Command::new(BIN)
                 .args(["run", "--config", path.to_str().unwrap()])
                 .env("RUST_LOG", "info")
@@ -342,6 +348,66 @@ mod serving {
 
         server.signal("TERM");
         assert!(server.wait_for_exit().success());
+    }
+
+    /// The value of `key` in `/proc/<pid>/status`.
+    #[cfg(target_os = "linux")]
+    fn proc_status(pid: u32, key: &str) -> String {
+        let status = std::fs::read_to_string(format!("/proc/{pid}/status")).unwrap();
+        status
+            .lines()
+            .find_map(|line| line.strip_prefix(&format!("{key}:")))
+            .unwrap_or_else(|| panic!("no {key} in {status}"))
+            .trim()
+            .to_owned()
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn gives_up_capabilities_and_sets_no_new_privs() {
+        let mut server = Running::start("privileges", upstream());
+        let udp = field(&server.wait_for_log("listening"), "udp");
+        let pid = server.child.id();
+        assert_eq!(proc_status(pid, "NoNewPrivs"), "1");
+        assert_eq!(proc_status(pid, "CapEff"), "0000000000000000");
+        assert_eq!(proc_status(pid, "CapPrm"), "0000000000000000");
+        assert_eq!(proc_status(pid, "CapAmb"), "0000000000000000");
+        assert_eq!(ask(udp, "goethite.test.").answers.len(), 1);
+    }
+
+    /// Switching users needs root: this is skipped unless the tests run as
+    /// root, which CI does separately with `GOETHITE_ROOT_TESTS=1` set.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn switches_to_the_configured_user_when_root() {
+        if proc_status(std::process::id(), "Uid")
+            .split_whitespace()
+            .next()
+            != Some("0")
+        {
+            assert!(
+                std::env::var_os("GOETHITE_ROOT_TESTS").is_none(),
+                "GOETHITE_ROOT_TESTS is set, but the tests do not run as root"
+            );
+            return;
+        }
+        let config = format!(
+            "[server]\nlisten = \"127.0.0.1:0\"\nuser = \"nobody\"\n\n[[upstream]]\naddress = \"{}\"\n",
+            upstream()
+        );
+        let mut server = Running::start_config("switch_user", &config);
+        let line = server.wait_for_log("dropped privileges");
+        assert!(line.contains("user=nobody"), "{line}");
+        let udp = field(&server.wait_for_log("listening"), "udp");
+        let pid = server.child.id();
+        let uid = proc_status(pid, "Uid");
+        assert!(uid.split_whitespace().all(|id| id == "65534"), "{uid}");
+        let gid = proc_status(pid, "Gid");
+        assert!(gid.split_whitespace().all(|id| id != "0"), "{gid}");
+        assert_eq!(proc_status(pid, "Groups"), "");
+        assert_eq!(proc_status(pid, "CapEff"), "0000000000000000");
+        assert_eq!(proc_status(pid, "CapPrm"), "0000000000000000");
+        assert_eq!(ask(udp, "goethite.test.").answers.len(), 1);
     }
 
     #[test]

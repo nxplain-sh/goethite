@@ -6,9 +6,11 @@ When an item is picked up, move it into an issue or PR and delete it from this l
 
 ## Phase 1: v0.1 core blocker
 
-- **[P1] Privilege drop and hardened systemd unit.** Drop to an unprivileged user after binding
-  port 53. Ship a systemd unit with `NoNewPrivileges`, `CAP_NET_BIND_SERVICE` only, and protected
-  paths.
+- **[P1] Raise the open file limit at startup.** Every UDP query in flight forwards over its own
+  socket, so the default soft limit of 1024 can run out under load. The systemd unit sets
+  `LimitNOFILE=65536`; goethite could raise its soft limit to the hard limit itself.
+- **[P2] Users from the name service switch.** `server.user` is looked up in `/etc/passwd`
+  only; accept a numeric `uid:gid` for users that live in LDAP or systemd-homed.
 - **[P1] Config hot reload** via `arc-swap`, without dropping queries.
 - **[P1] `bench/` directory** with criterion benches and dnsperf/resperf scripts, ahead of the
   first performance claim.

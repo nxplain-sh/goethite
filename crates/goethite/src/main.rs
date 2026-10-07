@@ -4,6 +4,7 @@ mod config;
 mod download;
 mod filters;
 mod lists;
+mod privileges;
 
 use std::future::Future;
 use std::io::IsTerminal;
@@ -95,10 +96,17 @@ fn run(config_path: &Path) -> Result<()> {
         "starting goethite"
     );
     let config = Config::load(config_path)?;
+    let account = config
+        .server
+        .user
+        .as_deref()
+        .map(privileges::lookup)
+        .transpose()?;
     let server_config = config.server.to_server_config();
     // Bound while the process is still single-threaded, before the runtime
     // starts, so privileges can be dropped once the sockets exist.
     let listeners = Listeners::bind(&server_config)?;
+    privileges::drop_privileges(account.as_ref())?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -162,6 +170,9 @@ fn run(config_path: &Path) -> Result<()> {
 /// startup, a list file that cannot be read is an error.
 fn check_config(config_path: &Path) -> Result<()> {
     let config = Config::load(config_path)?;
+    if let Some(user) = &config.server.user {
+        privileges::lookup(user)?;
+    }
     let upstreams = config
         .upstream
         .iter()

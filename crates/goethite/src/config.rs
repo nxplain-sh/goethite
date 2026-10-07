@@ -448,6 +448,8 @@ pub struct ServerSection {
     pub max_tcp_connections_per_client: usize,
     /// The `[server.rate_limit]` table.
     pub rate_limit: RateLimitSection,
+    /// The user to switch to after binding, when started as root (Linux).
+    pub user: Option<String>,
 }
 
 impl Default for ServerSection {
@@ -462,6 +464,7 @@ impl Default for ServerSection {
             max_tcp_connections: defaults.max_tcp_connections,
             max_tcp_connections_per_client: defaults.max_tcp_connections_per_client,
             rate_limit: RateLimitSection::default(),
+            user: None,
         }
     }
 }
@@ -496,6 +499,11 @@ impl ServerSection {
                 self.max_tcp_connections_per_client,
                 self.max_tcp_connections
             );
+        }
+        if let Some(user) = &self.user
+            && (user.is_empty() || user.contains([':', '\n']))
+        {
+            bail!("server.user {user:?} is not a valid user name");
         }
         self.rate_limit.validate()
     }
@@ -979,6 +987,8 @@ mod tests {
             ("rate_limit.ipv4_prefix = 33", "ipv4_prefix"),
             ("rate_limit.ipv6_prefix = 8", "ipv6_prefix"),
             ("rate_limit.max_clients = 1", "max_clients"),
+            ("user = \"\"", "server.user"),
+            ("user = \"a:b\"", "server.user"),
         ] {
             let config = Config::parse(&format!("[server]\n{bad}")).unwrap();
             let err = config.server.validate().unwrap_err();

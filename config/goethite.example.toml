@@ -18,6 +18,11 @@ listen = "127.0.0.1:15353"
 # CPU core unless set here (1 to 64). Other platforms use one.
 # udp_sockets = 4
 
+# Started as root (Linux, without systemd), goethite switches to this user
+# right after binding its sockets, and keeps no capabilities. Under the systemd
+# unit in dist/systemd it already runs unprivileged; leave this unset there.
+# user = "goethite"
+
 # TCP connections served at once, in total and from one client (an IPv4
 # address or an IPv6 /64). These are the defaults.
 max_tcp_connections = 256
