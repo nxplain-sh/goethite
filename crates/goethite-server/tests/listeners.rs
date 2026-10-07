@@ -265,6 +265,16 @@ async fn tcp_connections_beyond_the_limit_are_closed() {
 }
 
 #[tokio::test]
+async fn huge_connection_limits_are_clamped_not_fatal() {
+    let server = start_with(|config| config.max_tcp_connections = usize::MAX).await;
+    let mut stream = TcpStream::connect(server.tcp).await.unwrap();
+    tcp_send(&mut stream, &query(16, "goethite.test.", RecordType::A)).await;
+    assert_test_answer(&tcp_receive(&mut stream).await, 16);
+    drop(stream);
+    server.shutdown().await;
+}
+
+#[tokio::test]
 async fn zone_transfers_and_meta_types_are_not_answered_with_data() {
     let server = start().await;
     let mut stream = TcpStream::connect(server.tcp).await.unwrap();

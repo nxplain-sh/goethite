@@ -35,6 +35,7 @@ pub struct ServerConfig {
     /// Address for both the UDP socket and the TCP listener.
     pub listen: SocketAddr,
     /// Most TCP connections served at once; more are closed on accept.
+    /// Values above tokio's semaphore limit (`usize::MAX >> 3`) are clamped.
     pub max_tcp_connections: usize,
     /// How long a TCP connection may wait for, or take to send, a query.
     pub tcp_idle_timeout: Duration,
@@ -181,8 +182,12 @@ impl Server {
                 info!("shutting down");
                 false
             }
-            _ = listeners.join_next() => {
-                error!("a listener stopped unexpectedly, shutting down");
+            joined = listeners.join_next() => {
+                if let Some(Err(err)) = joined {
+                    error!(%err, "a listener failed, shutting down");
+                } else {
+                    error!("a listener stopped unexpectedly, shutting down");
+                }
                 true
             }
         };
@@ -309,7 +314,10 @@ async fn serve_tcp(
     config: ServerConfig,
     mut stop: watch::Receiver<bool>,
 ) {
-    let slots = Arc::new(Semaphore::new(config.max_tcp_connections));
+    // `Semaphore::new` panics above its limit, so a huge setting is clamped.
+    let slots = Arc::new(Semaphore::new(
+        config.max_tcp_connections.min(Semaphore::MAX_PERMITS),
+    ));
     let mut connections = JoinSet::new();
     let connection_stop = stop.clone();
     loop {
