@@ -4,8 +4,8 @@ description: Build goethite from source and query the development server.
 ---
 
 goethite is **pre-alpha**. It forwards queries to the upstream resolvers you configure, over DNS
-over TLS, DNS over HTTPS or plain DNS, with failover, and caches the answers. Filtering arrives in
-the next milestones.
+over TLS, DNS over HTTPS or plain DNS, with failover, caches the answers, and blocks names from
+filter lists (see [Filtering](../filtering/)).
 
 ## Prerequisites
 
@@ -40,6 +40,21 @@ url = "https://dns.quad9.net/dns-query"
 ```
 
 Certificates are checked against the Mozilla root certificates built into goethite.
+
+## Check a config
+
+`check-config` reads a config file, builds the upstreams and compiles the filter lists as `run`
+would, without binding a socket or downloading anything, and exits with status 1 if something is
+wrong:
+
+```sh
+cargo run -- check-config --config config/goethite.example.toml
+```
+
+It is stricter than startup about filter lists: at startup a list file that cannot be read is
+logged and skipped so that resolution keeps working, while `check-config` reports it as an error.
+Rules written into the config itself (`[filter] rules`) are always checked strictly; a rule
+goethite does not support stops the server from starting, since it is most likely a typo.
 
 ## Query it
 

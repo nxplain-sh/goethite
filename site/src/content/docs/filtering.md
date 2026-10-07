@@ -54,7 +54,8 @@ url = "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts"
 ```
 
 Each `[[filter.list]]` has either a `path` or a `url`. Relative paths are relative to the config
-file.
+file. Unlike lines in a list, each entry in `rules` must be a supported rule: anything else is
+reported as an error when the config is loaded.
 
 `block_response = "null_ip"` answers `A` queries with `0.0.0.0`, `AAAA` with `::`, and other types
 with an empty answer, so applications fail fast instead of trying another resolver. `nxdomain` says

@@ -49,7 +49,6 @@ When an item is picked up, move it into an issue or PR and delete it from this l
 - **[P1] TCP per-connection memory.** Each connection can hold up to about 192 KiB of buffers
   (query, response, frame) at the 64 KiB message limit. Revisit together with RFC 7766
   out-of-order pipelining and a per-connection query limit.
-- **[P1] `goethite check-config`** to validate a config file without starting the server.
 - **[P1] Hosts entries with real addresses as rewrites.** `192.168.1.5 printer.lan` lines are
   skipped as unsupported; they belong with configurable local records.
 - **[P2] More filter syntax:** `$important`, `$badfilter`, `$client`, `$dnstype`, `$denyallow`

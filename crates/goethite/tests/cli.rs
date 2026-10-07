@@ -76,6 +76,52 @@ fn missing_upstreams_are_an_error() {
     assert!(stderr.contains("[[upstream]]"), "{stderr}");
 }
 
+#[test]
+fn check_config_accepts_the_example() {
+    let example = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../config/goethite.example.toml"
+    );
+    let output = goethite(&["check-config", "--config", example]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert!(stderr.contains("configuration is valid"), "{stderr}");
+}
+
+#[test]
+fn check_config_rejects_problems() {
+    let upstream = "[[upstream]]\naddress = \"127.0.0.1\"\n";
+    for (test, extra, expected) in [
+        ("check_no_upstreams", "", "no upstream resolvers configured"),
+        (
+            "check_bad_tls_name",
+            "[[upstream]]\naddress = \"127.0.0.1\"\nprotocol = \"tls\"\ntls_name = \"not a name\"\n",
+            "invalid TLS server name",
+        ),
+        (
+            "check_bad_rule",
+            "[filter]\nrules = [\"||ads.example^$important\"]\n",
+            "not supported yet",
+        ),
+        (
+            "check_missing_list",
+            "[[filter.list]]\npath = \"/nonexistent/goethite/list.txt\"\n",
+            "cannot open filter list",
+        ),
+    ] {
+        let contents = if test == "check_no_upstreams" || test == "check_bad_tls_name" {
+            extra.to_owned()
+        } else {
+            format!("{upstream}{extra}")
+        };
+        let path = config_file(test, &contents);
+        let output = goethite(&["check-config", "--config", path.to_str().unwrap()]);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "{test}: {stderr}");
+        assert!(stderr.contains(expected), "{test}: {stderr}");
+    }
+}
+
 #[cfg(unix)]
 mod serving {
     use std::io::{BufRead, BufReader};

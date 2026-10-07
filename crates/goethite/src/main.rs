@@ -39,6 +39,13 @@ enum Command {
         #[arg(long, short, value_name = "PATH")]
         config: PathBuf,
     },
+    /// Check a configuration file and its filter lists without starting the
+    /// server. Exits with status 1 if anything is wrong.
+    CheckConfig {
+        /// Path to the TOML configuration file.
+        #[arg(long, short, value_name = "PATH")]
+        config: PathBuf,
+    },
 }
 
 fn main() -> ExitCode {
@@ -46,6 +53,7 @@ fn main() -> ExitCode {
     init_logging();
     let result = match cli.command {
         Command::Run { config } => run(&config),
+        Command::CheckConfig { config } => check_config(&config),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -147,6 +155,25 @@ fn run(config_path: &Path) -> Result<()> {
         server.run(shutdown).await?;
         Ok(())
     })
+}
+
+/// Loads the config, builds the upstreams and compiles the filter lists as
+/// `run` would, without binding sockets or downloading anything. Unlike at
+/// startup, a list file that cannot be read is an error.
+fn check_config(config_path: &Path) -> Result<()> {
+    let config = Config::load(config_path)?;
+    let upstreams = config
+        .upstream
+        .iter()
+        .map(config::UpstreamSection::to_upstream)
+        .collect();
+    Forwarder::new(ForwarderConfig::new(upstreams))
+        .context("invalid [[upstream]] configuration")?;
+    if config.filter.enabled {
+        filters::check(&config.filter)?;
+    }
+    info!(config = %config_path.display(), "configuration is valid");
+    Ok(())
 }
 
 /// Rebuilds the filter from the list files on every SIGHUP. The config file

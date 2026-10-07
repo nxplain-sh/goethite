@@ -2,7 +2,7 @@
 
 use std::fs::File;
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -29,47 +29,68 @@ pub fn build(section: &FilterSection) -> Filter {
 /// A list that cannot be read is logged and skipped rather than failing:
 /// filtering must never take resolution down. `None` if compiling failed.
 fn compile(section: &FilterSection) -> Option<Filter> {
+    match compile_lists(section, false) {
+        Ok(filter) => Some(filter),
+        Err(err) => {
+            error!("{err:#}");
+            None
+        }
+    }
+}
+
+/// Reads and compiles the configured rules and lists like startup does, but
+/// fails on a list that cannot be read, for `goethite check-config`.
+pub fn check(section: &FilterSection) -> Result<()> {
+    compile_lists(section, true).map(drop)
+}
+
+/// Compiles the rules and lists; a list that cannot be read is an error if
+/// `strict`, and skipped otherwise.
+fn compile_lists(section: &FilterSection, strict: bool) -> Result<Filter> {
     let mut builder = FilterBuilder::new();
     if !section.rules.is_empty() {
         let stats = builder.add_list(&section.rules.join("\n"));
         log_stats("config rules", stats);
     }
-    let store = section.cache_dir.clone().map(ListStore::new);
-    for list in &section.list {
-        let (source, path) = match (&list.path, &list.url, &store) {
-            (Some(path), _, _) => (path.display().to_string(), path.clone()),
-            (None, Some(url), Some(store)) => {
-                let path = store.path_for(url);
-                if !path.exists() {
-                    info!(list = %url, "not downloaded yet");
-                    continue;
-                }
-                (url.clone(), path)
-            }
-            _ => continue,
+    for (source, path) in list_files(section) {
+        let Some(path) = path else {
+            info!(list = %source, "not downloaded yet");
+            continue;
         };
         match read_list(&path) {
             Ok(text) => {
                 let stats = builder.add_list(&text);
                 log_stats(&source, stats);
             }
+            Err(err) if strict => return Err(err),
             Err(err) => error!(list = %source, "{err:#}; skipping this list"),
         }
     }
-    match builder.build() {
-        Ok(filter) => {
-            info!(
-                rules = filter.rule_count(),
-                memory_kib = filter.memory_bytes() / 1024,
-                "filter ready"
-            );
-            Some(filter)
-        }
-        Err(err) => {
-            error!(%err, "cannot compile the filter");
-            None
-        }
-    }
+    let filter = builder.build().context("cannot compile the filter")?;
+    info!(
+        rules = filter.rule_count(),
+        memory_kib = filter.memory_bytes() / 1024,
+        "filter ready"
+    );
+    Ok(filter)
+}
+
+/// Each configured list's source, for logs, and the file to read it from:
+/// its path, or the downloaded copy of its URL (`None` if not downloaded yet).
+fn list_files(section: &FilterSection) -> Vec<(String, Option<PathBuf>)> {
+    let store = section.cache_dir.clone().map(ListStore::new);
+    section
+        .list
+        .iter()
+        .filter_map(|list| match (&list.path, &list.url, &store) {
+            (Some(path), _, _) => Some((path.display().to_string(), Some(path.clone()))),
+            (None, Some(url), Some(store)) => {
+                let path = store.path_for(url);
+                Some((url.clone(), path.exists().then_some(path)))
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 fn log_stats(source: &str, stats: ListStats) {
@@ -213,6 +234,23 @@ mod tests {
             filter.check(&"x.tracker.example".parse().unwrap()),
             Verdict::Blocked
         );
+    }
+
+    #[test]
+    fn checking_fails_on_unreadable_lists() {
+        let section = FilterSection {
+            list: vec![ListSection {
+                path: Some(PathBuf::from("/nonexistent/goethite/list.txt")),
+                url: None,
+            }],
+            ..FilterSection::default()
+        };
+        let err = check(&section).unwrap_err();
+        assert!(
+            err.to_string().contains("cannot open filter list"),
+            "{err:#}"
+        );
+        assert_eq!(build(&section).rule_count(), 0, "startup skips it instead");
     }
 
     #[test]

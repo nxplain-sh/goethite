@@ -10,6 +10,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
+use goethite_filter::{LineKind, parse_line};
 use goethite_proto::Name;
 use goethite_resolver::{
     BlockResponse, CacheConfig, DEFAULT_PRIVATE_DOMAINS, MAX_ENTRIES, MAX_UPSTREAMS,
@@ -147,6 +148,19 @@ impl FilterSection {
                 "filter.update_hours is {}; it must be between 1 and 168 (a week)",
                 self.update_hours
             );
+        }
+        // Rules typed into the config are checked strictly: a typo here is an
+        // error, not a skipped line as in a third-party list.
+        for rule in &self.rules {
+            match parse_line(rule, |_| {}) {
+                LineKind::Rules(_) | LineKind::Ignored => {}
+                LineKind::Unsupported(reason) => {
+                    bail!("filter.rules: {rule:?} is not supported yet ({reason})")
+                }
+                LineKind::Invalid(reason) => {
+                    bail!("filter.rules: {rule:?} is not a valid rule ({reason})")
+                }
+            }
         }
         for (index, list) in self.list.iter().enumerate() {
             let number = index.saturating_add(1);
@@ -691,6 +705,22 @@ mod tests {
         ] {
             let config = Config::parse(bad).unwrap();
             assert!(config.filter.validate().is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn inline_rules_are_checked() {
+        let ok = "[filter]\nrules = [\"||ads.example^\", \"@@||good.example^\", \"! a comment\"]";
+        assert!(Config::parse(ok).unwrap().filter.validate().is_ok());
+        for bad in [
+            "rules = [\"||ads.example^$important\"]",
+            "rules = [\"/ads[0-9]+/\"]",
+            "rules = [\"not a rule!\"]",
+            "rules = [\"a.example\\nb.example\"]",
+        ] {
+            let config = Config::parse(&format!("[filter]\n{bad}")).unwrap();
+            let err = config.filter.validate().unwrap_err();
+            assert!(err.to_string().contains("filter.rules"), "{bad}: {err:#}");
         }
     }
 
