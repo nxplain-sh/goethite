@@ -97,3 +97,11 @@ update_hours = 24            # how often url lists are refreshed (1 to 168)
 #
 # [[filter.list]]
 # url = "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts"
+
+[security]
+# DNS rebinding protection: answers for public names may not point into the
+# local network (RFC 1918, loopback, link-local, carrier NAT, unique-local
+# IPv6). Names below private_domains are exempt, as is anything answered by
+# goethite itself. These are the defaults.
+rebinding_protection = true
+private_domains = ["lan", "home.arpa", "internal", "local"]

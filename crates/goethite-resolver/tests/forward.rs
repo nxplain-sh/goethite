@@ -17,8 +17,8 @@ use std::time::Duration;
 use goethite_filter::{Filter, FilterBuilder};
 use goethite_proto::{Edns, Name, Query, Question, RecordClass, RecordType, ResponseCode};
 use goethite_resolver::{
-    BlockResponse, Blocking, Cache, CacheConfig, Forwarder, ForwarderConfig, Resolver, Transport,
-    UpstreamConfig,
+    BlockResponse, Blocking, Cache, CacheConfig, Forwarder, ForwarderConfig, RebindingProtection,
+    Resolver, Transport, UpstreamConfig,
 };
 use hickory_proto::op::{self, Message, MessageType, OpCode};
 use hickory_proto::rr::{self, RData, rdata};
@@ -442,4 +442,23 @@ async fn blocked_names_never_reach_the_upstream() {
     let now_blocked = resolver.resolve(&query("ok.ads.example.")).await;
     assert_eq!(ip(&now_blocked), Some(Ipv4Addr::UNSPECIFIED.into()));
     assert_eq!(upstream.seen_names().len(), 2);
+}
+
+#[tokio::test]
+async fn rebinding_protection_strips_private_answers_for_public_names() {
+    let upstream = fake(always(Ipv4Addr::new(192, 168, 1, 1)), silent()).await;
+    let resolver = Resolver::new(Vec::new())
+        .with_rebinding_protection(RebindingProtection::new(vec!["lan".parse().unwrap()]))
+        .with_cache(Cache::new(CacheConfig::default()))
+        .with_forwarder(forwarder(vec![UpstreamConfig::udp(upstream.addr)]));
+
+    let attack = resolver.resolve(&query("rebind.attacker.example.")).await;
+    assert_eq!(attack.rcode, ResponseCode::NO_ERROR);
+    assert_eq!(attack.answers, vec![], "the private address is removed");
+    // Asking again, from the cache or upstream, does not bring it back.
+    let again = resolver.resolve(&query("rebind.attacker.example.")).await;
+    assert_eq!(again.answers, vec![]);
+
+    let router = resolver.resolve(&query("router.lan.")).await;
+    assert_eq!(ip(&router), Some(Ipv4Addr::new(192, 168, 1, 1).into()));
 }

@@ -10,8 +10,10 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
+use goethite_proto::Name;
 use goethite_resolver::{
-    BlockResponse, CacheConfig, MAX_ENTRIES, MAX_UPSTREAMS, Transport, UpstreamConfig,
+    BlockResponse, CacheConfig, DEFAULT_PRIVATE_DOMAINS, MAX_ENTRIES, MAX_UPSTREAMS,
+    RebindingProtection, Transport, UpstreamConfig,
 };
 use serde::{Deserialize, Deserializer};
 
@@ -34,6 +36,50 @@ pub struct Config {
     /// The `[filter]` table.
     #[serde(default)]
     pub filter: FilterSection,
+    /// The `[security]` table.
+    #[serde(default)]
+    pub security: SecuritySection,
+}
+
+/// The `[security]` table.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, default)]
+pub struct SecuritySection {
+    /// Remove private addresses from answers for public names.
+    pub rebinding_protection: bool,
+    /// Names below these may resolve to private addresses.
+    pub private_domains: Vec<String>,
+}
+
+impl Default for SecuritySection {
+    fn default() -> Self {
+        Self {
+            rebinding_protection: true,
+            private_domains: DEFAULT_PRIVATE_DOMAINS
+                .iter()
+                .map(|&domain| domain.to_owned())
+                .collect(),
+        }
+    }
+}
+
+impl SecuritySection {
+    /// The resolver's rebinding protection, if it is on.
+    pub fn rebinding_protection(&self) -> Result<Option<RebindingProtection>> {
+        if !self.rebinding_protection {
+            return Ok(None);
+        }
+        let domains = self
+            .private_domains
+            .iter()
+            .map(|domain| {
+                domain
+                    .parse::<Name>()
+                    .with_context(|| format!("security.private_domains: {domain:?}"))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Some(RebindingProtection::new(domains)))
+    }
 }
 
 /// The most `[[filter.list]]` tables accepted.
@@ -417,6 +463,7 @@ impl Config {
             .cache
             .validate()
             .and_then(|()| config.filter.validate())
+            .and_then(|()| config.security.rebinding_protection().map(drop))
             .with_context(|| format!("invalid config file {}", path.display()))?;
         let mut config = config;
         if let Some(base) = path.parent() {
@@ -645,6 +692,20 @@ mod tests {
             let config = Config::parse(bad).unwrap();
             assert!(config.filter.validate().is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn security_settings() {
+        let default = Config::parse("").unwrap().security;
+        assert!(default.rebinding_protection);
+        assert!(default.private_domains.iter().any(|d| d == "home.arpa"));
+        assert!(default.rebinding_protection().unwrap().is_some());
+
+        let off = Config::parse("[security]\nrebinding_protection = false").unwrap();
+        assert!(off.security.rebinding_protection().unwrap().is_none());
+
+        let bad = Config::parse("[security]\nprivate_domains = [\"not a name\"]").unwrap();
+        assert!(bad.security.rebinding_protection().is_err());
     }
 
     #[test]

@@ -110,6 +110,11 @@ fn run(config_path: &Path) -> Result<()> {
         let mut resolver = Resolver::new(vec![test_record()?])
             .with_cache(cache)
             .with_forwarder(forwarder);
+        if let Some(protection) = config.security.rebinding_protection()? {
+            resolver = resolver.with_rebinding_protection(protection);
+        } else {
+            info!("DNS rebinding protection is turned off");
+        }
         let mut blocking = None;
         if config.filter.enabled {
             let section = config.filter.clone();

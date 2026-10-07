@@ -22,6 +22,7 @@ export default defineConfig({
 			sidebar: [
 				{ label: 'Quick start', slug: 'quick-start' },
 				{ label: 'Filtering', slug: 'filtering' },
+				{ label: 'Security settings', slug: 'security' },
 				{ label: 'API reference', slug: 'api-reference' },
 			],
 			// Fonts are bundled from npm and served from this site: no font CDN at runtime.

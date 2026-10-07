@@ -10,6 +10,7 @@
 mod blocking;
 mod cache;
 mod forward;
+mod rebinding;
 mod tls;
 
 use std::net::{IpAddr, Ipv4Addr};
@@ -27,6 +28,7 @@ pub use cache::{Cache, CacheConfig, CacheStats, MAX_CACHED_RECORDS, MAX_CNAME_CH
 pub use forward::{
     Forwarder, ForwarderConfig, ForwarderError, MAX_UPSTREAMS, Transport, UpstreamConfig,
 };
+pub use rebinding::{DEFAULT_PRIVATE_DOMAINS, RebindingProtection, is_private};
 pub use tls::{TlsError, TlsRoots, tls_client_config};
 
 /// The name every build answers itself, to check that the server is alive.
@@ -67,6 +69,7 @@ pub(crate) fn restore_question_case(response: &mut Response, name: &Name) {
 pub struct Resolver {
     local: Vec<Record>,
     blocking: Option<Arc<Blocking>>,
+    rebinding: Option<RebindingProtection>,
     cache: Option<Cache>,
     forwarder: Option<Forwarder>,
 }
@@ -78,6 +81,7 @@ impl Resolver {
         Self {
             local,
             blocking: None,
+            rebinding: None,
             cache: None,
             forwarder: None,
         }
@@ -88,6 +92,13 @@ impl Resolver {
     #[must_use]
     pub fn with_blocking(mut self, blocking: Arc<Blocking>) -> Self {
         self.blocking = Some(blocking);
+        self
+    }
+
+    /// Removes private addresses from forwarded answers for public names.
+    #[must_use]
+    pub fn with_rebinding_protection(mut self, protection: RebindingProtection) -> Self {
+        self.rebinding = Some(protection);
         self
     }
 
@@ -124,8 +135,9 @@ impl Resolver {
     /// - a name the filter blocks: the configured block response, even if an
     ///   answer is cached;
     /// - a fresh cached answer, with TTLs counted down;
-    /// - anything else: forwarded upstream (and cached if cacheable), or
-    ///   `REFUSED` without a forwarder.
+    /// - anything else: forwarded upstream, with private addresses removed
+    ///   for public names if rebinding protection is on, and cached if
+    ///   cacheable; or `REFUSED` without a forwarder.
     pub async fn resolve(&self, query: &Query) -> Response {
         let mut response = self.answer(query).await;
         response.recursion_available = self.forwarder.is_some();
@@ -158,7 +170,17 @@ impl Resolver {
         if let Some(response) = self.cache.as_ref().and_then(|cache| cache.get(query)) {
             return response;
         }
-        let response = forwarder.forward(query).await;
+        let mut response = forwarder.forward(query).await;
+        if let Some(protection) = &self.rebinding {
+            let removed = protection.apply(&question.name, &mut response);
+            if removed > 0 {
+                debug!(
+                    name = %question.name,
+                    removed,
+                    "rebinding protection removed private addresses"
+                );
+            }
+        }
         if let Some(cache) = &self.cache {
             cache.insert(query, &response);
         }
