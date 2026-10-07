@@ -53,11 +53,27 @@ fn missing_config_file_is_an_error() {
 
 #[test]
 fn unknown_config_keys_are_an_error() {
-    let path = config_file("unknown_keys", "[server]\nlisen = \"127.0.0.1:0\"\n");
+    let path = config_file(
+        "unknown_keys",
+        "[server]\nlisen = \"127.0.0.1:0\"\n\n[[upstream]]\naddress = \"127.0.0.1\"\n",
+    );
     let output = goethite(&["run", "--config", path.to_str().unwrap()]);
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("unknown field"), "{stderr}");
+}
+
+#[test]
+fn missing_upstreams_are_an_error() {
+    let path = config_file("no_upstreams", "[server]\nlisten = \"127.0.0.1:0\"\n");
+    let output = goethite(&["run", "--config", path.to_str().unwrap()]);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("no upstream resolvers configured"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("[[upstream]]"), "{stderr}");
 }
 
 #[cfg(unix)]
@@ -84,8 +100,11 @@ mod serving {
     }
 
     impl Running {
-        fn start(test: &str) -> Self {
-            let path = config_file(test, "[server]\nlisten = \"127.0.0.1:0\"\n");
+        fn start(test: &str, upstream: SocketAddr) -> Self {
+            let config = format!(
+                "[server]\nlisten = \"127.0.0.1:0\"\n\n[[upstream]]\naddress = \"{upstream}\"\n"
+            );
+            let path = config_file(test, &config);
             let mut child = Command::new(BIN)
                 .args(["run", "--config", path.to_str().unwrap()])
                 .env("RUST_LOG", "info")
@@ -186,8 +205,28 @@ mod serving {
         wire
     }
 
+    /// A fake upstream that answers every query with `192.0.2.53`.
+    fn upstream() -> SocketAddr {
+        let socket = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let addr = socket.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let mut buf = [0; 4096];
+            while let Ok((len, peer)) = socket.recv_from(&mut buf) {
+                let query = Message::from_vec(&buf[..len]).unwrap();
+                let mut reply =
+                    Message::new(query.metadata.id, MessageType::Response, OpCode::Query);
+                reply.add_queries(query.queries.clone());
+                let name = query.queries[0].name().clone();
+                let data = RData::A(A(Ipv4Addr::new(192, 0, 2, 53)));
+                reply.add_answer(hickory_proto::rr::Record::from_rdata(name, 300, data));
+                socket.send_to(&reply.to_vec().unwrap(), peer).unwrap();
+            }
+        });
+        addr
+    }
+
     fn serves_then_stops_on(signal: &str) {
-        let mut server = Running::start(&format!("serves_then_stops_on_{signal}"));
+        let mut server = Running::start(&format!("serves_then_stops_on_{signal}"), upstream());
         let line = server.wait_for_log("listening");
         let udp = field(&line, "udp");
 
@@ -199,9 +238,12 @@ mod serving {
             answer.answers[0].data,
             RData::A(A(Ipv4Addr::new(127, 0, 0, 53)))
         );
+        let forwarded = ask(udp, "example.com.");
+        assert_eq!(forwarded.metadata.response_code, ResponseCode::NoError);
+        assert!(forwarded.metadata.recursion_available);
         assert_eq!(
-            ask(udp, "example.com.").metadata.response_code,
-            ResponseCode::Refused
+            forwarded.answers[0].data,
+            RData::A(A(Ipv4Addr::new(192, 0, 2, 53)))
         );
         let odd = ask_raw(udp, &query_with_malformed_edns_option());
         assert_eq!(odd.metadata.id, 0x0101);

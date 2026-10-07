@@ -6,11 +6,12 @@
 
 use std::fs::File;
 use std::io::Read;
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
-use serde::Deserialize;
+use goethite_resolver::{MAX_UPSTREAMS, Transport, UpstreamConfig};
+use serde::{Deserialize, Deserializer};
 
 /// Config files larger than this many bytes are rejected.
 const MAX_CONFIG_LEN: usize = 1024 * 1024;
@@ -22,6 +23,71 @@ pub struct Config {
     /// The `[server]` table.
     #[serde(default)]
     pub server: ServerSection,
+    /// The `[[upstream]]` tables, in order of preference.
+    #[serde(default)]
+    pub upstream: Vec<UpstreamSection>,
+}
+
+/// One `[[upstream]]` table: a resolver goethite forwards to.
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct UpstreamSection {
+    /// IP address, with an optional port (default 53). Hostnames are not
+    /// accepted: resolving them would need the resolver being configured.
+    #[serde(deserialize_with = "address_with_default_port")]
+    pub address: SocketAddr,
+    /// How the upstream is reached.
+    #[serde(default)]
+    pub protocol: Protocol,
+    /// 0x20 case randomization of query names.
+    #[serde(default = "enabled")]
+    pub randomize_case: bool,
+}
+
+/// The `protocol` of an upstream.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Protocol {
+    /// Plain DNS over UDP, retried over TCP when the answer is truncated.
+    #[default]
+    Udp,
+    /// Plain DNS over TCP only.
+    Tcp,
+}
+
+impl UpstreamSection {
+    /// The resolver's view of this upstream.
+    pub fn to_upstream(&self) -> UpstreamConfig {
+        UpstreamConfig {
+            address: self.address,
+            transport: match self.protocol {
+                Protocol::Udp => Transport::Udp,
+                Protocol::Tcp => Transport::Tcp,
+            },
+            randomize_case: self.randomize_case,
+        }
+    }
+}
+
+fn enabled() -> bool {
+    true
+}
+
+/// Accepts `9.9.9.9`, `9.9.9.9:53`, `2620:fe::fe` and `[2620:fe::fe]:53`.
+fn address_with_default_port<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<SocketAddr, D::Error> {
+    let text = String::deserialize(deserializer)?;
+    if let Ok(addr) = text.parse::<SocketAddr>() {
+        return Ok(addr);
+    }
+    text.parse::<IpAddr>()
+        .map(|ip| SocketAddr::new(ip, 53))
+        .map_err(|_| {
+            serde::de::Error::custom(format!(
+                "{text:?} is not an IP address with an optional port"
+            ))
+        })
 }
 
 /// The `[server]` table.
@@ -64,7 +130,23 @@ impl Config {
                 path.display()
             );
         }
-        Self::parse(&text).with_context(|| format!("invalid config file {}", path.display()))
+        let config = Self::parse(&text)
+            .with_context(|| format!("invalid config file {}", path.display()))?;
+        if config.upstream.is_empty() {
+            bail!(
+                "no upstream resolvers configured in {}: add at least one [[upstream]] table, \
+                 for example\n\n[[upstream]]\naddress = \"9.9.9.9\"",
+                path.display()
+            );
+        }
+        if config.upstream.len() > MAX_UPSTREAMS {
+            bail!(
+                "{} lists {} upstreams; at most {MAX_UPSTREAMS} are supported",
+                path.display(),
+                config.upstream.len()
+            );
+        }
+        Ok(config)
     }
 
     /// Parses configuration from TOML text.
@@ -82,6 +164,54 @@ mod tests {
         let example = include_str!("../../../config/goethite.example.toml");
         let config = Config::parse(example).unwrap();
         assert_eq!(config.server.listen, "127.0.0.1:15353".parse().unwrap());
+        assert_eq!(config.upstream.len(), 2);
+        assert_eq!(config.upstream[0].address, "9.9.9.9:53".parse().unwrap());
+    }
+
+    #[test]
+    fn upstreams() {
+        let config = Config::parse(
+            r#"
+            [[upstream]]
+            address = "9.9.9.9"
+
+            [[upstream]]
+            address = "[2620:fe::fe]:5353"
+            protocol = "tcp"
+            randomize_case = false
+            "#,
+        )
+        .unwrap();
+        let [first, second] = &config.upstream[..] else {
+            panic!("two upstreams expected");
+        };
+        assert_eq!(first.address, "9.9.9.9:53".parse().unwrap());
+        assert_eq!(first.protocol, Protocol::Udp);
+        assert!(first.randomize_case);
+        assert_eq!(second.address, "[2620:fe::fe]:5353".parse().unwrap());
+        assert_eq!(second.to_upstream().transport, Transport::Tcp);
+        assert!(!second.randomize_case);
+    }
+
+    #[test]
+    fn bad_upstreams_are_rejected() {
+        for bad in [
+            "[[upstream]]\naddress = \"dns.quad9.net\"",
+            "[[upstream]]\naddress = \"9.9.9.9\"\nprotocol = \"quic\"",
+            "[[upstream]]\naddres = \"9.9.9.9\"",
+            "[[upstream]]",
+        ] {
+            assert!(Config::parse(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn missing_upstreams_are_an_error_when_loading() {
+        let path = std::env::temp_dir().join(format!("goethite-none-{}.toml", std::process::id()));
+        std::fs::write(&path, "[server]\n").unwrap();
+        let err = Config::load(&path).unwrap_err();
+        std::fs::remove_file(&path).unwrap();
+        assert!(err.to_string().contains("no upstream resolvers"), "{err:#}");
     }
 
     #[test]

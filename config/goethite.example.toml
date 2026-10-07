@@ -3,12 +3,29 @@
 # Run with:  goethite run --config config/goethite.example.toml
 #
 # This file only bootstraps a node. Unknown keys are rejected, so a typo is an
-# error rather than a silently ignored setting. Every key is optional; the
-# values below are the defaults.
+# error rather than a silently ignored setting.
 
 [server]
 # Address for DNS over UDP and TCP. Port 15353 on loopback lets development
 # builds run without root (5353 is avoided: it is multicast DNS and usually
 # taken). Production uses port 53, e.g. "0.0.0.0:53" or "[::]:53". Use an IP
-# address here, not a hostname.
+# address here, not a hostname. This is the default.
 listen = "127.0.0.1:15353"
+
+# Upstream resolvers, tried in this order with failover. At least one is
+# required: goethite does not pick a resolver on your behalf.
+#
+#   address         IP address, optionally with a port (default 53)
+#   protocol        "udp" (retried over TCP when the answer is truncated,
+#                   the default) or "tcp"
+#   randomize_case  0x20 case randomization of query names, a defense against
+#                   spoofed answers (default true). Turn it off only for an
+#                   upstream that does not preserve the case of names.
+#
+# Quad9 (non-profit, does not log client IP addresses). Encrypted DoT and DoH
+# upstreams arrive in a later milestone.
+[[upstream]]
+address = "9.9.9.9"
+
+[[upstream]]
+address = "149.112.112.112"

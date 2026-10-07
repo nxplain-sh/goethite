@@ -9,7 +9,7 @@ use std::process::ExitCode;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use goethite_resolver::{Resolver, test_record};
+use goethite_resolver::{Forwarder, ForwarderConfig, Resolver, test_record};
 use goethite_server::{Server, ServerConfig};
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
@@ -89,7 +89,17 @@ fn run(config_path: &Path) -> Result<()> {
     runtime.block_on(async {
         // Install signal handlers before binding so a signal is never missed.
         let shutdown = shutdown_signal()?;
-        let resolver = Resolver::new(vec![test_record()?]);
+        let upstreams: Vec<_> = config
+            .upstream
+            .iter()
+            .map(config::UpstreamSection::to_upstream)
+            .collect();
+        for upstream in &upstreams {
+            info!(address = %upstream.address, transport = ?upstream.transport, "upstream");
+        }
+        let forwarder = Forwarder::new(ForwarderConfig::new(upstreams))
+            .context("invalid [[upstream]] configuration")?;
+        let resolver = Resolver::new(vec![test_record()?]).with_forwarder(forwarder);
         let server = Server::bind(ServerConfig::new(config.server.listen), resolver).await?;
         server.run(shutdown).await?;
         Ok(())
