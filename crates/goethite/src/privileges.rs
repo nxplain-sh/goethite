@@ -182,6 +182,28 @@ short:x
         }
     }
 
+    proptest::proptest! {
+        /// Any text: no panic, and a well-formed line for the name is found
+        /// among arbitrary other lines.
+        #[test]
+        fn finds_its_line_among_any_others(
+            before in "[^\n]{0,200}",
+            after in "(?s).{0,200}",
+            name in "[a-z_][a-z0-9_-]{0,31}",
+            uid in proptest::prelude::any::<u32>(),
+            gid in proptest::prelude::any::<u32>(),
+        ) {
+            let _ = find_account(&format!("{before}\n{after}"), &name);
+            let line = format!("{name}:x:{uid}:{gid}:Some User:/home:/bin/false");
+            let text = format!("{before}\n{line}\n{after}");
+            let found = find_account(&text, &name).unwrap();
+            // An earlier line for the same name wins, as with getpwnam.
+            if !before.starts_with(&format!("{name}:")) {
+                proptest::prop_assert_eq!(found, Account { name: name.clone(), uid, gid });
+            }
+        }
+    }
+
     #[test]
     fn never_panics_on_odd_files() {
         for text in [
