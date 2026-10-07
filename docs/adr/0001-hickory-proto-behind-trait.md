@@ -35,9 +35,15 @@ its public API.
     value, so unknown values round-trip.
   - `Query`: id, the RD, CD and AD flags, exactly one `Question`, and optional `Edns` (UDP payload
     size and the DO bit; versions other than 0 are rejected)
-  - `Response`: built from a `Query`, carrying an rcode and answer `Record`s
+  - `Record`: opaque, so records of any type can be forwarded and cached. The data stays in
+    hickory's representation internally; goethite only looks at what it acts on (addresses,
+    CNAME targets, SOA minimums). Constructors such as `Record::a` build the few it creates.
+  - `Response`: built from a `Query`, carrying an rcode, the TC flag and the answer, authority
+    and additional sections (amended 2026-10-07 for forwarding)
 - Trait `DnsCodec`:
   - `decode_query(&self, &[u8]) -> Result<Query, DecodeError>`
+  - `decode_response(&self, &[u8]) -> Result<Response, ResponseError>`, for upstream answers. It
+    requires exactly one question and section counts that fit the message before parsing.
   - `encode_query(&self, &Query, &mut Vec<u8>) -> Result<(), EncodeError>`
   - `encode_response(&self, &Response, max_len, &mut Vec<u8>) -> Result<(), EncodeError>`, which
     sets TC and drops the answers when the encoded response would exceed `max_len`

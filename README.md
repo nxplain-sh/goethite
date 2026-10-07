@@ -10,9 +10,10 @@ zero-downtime upgrades. It is named after the iron-oxide mineral that is a main 
 
 ## Status
 
-**Pre-alpha, Phase 0.** Nothing here is usable for real DNS yet. The server answers exactly one
-hardcoded name so that the workspace, CI, security tooling and fuzzing can be built around it.
-See the roadmap in [`AGENTS.md`](AGENTS.md#roadmap-respect-the-order).
+**Pre-alpha, Phase 1 in progress.** goethite forwards queries to the upstream resolvers you
+configure, over plain DNS with failover and spoofing defenses. Caching, encrypted upstreams and
+filtering come in the next Phase 1 milestones, so it is not yet a useful blocker. See the roadmap
+in [`AGENTS.md`](AGENTS.md#roadmap-respect-the-order).
 
 ## Quick start (development)
 
@@ -26,10 +27,14 @@ cargo run -- run --config config/goethite.example.toml
 In another terminal:
 
 ```sh
-dig @127.0.0.1 -p 15353 goethite.test        # -> 127.0.0.53
-dig @127.0.0.1 -p 15353 example.com          # -> status: REFUSED
-dig @127.0.0.1 -p 15353 goethite.test +tcp   # same answer over TCP
+dig @127.0.0.1 -p 15353 goethite.test        # -> 127.0.0.53, answered by goethite itself
+dig @127.0.0.1 -p 15353 example.com          # -> forwarded to Quad9, the example upstream
+dig @127.0.0.1 -p 15353 example.com +tcp     # same over TCP
 ```
+
+The example config forwards to Quad9 over plain DNS. Upstreams are configured in
+`[[upstream]]` tables and at least one is required; see
+[`config/goethite.example.toml`](config/goethite.example.toml).
 
 Development binds to `127.0.0.1:15353`, so no root is needed (port 5353 is avoided because
 multicast DNS already uses it on most desktops). Logs go to stderr and are controlled

@@ -3,8 +3,8 @@ title: Quick start
 description: Build goethite from source and query the development server.
 ---
 
-goethite is **pre-alpha**. The server currently answers a single hardcoded test name, which is
-enough to check that the build, the listeners and the DNS wire-format handling work.
+goethite is **pre-alpha**. It forwards queries to the upstream resolvers you configure, over plain
+DNS with failover. Caching, encrypted upstreams and filtering arrive in the next milestones.
 
 ## Prerequisites
 
@@ -23,6 +23,15 @@ The example config binds to `127.0.0.1:15353`, so the development server runs wi
 (Port 5353 is avoided because multicast DNS already uses it on most desktops.)
 Production deployments use port `53`.
 
+It forwards to [Quad9](https://quad9.net/) (`9.9.9.9`, then `149.112.112.112`). goethite never
+picks an upstream for you: the config must list at least one `[[upstream]]`:
+
+```toml
+[[upstream]]
+address = "9.9.9.9"      # an IP address, port 53 unless given
+protocol = "udp"         # retried over TCP when the answer is truncated; or "tcp"
+```
+
 ## Query it
 
 In another terminal:
@@ -38,20 +47,24 @@ The answer section contains `127.0.0.53`:
 goethite.test.		60	IN	A	127.0.0.53
 ```
 
-Every other name is refused:
+`goethite.test` is answered by goethite itself, which makes it a handy liveness check. Every
+other name is forwarded upstream:
 
 ```sh
 dig @127.0.0.1 -p 15353 example.com
 ```
 
+The header shows `ra` (recursion available) and the answer comes from Quad9:
+
 ```text
-;; ->>HEADER<<- opcode: QUERY, status: REFUSED, id: 4242
+;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 4242
+;; flags: qr rd ra; QUERY: 1, ANSWER: 2, AUTHORITY: 0, ADDITIONAL: 1
 ```
 
 The same queries work over TCP:
 
 ```sh
-dig @127.0.0.1 -p 15353 +tcp goethite.test
+dig @127.0.0.1 -p 15353 +tcp example.com
 ```
 
 ## Stop it

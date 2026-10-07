@@ -15,8 +15,9 @@ Resolution pipeline: client identification → policy/group lookup → local rew
 (including CNAME uncloaking) → cache → upstream (forward or recursive) → DNSSEC validation →
 response.
 
-In **Phase 0** only a UDP/TCP listener and a hardcoded resolver exist. `goethite.test. A` returns
-`127.0.0.53`, other types for that name return NODATA, and every other name returns REFUSED.
+Today (Phase 1, milestone 1) goethite has UDP/TCP listeners, a built-in `goethite.test.` record
+and plain-DNS forwarding to configured upstreams with failover. There is no cache, no filtering
+and no encrypted upstream yet.
 
 ### Trust boundaries
 
@@ -79,7 +80,10 @@ for that phase and not implemented yet. Phases follow the roadmap in
 | Supply chain (B7)                           | `cargo deny` (licenses, advisories, bans, sources) and `cargo audit` in CI for the main and the fuzz workspace. GitHub Actions pinned to commit SHAs. Minimal workflow permissions. | 0 | done |
 | Crash details disclosed by public CI fuzzing | Crash artifacts are kept 7 days; the trade-off is documented in SECURITY.md. Fuzzing moves to a private setup before the first release | 0 / 5 | partial |
 | Unknown threats                             | This threat model                                                                                  | 0     | done    |
-| Off-path cache poisoning (B2)               | Random source ports, 0x20 case randomization, matching responses on ID + question, bounded CNAME chain depth | 1 | planned |
+| Off-path spoofed upstream answers (B2)      | A fresh UDP socket per exchange with an OS-randomized source port, connected to the upstream; random 16-bit IDs; 0x20 case randomization; a response is accepted only if its ID, opcode and question in exactly the sent case match. Mismatches are ignored, not fatal, so a spoofer cannot end the exchange | 1 | done |
+| Hostile upstream responses (B2)             | Responses are checked before parsing (one question, section counts that fit the message), size-capped (4096 bytes over UDP) and fuzzed (`decode_response`). Extended rcodes are never sent to clients without EDNS | 1 | done |
+| Slow or dead upstreams exhausting the server (B1, B2) | Per-attempt and total timeouts, failover with a back-off for failing upstreams, a cap on UDP queries in flight; queries beyond it are dropped | 1 | done |
+| Cache poisoning (B2)                        | Bounded CNAME chain depth, caching only records that answer the question (no unrelated additional data), TTL clamps | 1 | planned |
 | On-path tampering / snooping upstream (B2)  | Encrypted upstreams (DoH, DoT) with failover                                                       | 1     | planned |
 | DNS rebinding                               | Rebinding protection: drop private/loopback answers for public names                               | 1     | planned |
 | Abuse as a DoS amplifier / query floods     | Response rate limiting (RRL)                                                                       | 1     | planned |

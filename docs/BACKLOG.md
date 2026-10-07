@@ -10,9 +10,6 @@ When an item is picked up, move it into an issue or PR and delete it from this l
   port 53. Ship a systemd unit with `NoNewPrivileges`, `CAP_NET_BIND_SERVICE` only, and protected
   paths.
 - **[P1] `SO_REUSEPORT` per-core sockets** for UDP and TCP listeners.
-- **[P1] Async handler and per-query tasks.** The Phase 0 handler is synchronous and runs inline
-  in the listener loop. Forwarding needs an async handler and per-query task spawning, with bounded
-  concurrency.
 - **[P1] Response rate limiting (RRL).**
 - **[P1] Config hot reload** via `arc-swap`, without dropping queries.
 - **[P1] `bench/` directory** with criterion benches and dnsperf/resperf scripts, ahead of the
@@ -23,10 +20,13 @@ When an item is picked up, move it into an issue or PR and delete it from this l
 - **[P1] Revisit the UDP response size policy.** Re-check the 1232-byte EDNS default and the
   truncation behaviour against RFC 9715 and DNS flag day guidance when forwarding lands.
 - **[P1] EDNS cookies (RFC 7873)** for client and upstream spoofing resistance.
+- **[P1] Out-of-order TCP answers.** A TCP connection resolves its queries one at a time, so a
+  slow forwarded query delays the ones pipelined behind it (RFC 7766 allows answering out of
+  order).
+- **[P1] Less allocation per forwarded query.** Each exchange allocates a receive buffer and
+  re-encodes records through hickory; revisit with the cache benches.
 - **[P1] OPT in FORMERR/NOTIMP responses.** Header-only error responses omit the OPT record even
   when the query carried one (RFC 6891 §7). Only BADVERS includes it today.
-- **[P1] Set RA once forwarding works.** Phase 0 answers with RA=0 because it offers no
-  recursion, so `dig` prints "recursion requested but not available".
 - **[P1] SOA in negative answers.** NODATA for local names carries no SOA in the authority
   section, so clients cannot cache it negatively (RFC 2308). Needed once local rewrites are
   configurable.
