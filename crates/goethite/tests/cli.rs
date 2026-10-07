@@ -176,7 +176,8 @@ mod serving {
     }
 
     /// A query for `goethite.test. A` whose OPT record carries an EDNS option
-    /// that claims 5 bytes but has 2. hickory-proto logs a warning for it.
+    /// that claims 5 bytes but has 2. hickory-proto alone would log a warning
+    /// quoting the bytes and answer it; goethite rejects it first.
     fn query_with_malformed_edns_option() -> Vec<u8> {
         let mut wire = vec![0x01, 0x01, 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 1];
         wire.extend_from_slice(b"\x08goethite\x04test\x00\x00\x01\x00\x01");
@@ -204,6 +205,7 @@ mod serving {
         );
         let odd = ask_raw(udp, &query_with_malformed_edns_option());
         assert_eq!(odd.metadata.id, 0x0101);
+        assert_eq!(odd.metadata.response_code, ResponseCode::FormErr);
 
         server.signal(signal);
         server.wait_for_log(&format!("received SIG{signal}"));

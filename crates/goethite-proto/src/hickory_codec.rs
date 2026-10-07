@@ -19,16 +19,13 @@ pub struct HickoryCodec;
 impl DnsCodec for HickoryCodec {
     fn decode_query(&self, wire: &[u8]) -> Result<Query, DecodeError> {
         let header = RawHeader::check_query(wire)?;
-        let message = Message::from_vec(wire).map_err(|e| {
-            let source = WireError::new(e);
-            if question_is_readable(wire) {
-                DecodeError::MalformedAdditional {
-                    context: header.context(),
-                    source,
-                }
-            } else {
-                DecodeError::Malformed(source)
-            }
+        check_sections(wire, &header)?;
+        // The question and every additional record are structurally sound, so
+        // whatever hickory still rejects (a second OPT record, an inconsistent
+        // option) is in the additional section.
+        let message = Message::from_vec(wire).map_err(|e| DecodeError::MalformedAdditional {
+            context: header.context(),
+            source: WireError::new(e),
         })?;
 
         // `check_query` guarantees exactly one question in the header, and the
@@ -82,6 +79,8 @@ impl DnsCodec for HickoryCodec {
         max_len: usize,
         out: &mut Vec<u8>,
     ) -> Result<(), EncodeError> {
+        out.clear();
+        check_representable(response)?;
         emit(&response_to_hickory(response, true), out)?;
         if out.len() <= max_len {
             return Ok(());
@@ -101,10 +100,129 @@ impl DnsCodec for HickoryCodec {
     }
 }
 
-/// Whether the header and question parse, i.e. the problem is further on.
-fn question_is_readable(wire: &[u8]) -> bool {
+/// Walks the question and the additional records without building a message.
+///
+/// This classifies problems before hickory parses anything: an unreadable
+/// question means the message is dropped, anything wrong after it gets
+/// FORMERR. It also checks EDNS options, which hickory skips silently when
+/// their lengths are wrong.
+fn check_sections(wire: &[u8], header: &RawHeader) -> Result<(), DecodeError> {
     let mut decoder = BinDecoder::new(wire);
-    op::Header::read(&mut decoder).is_ok() && op::Query::read(&mut decoder).is_ok()
+    op::Header::read(&mut decoder)
+        .and_then(|_| op::Query::read(&mut decoder))
+        .map_err(|e| DecodeError::Malformed(WireError::new(e)))?;
+    for _ in 0..header.additional_count {
+        check_record(&mut decoder).map_err(|source| DecodeError::MalformedAdditional {
+            context: header.context(),
+            source,
+        })?;
+    }
+    Ok(())
+}
+
+/// Reads one resource record, checking the options if it is an OPT record.
+fn check_record(decoder: &mut BinDecoder<'_>) -> Result<(), WireError> {
+    rr::Name::read(decoder).map_err(WireError::new)?;
+    let record_type = decoder.read_u16().map_err(WireError::new)?.unverified();
+    decoder.read_u16().map_err(WireError::new)?; // class
+    decoder.read_u32().map_err(WireError::new)?; // TTL
+    let len = decoder.read_u16().map_err(WireError::new)?.unverified();
+    let data = decoder
+        .read_slice(usize::from(len))
+        .map_err(WireError::new)?
+        .unverified();
+    if record_type == RecordType::OPT.0 {
+        check_edns_options(data).map_err(WireError::new)?;
+    }
+    Ok(())
+}
+
+/// A malformed EDNS option.
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+struct OptionError(&'static str);
+
+/// EDNS Client Subnet (RFC 7871).
+const OPTION_CLIENT_SUBNET: u16 = 8;
+/// DNS cookie (RFC 7873).
+const OPTION_COOKIE: u16 = 10;
+
+/// Checks the option list in OPT record data: every option must fit, and the
+/// options with length rules goethite knows must follow them.
+fn check_edns_options(mut rest: &[u8]) -> Result<(), OptionError> {
+    while !rest.is_empty() {
+        let (header, tail) = rest
+            .split_first_chunk::<4>()
+            .ok_or(OptionError("truncated EDNS option header"))?;
+        let [code0, code1, len0, len1] = *header;
+        let len = usize::from(u16::from_be_bytes([len0, len1]));
+        let (data, tail) = tail.split_at_checked(len).ok_or(OptionError(
+            "EDNS option runs past the end of the OPT record",
+        ))?;
+        match u16::from_be_bytes([code0, code1]) {
+            OPTION_COOKIE => check_cookie(data)?,
+            OPTION_CLIENT_SUBNET => check_client_subnet(data)?,
+            _ => {}
+        }
+        rest = tail;
+    }
+    Ok(())
+}
+
+/// RFC 7873 5.2.2: an 8-byte client cookie, optionally followed by an 8 to
+/// 32-byte server cookie.
+fn check_cookie(data: &[u8]) -> Result<(), OptionError> {
+    if data.len() == 8 || (16..=40).contains(&data.len()) {
+        Ok(())
+    } else {
+        Err(OptionError("COOKIE option has an invalid length"))
+    }
+}
+
+/// RFC 7871 6: the address uses exactly the octets the source prefix needs,
+/// and every bit past the prefix is zero.
+fn check_client_subnet(data: &[u8]) -> Result<(), OptionError> {
+    let (header, address) = data
+        .split_first_chunk::<4>()
+        .ok_or(OptionError("client-subnet option is too short"))?;
+    let [family0, family1, source_prefix, _scope_prefix] = *header;
+    let max_prefix = match u16::from_be_bytes([family0, family1]) {
+        1 => 32,
+        2 => 128,
+        _ => return Err(OptionError("client-subnet option has an unknown family")),
+    };
+    if source_prefix > max_prefix {
+        return Err(OptionError(
+            "client-subnet prefix is longer than the address",
+        ));
+    }
+    if address.len() != usize::from(source_prefix.div_ceil(8)) {
+        return Err(OptionError(
+            "client-subnet address has the wrong number of octets",
+        ));
+    }
+    let used_bits = u32::from(source_prefix % 8);
+    let spare_bits = u8::MAX.checked_shr(used_bits).unwrap_or(0);
+    if used_bits != 0 && address.last().is_some_and(|last| last & spare_bits != 0) {
+        return Err(OptionError(
+            "client-subnet address has bits set past the prefix",
+        ));
+    }
+    Ok(())
+}
+
+/// Rejects field values hickory would silently truncate on the wire.
+fn check_representable(response: &Response) -> Result<(), EncodeError> {
+    let reason = if response.opcode.0 > 0x0f {
+        "opcode does not fit in 4 bits"
+    } else if response.rcode.0 > 0x0fff {
+        "response code does not fit in 12 bits"
+    } else if response.rcode.0 > 0x0f && response.edns.is_none() {
+        "an extended response code needs EDNS"
+    } else {
+        return Ok(());
+    };
+    Err(EncodeError::Unrepresentable { reason })
 }
 
 fn emit(message: &Message, out: &mut Vec<u8>) -> Result<(), EncodeError> {
@@ -140,7 +258,7 @@ fn record_to_hickory(record: &crate::Record) -> rr::Record {
 }
 
 fn response_to_hickory(response: &Response, with_records: bool) -> Message {
-    let opcode = OpCode::from_u8(response.opcode.0 & 0x0f);
+    let opcode = OpCode::from_u8(response.opcode.0);
     let mut message = Message::new(response.id, MessageType::Response, opcode);
     let metadata = &mut message.metadata;
     metadata.authoritative = response.authoritative;
@@ -314,6 +432,105 @@ mod tests {
         wire.extend_from_slice(&[0, 8, 0, 8, 0, 1, 40, 0, 192, 0, 2, 1]);
         let err = HickoryCodec.decode_query(&wire).unwrap_err();
         assert_eq!(err.response().unwrap().rcode, ResponseCode::FORM_ERR);
+    }
+
+    /// The sample query without EDNS, plus an OPT record carrying `options`.
+    fn with_options(options: &[u8]) -> Vec<u8> {
+        let mut wire = encode(&Query {
+            edns: None,
+            ..sample_query()
+        });
+        wire[11] = 1;
+        wire.extend_from_slice(&[0, 0, 41, 0x04, 0xd0, 0, 0, 0, 0]);
+        wire.extend_from_slice(&u16::try_from(options.len()).unwrap().to_be_bytes());
+        wire.extend_from_slice(options);
+        wire
+    }
+
+    fn option(code: u16, data: &[u8]) -> Vec<u8> {
+        let mut out = code.to_be_bytes().to_vec();
+        out.extend_from_slice(&u16::try_from(data.len()).unwrap().to_be_bytes());
+        out.extend_from_slice(data);
+        out
+    }
+
+    fn gets_formerr(wire: &[u8]) -> bool {
+        match HickoryCodec.decode_query(wire) {
+            Err(err @ DecodeError::MalformedAdditional { .. }) => {
+                err.response().unwrap().rcode == ResponseCode::FORM_ERR
+            }
+            _ => false,
+        }
+    }
+
+    #[test]
+    fn edns_option_running_past_the_opt_record_gets_formerr() {
+        // Claims 5 bytes, carries 2. hickory alone ignores this and answers.
+        assert!(gets_formerr(&with_options(&[0, 10, 0, 5, 1, 2])));
+        // A truncated option header.
+        assert!(gets_formerr(&with_options(&[0, 10, 0])));
+        // Well-formed options of unknown codes are fine.
+        let unknown = [option(65_001, b"abc"), option(65_002, b"")].concat();
+        assert!(HickoryCodec.decode_query(&with_options(&unknown)).is_ok());
+    }
+
+    #[test]
+    fn cookie_length_is_checked() {
+        for len in [8, 16, 40] {
+            let wire = with_options(&option(OPTION_COOKIE, &vec![7; len]));
+            assert!(HickoryCodec.decode_query(&wire).is_ok(), "len {len}");
+        }
+        for len in [0, 7, 9, 15, 41] {
+            let wire = with_options(&option(OPTION_COOKIE, &vec![7; len]));
+            assert!(gets_formerr(&wire), "len {len}");
+        }
+    }
+
+    #[test]
+    fn client_subnet_must_match_its_prefix() {
+        let ecs = |family: u16, prefix: u8, address: &[u8]| {
+            let mut data = family.to_be_bytes().to_vec();
+            data.extend_from_slice(&[prefix, 0]);
+            data.extend_from_slice(address);
+            with_options(&option(OPTION_CLIENT_SUBNET, &data))
+        };
+        let ok = [
+            ecs(1, 24, &[192, 0, 2]),
+            ecs(1, 20, &[192, 0, 0x20]),
+            ecs(1, 0, &[]),
+            ecs(2, 56, &[0x20, 0x01, 0x0d, 0xb8, 0, 0, 0]),
+        ];
+        for wire in &ok {
+            assert!(HickoryCodec.decode_query(wire).is_ok());
+        }
+        let bad = [
+            ecs(1, 24, &[192, 0, 2, 1]), // an octet too many
+            ecs(1, 24, &[192, 0]),       // an octet too few
+            ecs(1, 20, &[192, 0, 0x21]), // a bit set past the prefix
+            ecs(1, 33, &[0; 5]),         // prefix longer than IPv4
+            ecs(3, 8, &[1]),             // unknown family
+        ];
+        for wire in &bad {
+            assert!(gets_formerr(wire));
+        }
+    }
+
+    #[test]
+    fn unrepresentable_responses_are_rejected() {
+        let query = Query {
+            edns: None,
+            ..sample_query()
+        };
+        let mut out = vec![1, 2, 3];
+        for (rcode, opcode) in [(16, 0), (0x1000, 0), (0, 16)] {
+            let mut response = Response::for_query(&query, ResponseCode(rcode));
+            response.opcode = Opcode(opcode);
+            let err = HickoryCodec
+                .encode_response(&response, 512, &mut out)
+                .unwrap_err();
+            assert!(matches!(err, EncodeError::Unrepresentable { .. }), "{err}");
+            assert_eq!(out, Vec::<u8>::new());
+        }
     }
 
     #[test]

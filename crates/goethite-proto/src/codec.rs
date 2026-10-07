@@ -57,9 +57,11 @@ pub trait DnsCodec: Send + Sync {
 ///   than two additional records: answer `FORMERR`. Checking the header
 ///   counts first also stops a 12-byte message from making the parser
 ///   allocate for 65,535 records.
-/// - a readable question but an unreadable additional section (two OPT
-///   records, a malformed EDNS option, a truncated OPT record): answer
-///   `FORMERR`, as RFC 6891 and RFC 7871 require.
+/// - a readable question but a malformed additional section: answer
+///   `FORMERR`. This covers truncated or unparseable records, a second OPT
+///   record (RFC 6891), EDNS options that run past the end of the OPT record,
+///   a COOKIE option of the wrong length (RFC 7873) and a client-subnet option
+///   whose address does not match its prefix (RFC 7871).
 /// - EDNS version other than 0: answer `BADVERS`.
 ///
 /// Error replies are header-only (plus an OPT record for `BADVERS`), so they
@@ -144,6 +146,13 @@ pub enum EncodeError {
         /// The size limit that was requested.
         max_len: usize,
     },
+    /// A field holds a value the wire format cannot carry, such as an
+    /// extended response code without EDNS.
+    #[error("message cannot be represented on the wire: {reason}")]
+    Unrepresentable {
+        /// Which field is out of range.
+        reason: &'static str,
+    },
     /// The wire-format implementation rejected the message.
     #[error("cannot encode message: {0}")]
     Wire(WireError),
@@ -161,13 +170,22 @@ impl WireError {
 }
 
 impl fmt::Display for WireError {
-    /// Writes the message with everything except printable ASCII escaped.
-    ///
-    /// The underlying text can quote bytes from the wire (names, option
-    /// data), and this ends up in logs: escaping keeps newlines, terminal
-    /// escape sequences and bidirectional overrides out of them.
+    /// Writes the message with everything except printable ASCII escaped,
+    /// because the underlying text can quote bytes from the wire.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for c in self.0.to_string().chars() {
+        Escaped(&self.0.to_string()).fmt(f)
+    }
+}
+
+/// Displays text with everything except printable ASCII escaped.
+///
+/// For error text that may quote untrusted input and ends up in logs: it keeps
+/// newlines, terminal escape sequences and bidirectional overrides out.
+pub(crate) struct Escaped<'a>(pub(crate) &'a str);
+
+impl fmt::Display for Escaped<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for c in self.0.chars() {
             if c == ' ' || c.is_ascii_graphic() {
                 f.write_char(c)?;
             } else {
