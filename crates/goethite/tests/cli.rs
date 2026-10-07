@@ -194,8 +194,9 @@ mod serving {
         }
 
         fn signal(&self, name: &str) {
-            let status = Command::new("kill")
-                .args([&format!("-{name}"), &self.child.id().to_string()])
+            // The shell's built-in `kill`: minimal systems may lack /bin/kill.
+            let status = Command::new("sh")
+                .args(["-c", &format!("kill -{name} {}", self.child.id())])
                 .status()
                 .unwrap();
             assert!(status.success());
