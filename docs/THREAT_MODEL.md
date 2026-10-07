@@ -15,7 +15,7 @@ Resolution pipeline: client identification → policy/group lookup → local rew
 (including CNAME uncloaking) → cache → upstream (forward or recursive) → DNSSEC validation →
 response.
 
-Today (Phase 1, milestone 6) goethite has UDP/TCP listeners on one or more addresses with
+Today (v0.1, the end of Phase 1) goethite has UDP/TCP listeners on one or more addresses with
 per-client rate and connection limits, a built-in `goethite.test.` record, forwarding to
 configured upstreams over DNS over TLS, DNS over HTTPS or plain DNS with failover, DNS rebinding
 protection, a cache, and filtering from local and downloaded lists that are refreshed on a

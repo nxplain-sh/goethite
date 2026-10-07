@@ -6,6 +6,9 @@ When an item is picked up, move it into an issue or PR and delete it from this l
 
 ## Phase 1: v0.1 core blocker
 
+Phase 1's scope shipped in v0.1.0. These items came up along the way; they are candidates for
+0.1.x releases or for Phase 2.
+
 - **[P1] Raise the open file limit at startup.** Every UDP query in flight forwards over its own
   socket, so the default soft limit of 1024 can run out under load. The systemd unit sets
   `LimitNOFILE=65536`; goethite could raise its soft limit to the hard limit itself.

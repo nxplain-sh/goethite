@@ -6,7 +6,7 @@ hero:
   tagline: |
     A self-hosted, clustered, security-hardened DNS filtering resolver written in Rust.
     Block ads and trackers for your whole network, without giving up security, speed or uptime.
-    <br /><br /><span class="gt-status">Status: pre-alpha · Phase 1</span>
+    <br /><br /><span class="gt-status">Status: pre-alpha · v0.1</span>
   actions:
     - text: Quick start
       link: quick-start/
@@ -21,8 +21,9 @@ hero:
 import { Card, CardGrid, Aside } from '@astrojs/starlight/components';
 
 <Aside type="caution" title="Pre-alpha">
-	goethite is not ready for use. Today it forwards queries to configured upstreams. Everything below is
-	a design goal, not a feature.
+	goethite 0.1 filters, caches and forwards DNS for one node, over DNS over TLS or DNS over HTTPS,
+	hardened for Linux: try it, but do not rely on it yet. Clustering, the API and the web UI are still
+	ahead; the cards below are the goals. See the [changelog](changelog/).
 </Aside>
 
 ## What goethite aims to be
