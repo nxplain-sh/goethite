@@ -10,7 +10,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
-use goethite_resolver::{MAX_UPSTREAMS, Transport, UpstreamConfig};
+use goethite_resolver::{CacheConfig, MAX_ENTRIES, MAX_UPSTREAMS, Transport, UpstreamConfig};
 use serde::{Deserialize, Deserializer};
 
 /// Config files larger than this many bytes are rejected.
@@ -26,6 +26,82 @@ pub struct Config {
     /// The `[[upstream]]` tables, in order of preference.
     #[serde(default)]
     pub upstream: Vec<UpstreamSection>,
+    /// The `[cache]` table.
+    #[serde(default)]
+    pub cache: CacheSection,
+}
+
+/// The longest `max_ttl` accepted: one week.
+const MAX_TTL_LIMIT: u32 = 7 * 86_400;
+
+/// The longest `max_negative_ttl` accepted: one day.
+const MAX_NEGATIVE_TTL_LIMIT: u32 = 86_400;
+
+/// The `[cache]` table.
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, default)]
+pub struct CacheSection {
+    /// Most cached answers; 0 turns the cache off.
+    pub max_entries: usize,
+    /// Keep positive answers at least this many seconds.
+    pub min_ttl: u32,
+    /// Keep positive answers at most this many seconds.
+    pub max_ttl: u32,
+    /// Keep negative answers (NXDOMAIN, NODATA) at most this many seconds.
+    pub max_negative_ttl: u32,
+}
+
+impl Default for CacheSection {
+    fn default() -> Self {
+        let defaults = CacheConfig::default();
+        Self {
+            max_entries: defaults.max_entries,
+            min_ttl: defaults.min_ttl,
+            max_ttl: defaults.max_ttl,
+            max_negative_ttl: defaults.max_negative_ttl,
+        }
+    }
+}
+
+impl CacheSection {
+    /// The resolver's view of this table.
+    pub fn to_cache_config(&self) -> CacheConfig {
+        CacheConfig {
+            max_entries: self.max_entries,
+            min_ttl: self.min_ttl,
+            max_ttl: self.max_ttl,
+            max_negative_ttl: self.max_negative_ttl,
+        }
+    }
+
+    fn validate(&self) -> Result<()> {
+        if self.max_entries > MAX_ENTRIES {
+            bail!(
+                "cache.max_entries is {}; at most {MAX_ENTRIES} is supported",
+                self.max_entries
+            );
+        }
+        if self.min_ttl > self.max_ttl {
+            bail!(
+                "cache.min_ttl ({}) is larger than cache.max_ttl ({})",
+                self.min_ttl,
+                self.max_ttl
+            );
+        }
+        if self.max_ttl > MAX_TTL_LIMIT {
+            bail!(
+                "cache.max_ttl is {}; at most {MAX_TTL_LIMIT} (one week) is supported",
+                self.max_ttl
+            );
+        }
+        if self.max_negative_ttl > MAX_NEGATIVE_TTL_LIMIT {
+            bail!(
+                "cache.max_negative_ttl is {}; at most {MAX_NEGATIVE_TTL_LIMIT} (one day) is supported",
+                self.max_negative_ttl
+            );
+        }
+        Ok(())
+    }
 }
 
 /// One `[[upstream]]` table: a resolver goethite forwards to.
@@ -139,6 +215,10 @@ impl Config {
                 path.display()
             );
         }
+        config
+            .cache
+            .validate()
+            .with_context(|| format!("invalid config file {}", path.display()))?;
         if config.upstream.len() > MAX_UPSTREAMS {
             bail!(
                 "{} lists {} upstreams; at most {MAX_UPSTREAMS} are supported",
@@ -202,6 +282,30 @@ mod tests {
             "[[upstream]]",
         ] {
             assert!(Config::parse(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn cache_settings() {
+        let config = Config::parse("[cache]\nmax_entries = 500\nmax_ttl = 600").unwrap();
+        assert_eq!(config.cache.max_entries, 500);
+        assert_eq!(config.cache.max_ttl, 600);
+        assert_eq!(
+            config.cache.max_negative_ttl, 3_600,
+            "unset keys keep their default"
+        );
+        assert!(config.cache.validate().is_ok());
+        assert_eq!(Config::parse("").unwrap().cache, CacheSection::default());
+        assert!(Config::parse("[cache]\nmax_entires = 1").is_err());
+
+        for bad in [
+            "max_entries = 1000001",
+            "min_ttl = 600\nmax_ttl = 60",
+            "max_ttl = 604801",
+            "max_negative_ttl = 86401",
+        ] {
+            let config = Config::parse(&format!("[cache]\n{bad}")).unwrap();
+            assert!(config.cache.validate().is_err(), "{bad}");
         }
     }
 

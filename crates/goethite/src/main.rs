@@ -9,7 +9,7 @@ use std::process::ExitCode;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use goethite_resolver::{Forwarder, ForwarderConfig, Resolver, test_record};
+use goethite_resolver::{Cache, Forwarder, ForwarderConfig, Resolver, test_record};
 use goethite_server::{Server, ServerConfig};
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
@@ -99,7 +99,11 @@ fn run(config_path: &Path) -> Result<()> {
         }
         let forwarder = Forwarder::new(ForwarderConfig::new(upstreams))
             .context("invalid [[upstream]] configuration")?;
-        let resolver = Resolver::new(vec![test_record()?]).with_forwarder(forwarder);
+        let cache = Cache::new(config.cache.to_cache_config());
+        info!(max_entries = config.cache.max_entries, "cache");
+        let resolver = Resolver::new(vec![test_record()?])
+            .with_cache(cache)
+            .with_forwarder(forwarder);
         let server = Server::bind(ServerConfig::new(config.server.listen), resolver).await?;
         server.run(shutdown).await?;
         Ok(())
