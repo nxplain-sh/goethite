@@ -17,12 +17,12 @@ use std::future::Future;
 use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use goethite_proto::{
-    DnsCodec, HickoryCodec, MAX_UDP_PAYLOAD, MIN_UDP_PAYLOAD, Response, ResponseCode,
+    DnsCodec, HickoryCodec, MAX_UDP_PAYLOAD, MIN_UDP_PAYLOAD, Query, Response, ResponseCode,
 };
-use goethite_resolver::Resolver;
+use goethite_resolver::{Resolution, Resolver};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, watch};
@@ -131,6 +131,30 @@ pub enum ServerError {
     Register(#[source] io::Error),
 }
 
+/// Receives every answered query, for the query log and statistics.
+pub trait QueryObserver: Send + Sync {
+    /// Called after a query was resolved, before the response is sent. It
+    /// runs on the query's task, so it must not block or wait.
+    fn observe(&self, event: &QueryEvent<'_>);
+}
+
+/// One answered query.
+#[derive(Clone, Copy, Debug)]
+pub struct QueryEvent<'a> {
+    /// When the query arrived.
+    pub time: SystemTime,
+    /// Who sent it.
+    pub peer: SocketAddr,
+    /// How it arrived.
+    pub transport: Transport,
+    /// The query.
+    pub query: &'a Query,
+    /// The answer and how it came about.
+    pub resolution: &'a Resolution,
+    /// How long resolving took.
+    pub elapsed: Duration,
+}
+
 /// The sockets of one listen address, registered with tokio.
 struct Address {
     udp: Vec<UdpSocket>,
@@ -195,12 +219,22 @@ impl Server {
         let engine = Arc::new(Engine {
             codec: Box::new(HickoryCodec),
             resolver,
+            observer: None,
         });
         Ok(Self {
             addresses,
             engine,
             config,
         })
+    }
+
+    /// Reports every answered query to `observer`.
+    #[must_use]
+    pub fn with_observer(mut self, observer: Arc<dyn QueryObserver>) -> Self {
+        if let Some(engine) = Arc::get_mut(&mut self.engine) {
+            engine.observer = Some(observer);
+        }
+        self
     }
 
     /// The address of each listen address's UDP sockets.
@@ -336,6 +370,7 @@ struct Shared {
 struct Engine {
     codec: Box<dyn DnsCodec>,
     resolver: Arc<Resolver>,
+    observer: Option<Arc<dyn QueryObserver>>,
 }
 
 impl Engine {
@@ -351,17 +386,29 @@ impl Engine {
     ) -> bool {
         let (response, udp_limit) = match self.codec.decode_query(wire) {
             Ok(query) => {
-                let response = self.resolver.resolve(&query).await;
+                let time = SystemTime::now();
+                let start = Instant::now();
+                let resolution = self.resolver.resolve(&query, peer.ip()).await;
                 trace!(
                     %peer,
                     %transport,
                     id = query.id,
                     name = %query.question.name,
                     qtype = %query.question.qtype,
-                    rcode = %response.rcode,
+                    rcode = %resolution.response.rcode,
                     "answered query"
                 );
-                (response, query.max_udp_response_len())
+                if let Some(observer) = &self.observer {
+                    observer.observe(&QueryEvent {
+                        time,
+                        peer,
+                        transport,
+                        query: &query,
+                        resolution: &resolution,
+                        elapsed: start.elapsed(),
+                    });
+                }
+                (resolution.response, query.max_udp_response_len())
             }
             Err(err) => {
                 let Some(response) = err.response() else {

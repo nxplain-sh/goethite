@@ -15,7 +15,8 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use goethite_resolver::{
-    Blocking, Cache, Forwarder, ForwarderConfig, Resolver, TlsRoots, test_record, tls_client_config,
+    Cache, Forwarder, ForwarderConfig, Policy, PolicyState, Resolver, TlsRoots, test_record,
+    tls_client_config,
 };
 use goethite_server::{Listeners, Server};
 use tracing::{error, info};
@@ -135,29 +136,26 @@ fn run(config_path: &Path) -> Result<()> {
         } else {
             info!("DNS rebinding protection is turned off");
         }
-        let mut blocking = None;
+        let mut policy_state = None;
         if config.filter.enabled {
             let section = config.filter.clone();
-            let filter = tokio::task::spawn_blocking(move || filters::build(&section))
+            let policy = tokio::task::spawn_blocking(move || filters::build(&section))
                 .await
                 .context("building the filter failed")?;
-            let shared = Arc::new(Blocking::new(
-                filter,
-                config.filter.block_response.to_block_response(),
-                config.filter.blocked_ttl,
-            ));
-            reload_on_hangup(Arc::clone(&shared), config.filter.clone())?;
-            resolver = resolver.with_blocking(Arc::clone(&shared));
-            blocking = Some(shared);
+            let state = Arc::new(PolicyState::new(policy));
+            reload_on_hangup(Arc::clone(&state), config.filter.clone())?;
+            resolver = resolver.with_policy(Arc::clone(&state));
+            policy_state = Some(state);
         } else {
+            resolver = resolver.with_policy(Arc::new(PolicyState::new(Policy::none())));
             info!("filtering is turned off");
         }
         let resolver = Arc::new(resolver);
-        if let Some(blocking) = blocking {
+        if let Some(state) = policy_state {
             let tls = tls_client_config(&TlsRoots::Bundled, &[b"h2", b"http/1.1"])?;
             let downloader =
                 download::Downloader::new(Arc::clone(&resolver), tls, filters::MAX_LIST_LEN);
-            filters::spawn_updates(blocking, config.filter.clone(), downloader);
+            filters::spawn_updates(state, config.filter.clone(), downloader);
         }
         let server = Server::new(listeners, server_config, Arc::clone(&resolver))?;
         server.run(shutdown).await?;
@@ -190,14 +188,14 @@ fn check_config(config_path: &Path) -> Result<()> {
 /// Rebuilds the filter from the list files on every SIGHUP. The config file
 /// itself is not re-read.
 #[cfg(unix)]
-fn reload_on_hangup(blocking: Arc<Blocking>, section: config::FilterSection) -> Result<()> {
+fn reload_on_hangup(state: Arc<PolicyState>, section: config::FilterSection) -> Result<()> {
     use tokio::signal::unix::{SignalKind, signal};
 
     let mut hangup = signal(SignalKind::hangup()).context("cannot handle SIGHUP")?;
     tokio::spawn(async move {
         while hangup.recv().await.is_some() {
             info!("received SIGHUP, reloading filter lists");
-            filters::reload(&blocking, section.clone()).await;
+            filters::reload(&state, section.clone()).await;
         }
     });
     Ok(())
@@ -209,7 +207,7 @@ fn reload_on_hangup(blocking: Arc<Blocking>, section: config::FilterSection) -> 
     clippy::unnecessary_wraps,
     reason = "same signature as the Unix version"
 )]
-fn reload_on_hangup(_blocking: Arc<Blocking>, _section: config::FilterSection) -> Result<()> {
+fn reload_on_hangup(_state: Arc<PolicyState>, _section: config::FilterSection) -> Result<()> {
     Ok(())
 }
 

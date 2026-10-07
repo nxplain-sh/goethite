@@ -10,16 +10,22 @@
     reason = "benchmark harness, not product code"
 )]
 
+use std::fmt::Write as _;
 use std::hint::black_box;
-use std::net::Ipv4Addr;
+use std::net::{IpAddr, Ipv4Addr};
 use std::pin::pin;
+use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
 
 use criterion::{Criterion, criterion_group, criterion_main};
+use goethite_filter::{FilterBuilder, Source, Sources};
 use goethite_proto::{
     Edns, Query, Question, Record, RecordClass, RecordType, Response, ResponseCode,
 };
-use goethite_resolver::{Cache, CacheConfig, Forwarder, ForwarderConfig, Resolver, UpstreamConfig};
+use goethite_resolver::{
+    BlockResponse, Cache, CacheConfig, ClientPolicy, Forwarder, ForwarderConfig, GroupPolicy,
+    Policy, PolicyParts, PolicyState, Resolver, UpstreamConfig,
+};
 
 const ENTRIES: usize = 10_000;
 
@@ -86,26 +92,82 @@ fn cache(c: &mut Criterion) {
     });
 }
 
+/// A policy like a busy home network's: 100,000 rules in two lists, a
+/// default group and a group using both lists, and 100 known clients.
+fn policy() -> Policy {
+    let mut builder = FilterBuilder::new();
+    for list in 0..2 {
+        let mut text = String::new();
+        for i in 0..50_000 {
+            writeln!(text, "||ad{i}.list{list}.example^").unwrap();
+        }
+        builder.add_list(Source::new(list).unwrap(), &text);
+    }
+    let both: Sources = (0..2).map(|i| Source::new(i).unwrap()).collect();
+    let clients = (0..100_u8)
+        .map(|i| ClientPolicy {
+            id: format!("client{i}").into(),
+            addresses: vec![IpAddr::from(Ipv4Addr::new(192, 168, 1, i)).into_cidr()],
+            group: usize::from(i % 2),
+        })
+        .collect();
+    Policy::new(PolicyParts {
+        filter: Arc::new(builder.build().unwrap()),
+        source_ids: vec!["a".into(), "b".into()],
+        groups: vec![
+            GroupPolicy::new("default", Sources::NONE.with(Source::new(0).unwrap())),
+            GroupPolicy::new("strict", both),
+        ],
+        clients,
+        block_response: BlockResponse::NullIp,
+        blocked_ttl: 10,
+        protection: true,
+    })
+    .unwrap()
+}
+
+trait IntoCidr {
+    fn into_cidr(self) -> goethite_resolver::Cidr;
+}
+
+impl IntoCidr for IpAddr {
+    fn into_cidr(self) -> goethite_resolver::Cidr {
+        goethite_resolver::Cidr::host(self)
+    }
+}
+
 /// `Resolver::resolve` for a cached name: the full pipeline in front of the
 /// network, which completes without waiting, so it is polled directly.
 fn pipeline(c: &mut Criterion) {
     let unused = UpstreamConfig::udp("127.0.0.1:9".parse().unwrap());
-    let forwarder = Forwarder::new(ForwarderConfig::new(vec![unused])).unwrap();
-    let resolver = Resolver::new(Vec::new())
+    let bare = Resolver::new(Vec::new())
         .with_cache(filled())
-        .with_forwarder(forwarder);
+        .with_forwarder(Forwarder::new(ForwarderConfig::new(vec![unused.clone()])).unwrap());
+    let policed = Resolver::new(Vec::new())
+        .with_policy(Arc::new(PolicyState::new(policy())))
+        .with_cache(filled())
+        .with_forwarder(Forwarder::new(ForwarderConfig::new(vec![unused])).unwrap());
     let hit = query("host4242.example.");
+    let client = IpAddr::from(Ipv4Addr::new(192, 168, 1, 41));
     let mut cx = Context::from_waker(Waker::noop());
 
-    c.bench_function("resolve/cached answer", |b| {
-        b.iter(|| {
-            let mut future = pin!(resolver.resolve(black_box(&hit)));
-            match future.as_mut().poll(&mut cx) {
-                Poll::Ready(response) => black_box(response),
-                Poll::Pending => panic!("a cached answer should not wait"),
-            }
+    for (label, resolver) in [
+        ("resolve/cached answer", &bare),
+        (
+            "resolve/cached answer, 100k rules, groups, 100 clients",
+            &policed,
+        ),
+    ] {
+        c.bench_function(label, |b| {
+            b.iter(|| {
+                let mut future = pin!(resolver.resolve(black_box(&hit), client));
+                match future.as_mut().poll(&mut cx) {
+                    Poll::Ready(resolution) => black_box(resolution),
+                    Poll::Pending => panic!("a cached answer should not wait"),
+                }
+            });
         });
-    });
+    }
 }
 
 criterion_group!(benches, cache, pipeline);

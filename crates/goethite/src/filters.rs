@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use goethite_filter::{Filter, FilterBuilder, ListStats, Source};
-use goethite_resolver::Blocking;
+use goethite_resolver::{Policy, PolicyState};
 use tracing::{debug, error, info, warn};
 
 use crate::config::FilterSection;
@@ -18,24 +18,36 @@ use crate::lists::{ListStore, validate};
 /// List files and downloads larger than this many bytes are refused.
 pub const MAX_LIST_LEN: usize = 128 * 1024 * 1024;
 
-/// Reads the configured rules and lists and compiles them, for startup: if
-/// compiling fails, nothing is blocked rather than nothing resolving.
-pub fn build(section: &FilterSection) -> Filter {
-    compile(section).unwrap_or_else(Filter::empty)
+/// Reads the configured rules and lists and compiles them into a policy for
+/// startup: if compiling fails, nothing is blocked rather than nothing
+/// resolving.
+pub fn build(section: &FilterSection) -> Policy {
+    compile(section).unwrap_or_else(|| policy(section, Filter::empty(), Vec::new()))
 }
 
 /// Reads the configured rules and lists and compiles them.
 ///
 /// A list that cannot be read is logged and skipped rather than failing:
 /// filtering must never take resolution down. `None` if compiling failed.
-fn compile(section: &FilterSection) -> Option<Filter> {
+fn compile(section: &FilterSection) -> Option<Policy> {
     match compile_lists(section, false) {
-        Ok(filter) => Some(filter),
+        Ok((filter, ids)) => Some(policy(section, filter, ids)),
         Err(err) => {
             error!("{err:#}");
             None
         }
     }
+}
+
+/// One group for everyone, using every source.
+fn policy(section: &FilterSection, filter: Filter, ids: Vec<Arc<str>>) -> Policy {
+    Policy::simple(
+        Arc::new(filter),
+        ids,
+        section.block_response.to_block_response(),
+        section.blocked_ttl,
+        section.enabled,
+    )
 }
 
 /// Reads and compiles the configured rules and lists like startup does, but
@@ -45,9 +57,10 @@ pub fn check(section: &FilterSection) -> Result<()> {
 }
 
 /// Compiles the rules and lists; a list that cannot be read is an error if
-/// `strict`, and skipped otherwise.
-fn compile_lists(section: &FilterSection, strict: bool) -> Result<Filter> {
+/// `strict`, and skipped otherwise. Returns the filter and each source's ID.
+fn compile_lists(section: &FilterSection, strict: bool) -> Result<(Filter, Vec<Arc<str>>)> {
     let mut builder = FilterBuilder::new();
+    let mut ids: Vec<Arc<str>> = vec!["config".into()];
     // Config rules are source 0, each list the next one. Every source
     // applies to every client until groups exist.
     let sources = (0..).map_while(Source::new);
@@ -63,6 +76,7 @@ fn compile_lists(section: &FilterSection, strict: bool) -> Result<Filter> {
             error!(list = %name, "too many filter lists; skipping this one");
             continue;
         };
+        ids.push(name.as_str().into());
         let Some(path) = path else {
             info!(list = %name, "not downloaded yet");
             continue;
@@ -82,7 +96,7 @@ fn compile_lists(section: &FilterSection, strict: bool) -> Result<Filter> {
         memory_kib = filter.memory_bytes() / 1024,
         "filter ready"
     );
-    Ok(filter)
+    Ok((filter, ids))
 }
 
 /// Each configured list's source, for logs, and the file to read it from:
@@ -180,7 +194,7 @@ pub async fn update(section: &FilterSection, downloader: &Downloader) -> bool {
 /// Downloads lists now and then every `update_hours` (with up to 10% random
 /// delay, so many installations do not hit list servers at once), and
 /// rebuilds the filter when one changed.
-pub fn spawn_updates(blocking: Arc<Blocking>, section: FilterSection, downloader: Downloader) {
+pub fn spawn_updates(state: Arc<PolicyState>, section: FilterSection, downloader: Downloader) {
     if !section.list.iter().any(|list| list.url.is_some()) {
         return;
     }
@@ -188,7 +202,7 @@ pub fn spawn_updates(blocking: Arc<Blocking>, section: FilterSection, downloader
     tokio::spawn(async move {
         loop {
             if update(&section, &downloader).await {
-                reload(&blocking, section.clone()).await;
+                reload(&state, section.clone()).await;
             }
             let jitter = interval.mul_f64(rand::random::<f64>() * 0.1);
             tokio::time::sleep(interval.saturating_add(jitter)).await;
@@ -198,9 +212,9 @@ pub fn spawn_updates(blocking: Arc<Blocking>, section: FilterSection, downloader
 
 /// Rebuilds the filter from `section` off the async runtime and swaps it in.
 /// If compiling fails, the current filter stays.
-pub async fn reload(blocking: &Arc<Blocking>, section: FilterSection) {
+pub async fn reload(state: &Arc<PolicyState>, section: FilterSection) {
     match tokio::task::spawn_blocking(move || compile(&section)).await {
-        Ok(Some(filter)) => blocking.replace(filter),
+        Ok(Some(policy)) => state.replace(policy),
         Ok(None) => error!("filter reload failed; keeping the current filter"),
         Err(err) => error!(%err, "filter reload failed; keeping the current filter"),
     }
@@ -233,7 +247,8 @@ mod tests {
             ],
             ..FilterSection::default()
         };
-        let filter = build(&section);
+        let policy = build(&section);
+        let filter = policy.filter();
         std::fs::remove_dir_all(&dir).unwrap();
         assert_eq!(filter.rule_count(), 2);
         let blocked = |name: &str| {
@@ -259,7 +274,11 @@ mod tests {
             err.to_string().contains("cannot open filter list"),
             "{err:#}"
         );
-        assert_eq!(build(&section).rule_count(), 0, "startup skips it instead");
+        assert_eq!(
+            build(&section).filter().rule_count(),
+            0,
+            "startup skips it instead"
+        );
     }
 
     #[test]
@@ -414,6 +433,7 @@ mod update_tests {
     fn verdict(section: &FilterSection, name: &str) -> Verdict {
         compile(section)
             .unwrap()
+            .filter()
             .check(&name.parse().unwrap(), Sources::ALL)
     }
 

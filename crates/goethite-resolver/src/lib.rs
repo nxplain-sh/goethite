@@ -1,31 +1,42 @@
 //! Query resolution for goethite.
 //!
 //! The [`Resolver`] runs the resolution pipeline for one query: query-type
-//! policy, local records, the filter check, the cache, then forwarding to
-//! upstream resolvers. Later phases add client identification and groups in
-//! front, CNAME uncloaking, and recursion with DNSSEC validation.
+//! policy, client identification and its group's policy, local records, the
+//! filter check, safe search, the cache, forwarding to upstream resolvers,
+//! and CNAME uncloaking. Each answer comes with a [`Resolution`] saying how
+//! it came about. Later phases add recursion with DNSSEC validation.
 
 #![forbid(unsafe_code)]
 
 mod blocking;
 mod cache;
+mod cidr;
 mod forward;
+mod policy;
 mod rebinding;
+mod safe_search;
 mod tls;
 
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 
+use goethite_filter::{Action, Match, Sources, Verdict};
 use tracing::debug;
 
 use goethite_proto::{
     Edns, Name, NameError, Query, Question, Record, RecordClass, RecordType, Response, ResponseCode,
 };
 
-pub use blocking::{BlockResponse, Blocking};
+pub use blocking::BlockResponse;
 pub use cache::{Cache, CacheConfig, CacheStats, MAX_CACHED_RECORDS, MAX_CNAME_CHAIN, MAX_ENTRIES};
+pub use cidr::{Cidr, CidrError};
 pub use forward::{
     Forwarder, ForwarderConfig, ForwarderError, MAX_UPSTREAMS, Transport, UpstreamConfig,
+    UpstreamStatus,
+};
+pub use policy::{
+    ClientPolicy, GroupPolicy, MAX_SCHEDULES, Policy, PolicyError, PolicyParts, PolicyState,
+    ScheduledSources,
 };
 pub use rebinding::{DEFAULT_PRIVATE_DOMAINS, RebindingProtection, is_private};
 pub use tls::{TlsError, TlsRoots, tls_client_config};
@@ -38,6 +49,9 @@ pub const TEST_ADDR: Ipv4Addr = Ipv4Addr::new(127, 0, 0, 53);
 
 /// Time to live of the built-in test record, in seconds.
 pub const TEST_TTL: u32 = 60;
+
+/// Time to live of the CNAME that sends a search host to its safe endpoint.
+const SAFE_SEARCH_TTL: u32 = 60;
 
 /// The built-in record `goethite.test. 60 IN A 127.0.0.53`.
 ///
@@ -64,10 +78,78 @@ pub(crate) fn restore_question_case(response: &mut Response, name: &Name) {
     }
 }
 
+/// How an answer came about, for the query log and metrics.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Outcome {
+    /// From goethite's own records.
+    Local,
+    /// Refused or rejected by policy: a zone transfer, a meta type, a class
+    /// other than `IN`, or no upstream configured.
+    Rejected,
+    /// Blocked by the filter, possibly through a CNAME;
+    /// [`Resolution::filter`] says by what.
+    Blocked,
+    /// A search host sent to its safe endpoint.
+    SafeSearch,
+    /// From the cache.
+    Cached,
+    /// From the upstream with this index.
+    Upstream(usize),
+    /// No upstream answered in time: SERVFAIL.
+    Failed,
+}
+
+/// The filter rule that applied to a query.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FilterHit {
+    /// A block, or an exception that kept the name from being blocked.
+    pub action: Action,
+    /// The deciding rule.
+    pub matched: Match,
+    /// The ID of the rule's source, such as a list ID.
+    pub source: Option<Arc<str>>,
+    /// For a block found by CNAME uncloaking, the CNAME target that matched.
+    pub cname: Option<Name>,
+}
+
+impl FilterHit {
+    /// The rule in AdGuard syntax, for a query for `name`.
+    pub fn rule_text(&self, name: &Name) -> String {
+        self.matched
+            .rule_text(self.cname.as_ref().unwrap_or(name), self.action)
+    }
+}
+
+/// An answer and how it came about.
+#[derive(Clone, Debug)]
+pub struct Resolution {
+    /// The response for the client.
+    pub response: Response,
+    /// How it came about.
+    pub outcome: Outcome,
+    /// The filter rule that applied, if one did.
+    pub filter: Option<FilterHit>,
+    /// The known client that asked, by ID.
+    pub client: Option<Arc<str>>,
+    /// The asking client's group, by ID.
+    pub group: Option<Arc<str>>,
+}
+
+/// What applies to the client asking a query.
+struct Asker {
+    policy: Option<Arc<Policy>>,
+    client: Option<Arc<str>>,
+    group: Option<Arc<str>>,
+    filtering: bool,
+    safe_search: bool,
+    sources: Sources,
+}
+
 /// Answers queries.
 pub struct Resolver {
     local: Vec<Record>,
-    blocking: Option<Arc<Blocking>>,
+    policy: Option<Arc<PolicyState>>,
     rebinding: Option<RebindingProtection>,
     cache: Option<Cache>,
     forwarder: Option<Forwarder>,
@@ -79,18 +161,18 @@ impl Resolver {
     pub fn new(local: Vec<Record>) -> Self {
         Self {
             local,
-            blocking: None,
+            policy: None,
             rebinding: None,
             cache: None,
             forwarder: None,
         }
     }
 
-    /// Blocks what `blocking`'s filter blocks. The caller keeps its own
-    /// handle to swap in new filters.
+    /// Filters and identifies clients by `policy`. The caller keeps its own
+    /// handle to swap in new policies, set the active schedules and pause.
     #[must_use]
-    pub fn with_blocking(mut self, blocking: Arc<Blocking>) -> Self {
-        self.blocking = Some(blocking);
+    pub fn with_policy(mut self, policy: Arc<PolicyState>) -> Self {
+        self.policy = Some(policy);
         self
     }
 
@@ -120,7 +202,12 @@ impl Resolver {
         self
     }
 
-    /// Answers `query`.
+    /// The forwarder, if one is configured.
+    pub fn forwarder(&self) -> Option<&Forwarder> {
+        self.forwarder.as_ref()
+    }
+
+    /// Answers `query` from `client`.
     ///
     /// - zone transfers (`AXFR`, `IXFR`): `REFUSED`, since none are offered
     ///   (RFC 5936);
@@ -131,50 +218,133 @@ impl Resolver {
     ///   `REFUSED`, never forwarded;
     /// - a name with local records: those records of the asked type,
     ///   authoritatively, or an empty `NOERROR` (NODATA) if there are none;
-    /// - a name the filter blocks: the configured block response, even if an
-    ///   answer is cached;
+    /// - a name the filter blocks for the client's group: the configured
+    ///   block response, even if an answer is cached;
+    /// - a search host, when the group has safe search on: a CNAME to the
+    ///   engine's safe endpoint and that endpoint's records;
     /// - a fresh cached answer, with TTLs counted down;
     /// - anything else: forwarded upstream, with private addresses removed
     ///   for public names if rebinding protection is on, and cached if
     ///   cacheable; or `REFUSED` without a forwarder.
-    pub async fn resolve(&self, query: &Query) -> Response {
-        let mut response = self.answer(query).await;
+    ///
+    /// An answer whose CNAME chain leads to a name the filter blocks is
+    /// blocked too (CNAME uncloaking), unless an exception matched the name
+    /// asked for.
+    pub async fn resolve(&self, query: &Query, client: IpAddr) -> Resolution {
+        let asker = self.asker(client);
+        let (mut response, outcome, filter) = self.answer(query, &asker).await;
         response.recursion_available = self.forwarder.is_some();
-        response
+        Resolution {
+            response,
+            outcome,
+            filter,
+            client: asker.client,
+            group: asker.group,
+        }
     }
 
-    async fn answer(&self, query: &Query) -> Response {
+    fn asker(&self, client: IpAddr) -> Asker {
+        let Some(state) = &self.policy else {
+            return Asker {
+                policy: None,
+                client: None,
+                group: None,
+                filtering: false,
+                safe_search: false,
+                sources: Sources::NONE,
+            };
+        };
+        let policy = state.policy();
+        let (known, group) = policy.identify(client);
+        let on = policy.protection() && !state.is_paused();
+        let asker = Asker {
+            client: known.map(|known| Arc::clone(&known.id)),
+            group: Some(Arc::clone(&group.id)),
+            filtering: on && group.filtering,
+            safe_search: on && group.safe_search,
+            sources: group.sources_now(state.active_schedules()),
+            policy: None,
+        };
+        Asker {
+            policy: Some(policy),
+            ..asker
+        }
+    }
+
+    async fn answer(&self, query: &Query, asker: &Asker) -> (Response, Outcome, Option<FilterHit>) {
         let question = &query.question;
+        let rejected = |rcode| (Response::for_query(query, rcode), Outcome::Rejected, None);
         if matches!(question.qtype, RecordType::AXFR | RecordType::IXFR) {
-            return Response::for_query(query, ResponseCode::REFUSED);
+            return rejected(ResponseCode::REFUSED);
         }
         if is_meta_qtype(question.qtype) {
-            return Response::for_query(query, ResponseCode::FORM_ERR);
+            return rejected(ResponseCode::FORM_ERR);
         }
         if question.qclass != RecordClass::IN {
-            return Response::for_query(query, ResponseCode::REFUSED);
+            return rejected(ResponseCode::REFUSED);
         }
         if let Some(response) = self.local_answer(query) {
-            return response;
+            return (response, Outcome::Local, None);
         }
-        if let Some(blocking) = &self.blocking
-            && blocking.check(&question.name).is_blocked()
+        let mut exception = None;
+        if let (true, Some(policy)) = (asker.filtering, &asker.policy) {
+            match policy.filter().check(&question.name, asker.sources) {
+                Verdict::Blocked(matched) => {
+                    debug!(name = %question.name, qtype = %question.qtype, "blocked");
+                    return blocked(query, policy, matched, None);
+                }
+                Verdict::Allowed(matched) => {
+                    exception = Some(hit(policy, Action::Allow, matched, None));
+                }
+                Verdict::Pass => {}
+            }
+        }
+        if self.forwarder.is_none() {
+            return rejected(ResponseCode::REFUSED);
+        }
+        if asker.safe_search
+            && let Some(target) = safe_search::target(&question.name)
         {
-            debug!(name = %question.name, qtype = %question.qtype, "blocked");
-            return blocking.respond(query);
+            return (
+                self.safe_search(query, target).await,
+                Outcome::SafeSearch,
+                exception,
+            );
+        }
+        let (response, outcome) = self.cached_or_forwarded(query).await;
+        if let (true, None, Some(policy)) = (asker.filtering, &exception, &asker.policy) {
+            let targets = response.answers.iter().filter_map(Record::cname_target);
+            for target in targets.take(MAX_CNAME_CHAIN) {
+                match policy.filter().check(&target, asker.sources) {
+                    Verdict::Blocked(matched) => {
+                        debug!(name = %question.name, cname = %target, "blocked through a CNAME");
+                        return blocked(query, policy, matched, Some(target));
+                    }
+                    Verdict::Allowed(_) | Verdict::Pass => {}
+                }
+            }
+        }
+        (response, outcome, exception)
+    }
+
+    /// The answer from the cache, or else from the upstreams (with rebinding
+    /// protection applied, then cached).
+    async fn cached_or_forwarded(&self, query: &Query) -> (Response, Outcome) {
+        if let Some(response) = self.cache.as_ref().and_then(|cache| cache.get(query)) {
+            return (response, Outcome::Cached);
         }
         let Some(forwarder) = &self.forwarder else {
-            return Response::for_query(query, ResponseCode::REFUSED);
+            return (
+                Response::for_query(query, ResponseCode::REFUSED),
+                Outcome::Rejected,
+            );
         };
-        if let Some(response) = self.cache.as_ref().and_then(|cache| cache.get(query)) {
-            return response;
-        }
-        let mut response = forwarder.forward(query).await;
+        let (mut response, upstream) = forwarder.forward_from(query).await;
         if let Some(protection) = &self.rebinding {
-            let removed = protection.apply(&question.name, &mut response);
+            let removed = protection.apply(&query.question.name, &mut response);
             if removed > 0 {
                 debug!(
-                    name = %question.name,
+                    name = %query.question.name,
                     removed,
                     "rebinding protection removed private addresses"
                 );
@@ -183,6 +353,26 @@ impl Resolver {
         if let Some(cache) = &self.cache {
             cache.insert(query, &response);
         }
+        (
+            response,
+            upstream.map_or(Outcome::Failed, Outcome::Upstream),
+        )
+    }
+
+    /// A CNAME from the asked name to `target`, followed by `target`'s own
+    /// answer for the same type.
+    async fn safe_search(&self, query: &Query, target: &Name) -> Response {
+        let mut inner = query.clone();
+        inner.question.name = target.clone();
+        let (answer, _) = self.cached_or_forwarded(&inner).await;
+        let mut response = Response::for_query(query, answer.rcode);
+        response.answers.push(Record::cname(
+            query.question.name.clone(),
+            SAFE_SEARCH_TTL,
+            target.clone(),
+        ));
+        response.answers.extend(answer.answers);
+        response.authority = answer.authority;
         response
     }
 
@@ -207,14 +397,8 @@ impl Resolver {
             };
             let response = if let Some(response) = self.local_answer(&query) {
                 response
-            } else if let Some(response) = self.cache.as_ref().and_then(|cache| cache.get(&query)) {
-                response
-            } else if let Some(forwarder) = &self.forwarder {
-                let response = forwarder.forward(&query).await;
-                if let Some(cache) = &self.cache {
-                    cache.insert(&query, &response);
-                }
-                response
+            } else if self.forwarder.is_some() || self.cache.is_some() {
+                self.cached_or_forwarded(&query).await.0
             } else {
                 continue;
             };
@@ -246,6 +430,27 @@ impl Resolver {
             .cloned()
             .collect();
         Some(response)
+    }
+}
+
+/// The block response for `query`, with the rule that decided it.
+fn blocked(
+    query: &Query,
+    policy: &Policy,
+    matched: Match,
+    cname: Option<Name>,
+) -> (Response, Outcome, Option<FilterHit>) {
+    let response = blocking::blocked_response(query, policy.block_response(), policy.blocked_ttl());
+    let hit = hit(policy, Action::Block, matched, cname);
+    (response, Outcome::Blocked, Some(hit))
+}
+
+fn hit(policy: &Policy, action: Action, matched: Match, cname: Option<Name>) -> FilterHit {
+    FilterHit {
+        action,
+        matched,
+        source: policy.source_id(matched.source).cloned(),
+        cname,
     }
 }
 
@@ -290,10 +495,11 @@ mod tests {
 
     /// Resolves without a runtime: the paths tested here never wait.
     fn resolve(resolver: &Resolver, query: &Query) -> Response {
-        let mut future = std::pin::pin!(resolver.resolve(query));
+        let client = IpAddr::from(Ipv4Addr::LOCALHOST);
+        let mut future = std::pin::pin!(resolver.resolve(query, client));
         let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
         match future.as_mut().poll(&mut cx) {
-            std::task::Poll::Ready(response) => response,
+            std::task::Poll::Ready(resolution) => resolution.response,
             std::task::Poll::Pending => panic!("local resolution should not wait"),
         }
     }

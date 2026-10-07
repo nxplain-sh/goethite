@@ -16,12 +16,17 @@ cargo bench -p goethite-resolver --bench cache
 | `cache/get miss (10k entries)` | A lookup that misses |
 | `cache/insert (10k entries)` | Deciding what to cache and storing it, evicting when a shard is full |
 | `resolve/cached answer` | The whole pipeline in front of the network for a cached name: query-type policy, local records, cache |
+| `resolve/cached answer, 100k rules, groups, 100 clients` | The same with a policy: client identification among 100 clients, the group's sources, a filter check against 100,000 rules in two lists, CNAME uncloaking |
 
 Results:
 
 | Date | Commit | Machine | hit | miss | insert | resolve (cached) |
 | --- | --- | --- | --- | --- | --- | --- |
 | 2026-10-07 | M2 (sharded TTL cache) | Apple M3 Pro, macOS, `cargo bench` (release) | 306 ns | 72 ns | 458 ns | 319 ns |
+| 2026-10-07 | Phase 2 policy (groups, sources) | same | 303 ns | 99 ns | 449 ns | 341 ns; with policy 393 ns |
+
+Identifying the client, choosing the group's sources and checking the filter add about 50 ns to
+a cached answer.
 
 ### Filter
 

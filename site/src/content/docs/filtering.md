@@ -81,6 +81,14 @@ delay so many installations do not hit list servers at the same moment:
 - Copies are kept in `cache_dir` and written atomically, so goethite starts with them even when
   it cannot reach the network.
 
+## CNAME uncloaking
+
+Some trackers hide behind a CNAME: `metrics.shop.example` is an alias for
+`collect.tracker.example`, so blocking `tracker.example` alone would miss it. goethite checks every
+CNAME target in an answer against the same rules and blocks the answer if one of them is blocked,
+whether the answer came from an upstream or from the cache. The query log names the CNAME that
+matched. An exception for the name asked for (`@@||shop.example^`) wins over its CNAMEs.
+
 ## Reloading
 
 Send `SIGHUP` to re-read the list files and the last downloaded copies without restarting:
@@ -97,5 +105,5 @@ re-read; restart for config changes.
 ## Limits
 
 - List files up to 128 MiB, lines up to 4096 bytes.
-- At most 5,000,000 rules in total, 64 list files and 10,000 rules in the config.
+- At most 5,000,000 rules in total, 63 list files and 10,000 rules in the config.
 - A million rules take about 6 MiB of memory, and a lookup takes well under a microsecond.

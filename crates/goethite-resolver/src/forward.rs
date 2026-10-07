@@ -64,7 +64,7 @@ pub enum Transport {
 }
 
 /// One upstream resolver.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UpstreamConfig {
     /// Address and port of the upstream.
     pub address: SocketAddr,
@@ -174,6 +174,17 @@ pub struct Forwarder {
     attempt_timeout: Duration,
     total_timeout: Duration,
     codec: HickoryCodec,
+}
+
+/// An upstream and how it is doing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UpstreamStatus {
+    /// How it is configured.
+    pub config: UpstreamConfig,
+    /// False while it is skipped after repeated failures.
+    pub healthy: bool,
+    /// Failures since its last answer.
+    pub consecutive_failures: u32,
 }
 
 struct Upstream {
@@ -288,9 +299,15 @@ impl Forwarder {
     /// NOERROR or NXDOMAIN moves on to the next upstream. If none gives a
     /// usable answer in time, the result is SERVFAIL.
     pub async fn forward(&self, query: &Query) -> Response {
+        self.forward_from(query).await.0
+    }
+
+    /// Like [`Forwarder::forward`], also returning the index of the upstream
+    /// that answered, or `None` for SERVFAIL.
+    pub async fn forward_from(&self, query: &Query) -> (Response, Option<usize>) {
         let start = Instant::now();
         let deadline = start.checked_add(self.total_timeout).unwrap_or(start);
-        for upstream in self.in_order(start) {
+        for (index, upstream) in self.in_order(start) {
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
                 break;
@@ -308,7 +325,7 @@ impl Forwarder {
                     ) =>
                 {
                     upstream.succeeded();
-                    return to_client(query, response);
+                    return (to_client(query, response), Some(index));
                 }
                 Ok(Ok(response)) => {
                     debug!(%address, rcode = %response.rcode, "upstream could not answer");
@@ -331,15 +348,32 @@ impl Forwarder {
         );
         let mut response = Response::for_query(query, ResponseCode::SERV_FAIL);
         response.recursion_available = true;
-        response
+        (response, None)
     }
 
     /// Healthy upstreams first, then those that keep failing, each group in
-    /// configured order.
-    fn in_order(&self, now: Instant) -> impl Iterator<Item = &Upstream> {
-        let healthy = self.upstreams.iter().filter(move |u| !u.is_down(now));
-        let down = self.upstreams.iter().filter(move |u| u.is_down(now));
+    /// configured order, with their index.
+    fn in_order(&self, now: Instant) -> impl Iterator<Item = (usize, &Upstream)> {
+        let all = self.upstreams.iter().enumerate();
+        let healthy = all.clone().filter(move |(_, u)| !u.is_down(now));
+        let down = all.filter(move |(_, u)| u.is_down(now));
         healthy.chain(down)
+    }
+
+    /// The upstreams, in configured order, and how they are doing.
+    pub fn upstreams(&self) -> Vec<UpstreamStatus> {
+        let now = Instant::now();
+        self.upstreams
+            .iter()
+            .map(|upstream| UpstreamStatus {
+                config: upstream.config.clone(),
+                healthy: !upstream.is_down(now),
+                consecutive_failures: upstream
+                    .health
+                    .lock()
+                    .map_or(0, |health| health.consecutive_failures),
+            })
+            .collect()
     }
 
     async fn exchange(

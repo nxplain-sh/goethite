@@ -10,20 +10,24 @@
     reason = "test helpers; the no-panic rules cover non-test code"
 )]
 
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
-use goethite_filter::{Filter, FilterBuilder, Source};
+use goethite_filter::{Action, Filter, FilterBuilder, Source, Sources};
 use goethite_proto::{Edns, Name, Query, Question, RecordClass, RecordType, ResponseCode};
 use goethite_resolver::{
-    BlockResponse, Blocking, Cache, CacheConfig, Forwarder, ForwarderConfig, RebindingProtection,
-    Resolver, Transport, UpstreamConfig,
+    BlockResponse, Cache, CacheConfig, ClientPolicy, Forwarder, ForwarderConfig, GroupPolicy,
+    Outcome, Policy, PolicyParts, PolicyState, RebindingProtection, Resolution, Resolver,
+    ScheduledSources, Transport, UpstreamConfig,
 };
 use hickory_proto::op::{self, Message, MessageType, OpCode};
 use hickory_proto::rr::{self, RData, rdata};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, UdpSocket};
+
+/// The address queries come from, unless a test says otherwise.
+const CLIENT: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
 
 /// Turns one query into the messages the fake sends back, in order.
 type Script = Arc<dyn Fn(&Message) -> Vec<Message> + Send + Sync>;
@@ -149,7 +153,7 @@ fn forwarder(upstreams: Vec<UpstreamConfig>) -> Forwarder {
     Forwarder::new(config).unwrap()
 }
 
-fn ip(response: &goethite_proto::Response) -> Option<std::net::IpAddr> {
+fn ip(response: &goethite_proto::Response) -> Option<IpAddr> {
     response
         .answers
         .first()
@@ -371,9 +375,12 @@ async fn cached_answers_are_served_without_asking_upstream() {
         .with_cache(Cache::new(CacheConfig::default()))
         .with_forwarder(forwarder(vec![UpstreamConfig::udp(upstream.addr)]));
 
-    let first = resolver.resolve(&query("cached.example.")).await;
+    let first = resolver
+        .resolve(&query("cached.example."), CLIENT)
+        .await
+        .response;
     let second_query = query("CACHED.Example.");
-    let second = resolver.resolve(&second_query).await;
+    let second = resolver.resolve(&second_query, CLIENT).await.response;
 
     assert_eq!(upstream.seen.lock().unwrap().len(), 1, "one upstream query");
     assert_eq!(ip(&first), Some(Ipv4Addr::new(192, 0, 2, 90).into()));
@@ -394,53 +401,100 @@ async fn failures_are_not_cached() {
     let resolver = Resolver::new(Vec::new())
         .with_cache(Cache::new(CacheConfig::default()))
         .with_forwarder(forwarder(vec![UpstreamConfig::udp(dead.addr)]));
-    let response = resolver.resolve(&query("down.example.")).await;
+    let response = resolver
+        .resolve(&query("down.example."), CLIENT)
+        .await
+        .response;
     assert_eq!(response.rcode, ResponseCode::SERV_FAIL);
     assert!(resolver.cache().unwrap().is_empty());
 }
 
 fn filter(list: &str) -> Filter {
+    filter_from(&[list])
+}
+
+/// A filter with one source per list, in order.
+fn filter_from(lists: &[&str]) -> Filter {
     let mut builder = FilterBuilder::new();
-    builder.add_list(Source::new(0).unwrap(), list);
+    for (index, list) in lists.iter().enumerate() {
+        builder.add_list(Source::new(index).unwrap(), list);
+    }
     builder.build().unwrap()
+}
+
+/// One group for everyone; the source is called `ads`.
+fn simple(filter: Filter) -> Policy {
+    Policy::simple(
+        Arc::new(filter),
+        vec!["ads".into()],
+        BlockResponse::NullIp,
+        10,
+        true,
+    )
+}
+
+fn sources(indexes: &[usize]) -> Sources {
+    indexes.iter().map(|&i| Source::new(i).unwrap()).collect()
 }
 
 #[tokio::test]
 async fn blocked_names_never_reach_the_upstream() {
     let upstream = fake(always(Ipv4Addr::new(192, 0, 2, 70)), silent()).await;
-    let blocking = Arc::new(Blocking::new(
-        filter("||ads.example^\n@@||ok.ads.example^\n"),
-        BlockResponse::NullIp,
-        10,
-    ));
+    let state = Arc::new(PolicyState::new(simple(filter(
+        "||ads.example^\n@@||ok.ads.example^\n",
+    ))));
     let resolver = Resolver::new(Vec::new())
-        .with_blocking(Arc::clone(&blocking))
+        .with_policy(Arc::clone(&state))
         .with_cache(Cache::new(CacheConfig::default()))
         .with_forwarder(forwarder(vec![UpstreamConfig::udp(upstream.addr)]));
 
-    let blocked = resolver.resolve(&query("x.ADS.example.")).await;
+    let blocked = resolver.resolve(&query("x.ADS.example."), CLIENT).await;
+    assert_eq!(blocked.outcome, Outcome::Blocked);
+    let hit = blocked.filter.as_ref().unwrap();
+    assert_eq!(hit.action, Action::Block);
+    assert_eq!(hit.source.as_deref(), Some("ads"));
+    assert_eq!(
+        hit.rule_text(&"x.ADS.example.".parse().unwrap()),
+        "||ads.example^"
+    );
+    assert_eq!(blocked.group.as_deref(), Some("default"));
+    assert_eq!(blocked.client, None);
+    let blocked = blocked.response;
     assert_eq!(blocked.rcode, ResponseCode::NO_ERROR);
     assert_eq!(ip(&blocked), Some(Ipv4Addr::UNSPECIFIED.into()));
     assert_eq!(blocked.answers[0].ttl(), 10);
     assert!(blocked.recursion_available);
 
-    let exempt = resolver.resolve(&query("ok.ads.example.")).await;
-    assert_eq!(ip(&exempt), Some(Ipv4Addr::new(192, 0, 2, 70).into()));
+    let exempt = resolver.resolve(&query("ok.ads.example."), CLIENT).await;
+    assert_eq!(exempt.outcome, Outcome::Upstream(0));
+    assert_eq!(exempt.filter.as_ref().unwrap().action, Action::Allow);
+    assert_eq!(
+        ip(&exempt.response),
+        Some(Ipv4Addr::new(192, 0, 2, 70).into())
+    );
     assert_eq!(
         upstream.seen_names().len(),
         1,
         "only the exception went upstream"
     );
+    let again = resolver.resolve(&query("ok.ads.example."), CLIENT).await;
+    assert_eq!(again.outcome, Outcome::Cached);
 
-    // A new filter applies at once, without a restart...
-    blocking.replace(Filter::empty());
-    let unblocked = resolver.resolve(&query("x.ads.example.")).await;
-    assert_eq!(ip(&unblocked), Some(Ipv4Addr::new(192, 0, 2, 70).into()));
+    // A new policy applies at once, without a restart...
+    state.replace(simple(Filter::empty()));
+    let unblocked = resolver.resolve(&query("x.ads.example."), CLIENT).await;
+    assert_eq!(
+        ip(&unblocked.response),
+        Some(Ipv4Addr::new(192, 0, 2, 70).into())
+    );
 
     // ...including to names whose answers are already cached.
-    blocking.replace(filter("||ok.ads.example^\n"));
-    let now_blocked = resolver.resolve(&query("ok.ads.example.")).await;
-    assert_eq!(ip(&now_blocked), Some(Ipv4Addr::UNSPECIFIED.into()));
+    state.replace(simple(filter("||ok.ads.example^\n")));
+    let now_blocked = resolver.resolve(&query("ok.ads.example."), CLIENT).await;
+    assert_eq!(
+        ip(&now_blocked.response),
+        Some(Ipv4Addr::UNSPECIFIED.into())
+    );
     assert_eq!(upstream.seen_names().len(), 2);
 }
 
@@ -452,13 +506,221 @@ async fn rebinding_protection_strips_private_answers_for_public_names() {
         .with_cache(Cache::new(CacheConfig::default()))
         .with_forwarder(forwarder(vec![UpstreamConfig::udp(upstream.addr)]));
 
-    let attack = resolver.resolve(&query("rebind.attacker.example.")).await;
+    let attack = resolver
+        .resolve(&query("rebind.attacker.example."), CLIENT)
+        .await
+        .response;
     assert_eq!(attack.rcode, ResponseCode::NO_ERROR);
     assert_eq!(attack.answers, vec![], "the private address is removed");
     // Asking again, from the cache or upstream, does not bring it back.
-    let again = resolver.resolve(&query("rebind.attacker.example.")).await;
+    let again = resolver
+        .resolve(&query("rebind.attacker.example."), CLIENT)
+        .await
+        .response;
     assert_eq!(again.answers, vec![]);
 
-    let router = resolver.resolve(&query("router.lan.")).await;
+    let router = resolver
+        .resolve(&query("router.lan."), CLIENT)
+        .await
+        .response;
     assert_eq!(ip(&router), Some(Ipv4Addr::new(192, 168, 1, 1).into()));
+}
+
+/// Sources: 0 is ads, 1 is social media. The default group uses ads; the
+/// kids group (10.0.0.2 and 10.0.1.0/24) uses ads, and social media while
+/// schedule 2 is active, with safe search.
+fn grouped() -> Policy {
+    let mut kids = GroupPolicy::new("kids", sources(&[0]));
+    kids.scheduled.push(ScheduledSources {
+        schedule: 2,
+        sources: sources(&[1]),
+    });
+    kids.safe_search = true;
+    let mut adults = GroupPolicy::new("adults", sources(&[0, 1]));
+    adults.filtering = false;
+    Policy::new(PolicyParts {
+        filter: Arc::new(filter_from(&["||ads.example^\n", "||social.example^\n"])),
+        source_ids: vec!["ads".into(), "social".into()],
+        groups: vec![GroupPolicy::new("default", sources(&[0])), kids, adults],
+        clients: vec![
+            ClientPolicy {
+                id: "tablet".into(),
+                addresses: vec!["10.0.0.2".parse().unwrap(), "10.0.1.0/24".parse().unwrap()],
+                group: 1,
+            },
+            ClientPolicy {
+                id: "laptop".into(),
+                addresses: vec!["10.0.0.3".parse().unwrap()],
+                group: 2,
+            },
+        ],
+        block_response: BlockResponse::NxDomain,
+        blocked_ttl: 10,
+        protection: true,
+    })
+    .unwrap()
+}
+
+fn from(ip: &str) -> IpAddr {
+    ip.parse().unwrap()
+}
+
+#[tokio::test]
+async fn groups_schedules_and_pausing() {
+    let upstream = fake(always(Ipv4Addr::new(192, 0, 2, 80)), silent()).await;
+    let state = Arc::new(PolicyState::new(grouped()));
+    let resolver = Resolver::new(Vec::new())
+        .with_policy(Arc::clone(&state))
+        .with_forwarder(forwarder(vec![UpstreamConfig::udp(upstream.addr)]));
+    let outcome = async |name: &str, client: &str| -> (Outcome, ResponseCode) {
+        let resolution: Resolution = resolver.resolve(&query(name), from(client)).await;
+        (resolution.outcome, resolution.response.rcode)
+    };
+    let blocked = (Outcome::Blocked, ResponseCode::NX_DOMAIN);
+
+    // Everyone gets the ads list; social media only applies to the kids'
+    // group while its schedule is active; the adults' group is unfiltered.
+    assert_eq!(outcome("ads.example.", "10.9.9.9").await, blocked);
+    assert_eq!(outcome("ads.example.", "10.0.1.77").await, blocked);
+    assert_eq!(
+        outcome("ads.example.", "10.0.0.3").await.0,
+        Outcome::Upstream(0)
+    );
+    assert_eq!(
+        outcome("social.example.", "10.0.0.2").await.0,
+        Outcome::Upstream(0)
+    );
+    state.set_active_schedules(1 << 2);
+    assert_eq!(outcome("social.example.", "10.0.0.2").await, blocked);
+    assert_eq!(
+        outcome("social.example.", "10.9.9.9").await.0,
+        Outcome::Upstream(0)
+    );
+    let resolution = resolver
+        .resolve(&query("social.example."), from("10.0.0.2"))
+        .await;
+    assert_eq!(resolution.client.as_deref(), Some("tablet"));
+    assert_eq!(resolution.group.as_deref(), Some("kids"));
+    assert_eq!(resolution.filter.unwrap().source.as_deref(), Some("social"));
+
+    // Pausing turns filtering off for everyone, until the pause ends.
+    state.pause(Some(SystemTime::now() + Duration::from_secs(60)));
+    assert_eq!(
+        outcome("ads.example.", "10.9.9.9").await.0,
+        Outcome::Upstream(0)
+    );
+    state.pause(None);
+    assert_eq!(outcome("ads.example.", "10.9.9.9").await, blocked);
+}
+
+/// Answers every query with a CNAME from the question name to `target`,
+/// then an A record for the target.
+fn cname_to(target: &'static str) -> Script {
+    script(move |q| {
+        let mut reply = answer(q, Ipv4Addr::new(192, 0, 2, 90));
+        let owner = q.queries[0].name().clone();
+        let target = rr::Name::from_ascii(target).unwrap();
+        reply.answers = vec![
+            rr::Record::from_rdata(owner, 300, RData::CNAME(rdata::CNAME(target.clone()))),
+            rr::Record::from_rdata(
+                target,
+                300,
+                RData::A(rdata::A(Ipv4Addr::new(192, 0, 2, 90))),
+            ),
+        ];
+        vec![reply]
+    })
+}
+
+#[tokio::test]
+async fn cname_uncloaking() {
+    let upstream = fake(cname_to("collect.tracker.example."), silent()).await;
+    let state = Arc::new(PolicyState::new(simple(filter(
+        "||tracker.example^\n@@||allowed.example^\n",
+    ))));
+    let resolver = Resolver::new(Vec::new())
+        .with_policy(Arc::clone(&state))
+        .with_cache(Cache::new(CacheConfig::default()))
+        .with_forwarder(forwarder(vec![UpstreamConfig::udp(upstream.addr)]));
+
+    let cloaked = resolver
+        .resolve(&query("metrics.shop.example."), CLIENT)
+        .await;
+    assert_eq!(cloaked.outcome, Outcome::Blocked);
+    assert_eq!(ip(&cloaked.response), Some(Ipv4Addr::UNSPECIFIED.into()));
+    let hit = cloaked.filter.unwrap();
+    assert_eq!(hit.cname.unwrap().to_string(), "collect.tracker.example.");
+    assert_eq!(hit.source.as_deref(), Some("ads"));
+    // From the cache too: the cache is shared, the policy is checked per query.
+    let cached = resolver
+        .resolve(&query("metrics.shop.example."), CLIENT)
+        .await;
+    assert_eq!(cached.outcome, Outcome::Blocked);
+    // An exception for the name asked for wins over its CNAMEs.
+    let allowed = resolver.resolve(&query("x.allowed.example."), CLIENT).await;
+    assert_eq!(allowed.outcome, Outcome::Upstream(0));
+    assert_eq!(allowed.response.answers.len(), 2);
+    // With filtering paused the chain is answered as is.
+    state.pause(Some(SystemTime::now() + Duration::from_secs(60)));
+    let paused = resolver
+        .resolve(&query("metrics.shop.example."), CLIENT)
+        .await;
+    assert_eq!(paused.outcome, Outcome::Cached);
+}
+
+#[tokio::test]
+async fn safe_search_sends_search_hosts_to_their_safe_endpoint() {
+    let upstream = fake(always(Ipv4Addr::new(216, 239, 38, 120)), silent()).await;
+    let state = Arc::new(PolicyState::new(grouped()));
+    let resolver = Resolver::new(Vec::new())
+        .with_policy(Arc::clone(&state))
+        .with_cache(Cache::new(CacheConfig::default()))
+        .with_forwarder(forwarder(vec![UpstreamConfig::udp(upstream.addr)]));
+
+    let kids = resolver
+        .resolve(&query("www.google.de."), from("10.0.0.2"))
+        .await;
+    assert_eq!(kids.outcome, Outcome::SafeSearch);
+    let answers = &kids.response.answers;
+    assert_eq!(answers.len(), 2);
+    assert_eq!(
+        answers[0].cname_target().unwrap().to_string(),
+        "forcesafesearch.google.com."
+    );
+    assert_eq!(answers[0].name().to_string(), "www.google.de.");
+    assert_eq!(
+        answers[1].ip(),
+        Some(Ipv4Addr::new(216, 239, 38, 120).into())
+    );
+    let seen: Vec<String> = upstream
+        .seen_names()
+        .iter()
+        .map(|name| name.to_ascii_lowercase())
+        .collect();
+    assert_eq!(
+        seen,
+        ["forcesafesearch.google.com."],
+        "0x20 changes the case"
+    );
+
+    // The default group has safe search off.
+    let others = resolver
+        .resolve(&query("www.google.de."), from("10.9.9.9"))
+        .await;
+    assert_eq!(others.outcome, Outcome::Upstream(0));
+    assert_eq!(others.response.answers.len(), 1);
+}
+
+#[tokio::test]
+async fn failed_forwarding_is_reported() {
+    let dead = fake(silent(), silent()).await;
+    let resolver =
+        Resolver::new(Vec::new()).with_forwarder(forwarder(vec![UpstreamConfig::udp(dead.addr)]));
+    let failed = resolver.resolve(&query("down.example."), CLIENT).await;
+    assert_eq!(failed.outcome, Outcome::Failed);
+    assert_eq!(failed.response.rcode, ResponseCode::SERV_FAIL);
+    let status = resolver.forwarder().unwrap().upstreams();
+    assert_eq!(status.len(), 1);
+    assert_eq!(status[0].consecutive_failures, 1);
+    assert!(status[0].healthy);
 }
