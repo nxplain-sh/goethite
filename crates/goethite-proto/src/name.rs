@@ -92,6 +92,13 @@ impl Name {
         Self::from_labels(labels.iter().map(Vec::as_slice)).unwrap_or_else(|_| self.clone())
     }
 
+    /// The labels, most specific first, without the root: `www`, `example`,
+    /// `com` for `www.example.com.`. Labels are raw bytes in their original
+    /// case.
+    pub fn labels(&self) -> impl DoubleEndedIterator<Item = &[u8]> + ExactSizeIterator {
+        self.0.iter()
+    }
+
     /// The number of labels, not counting the root.
     pub fn label_count(&self) -> usize {
         // Not hickory's `num_labels`, which leaves out a leading `*`.
@@ -255,6 +262,15 @@ mod tests {
             toggle
         });
         assert_eq!(mixed.to_string(), "GoEtHiTe.TeSt.");
+    }
+
+    #[test]
+    fn labels_in_order() {
+        let name: Name = "www.Example.com".parse().unwrap();
+        let labels: Vec<&[u8]> = name.labels().collect();
+        assert_eq!(labels, [&b"www"[..], b"Example", b"com"]);
+        assert_eq!(name.labels().next_back(), Some(&b"com"[..]));
+        assert_eq!(Name::root().labels().len(), 0);
     }
 
     #[test]
