@@ -7,6 +7,7 @@
 
 #![forbid(unsafe_code)]
 
+mod cache;
 mod forward;
 
 use std::net::Ipv4Addr;
@@ -15,6 +16,7 @@ use goethite_proto::{
     Name, NameError, Query, Record, RecordClass, RecordType, Response, ResponseCode,
 };
 
+pub use cache::{Cache, CacheConfig, CacheStats, MAX_CACHED_RECORDS, MAX_CNAME_CHAIN, MAX_ENTRIES};
 pub use forward::{
     Forwarder, ForwarderConfig, ForwarderError, MAX_UPSTREAMS, Transport, UpstreamConfig,
 };
@@ -38,9 +40,25 @@ pub fn test_record() -> Result<Record, NameError> {
     Ok(Record::a(TEST_NAME.parse::<Name>()?, TEST_TTL, TEST_ADDR))
 }
 
+/// Gives records whose owner is the question name the client's own case,
+/// rather than the randomized case used upstream or another client's case.
+pub(crate) fn restore_question_case(response: &mut Response, name: &Name) {
+    let sections = [
+        &mut response.answers,
+        &mut response.authority,
+        &mut response.additional,
+    ];
+    for record in sections.into_iter().flatten() {
+        if record.name() == name && !record.name().eq_exact(name) {
+            record.set_name(name.clone());
+        }
+    }
+}
+
 /// Answers queries.
 pub struct Resolver {
     local: Vec<Record>,
+    cache: Option<Cache>,
     forwarder: Option<Forwarder>,
 }
 
@@ -50,8 +68,21 @@ impl Resolver {
     pub fn new(local: Vec<Record>) -> Self {
         Self {
             local,
+            cache: None,
             forwarder: None,
         }
+    }
+
+    /// Answers forwarded queries from `cache` while they are fresh.
+    #[must_use]
+    pub fn with_cache(mut self, cache: Cache) -> Self {
+        self.cache = Some(cache);
+        self
+    }
+
+    /// The cache, if one is configured.
+    pub fn cache(&self) -> Option<&Cache> {
+        self.cache.as_ref()
     }
 
     /// Forwards everything that is not a local name to `forwarder`.
@@ -72,7 +103,9 @@ impl Resolver {
     ///   `REFUSED`, never forwarded;
     /// - a name with local records: those records of the asked type,
     ///   authoritatively, or an empty `NOERROR` (NODATA) if there are none;
-    /// - anything else: forwarded upstream, or `REFUSED` without a forwarder.
+    /// - a fresh cached answer, with TTLs counted down;
+    /// - anything else: forwarded upstream (and cached if cacheable), or
+    ///   `REFUSED` without a forwarder.
     pub async fn resolve(&self, query: &Query) -> Response {
         let mut response = self.answer(query).await;
         response.recursion_available = self.forwarder.is_some();
@@ -93,10 +126,17 @@ impl Resolver {
         if let Some(response) = self.local_answer(query) {
             return response;
         }
-        match &self.forwarder {
-            Some(forwarder) => forwarder.forward(query).await,
-            None => Response::for_query(query, ResponseCode::REFUSED),
+        let Some(forwarder) = &self.forwarder else {
+            return Response::for_query(query, ResponseCode::REFUSED);
+        };
+        if let Some(response) = self.cache.as_ref().and_then(|cache| cache.get(query)) {
+            return response;
         }
+        let response = forwarder.forward(query).await;
+        if let Some(cache) = &self.cache {
+            cache.insert(query, &response);
+        }
+        response
     }
 
     fn local_answer(&self, query: &Query) -> Option<Response> {

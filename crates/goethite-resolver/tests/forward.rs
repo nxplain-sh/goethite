@@ -15,7 +15,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use goethite_proto::{Edns, Name, Query, Question, RecordClass, RecordType, ResponseCode};
-use goethite_resolver::{Forwarder, ForwarderConfig, Transport, UpstreamConfig};
+use goethite_resolver::{
+    Cache, CacheConfig, Forwarder, ForwarderConfig, Resolver, Transport, UpstreamConfig,
+};
 use hickory_proto::op::{self, Message, MessageType, OpCode};
 use hickory_proto::rr::{self, RData, rdata};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -358,4 +360,39 @@ fn forwarders_need_between_one_and_sixteen_upstreams() {
     let addr: SocketAddr = "127.0.0.1:53".parse().unwrap();
     let many = vec![UpstreamConfig::udp(addr); 17];
     assert!(Forwarder::new(ForwarderConfig::new(many)).is_err());
+}
+
+#[tokio::test]
+async fn cached_answers_are_served_without_asking_upstream() {
+    let upstream = fake(always(Ipv4Addr::new(192, 0, 2, 90)), silent()).await;
+    let resolver = Resolver::new(Vec::new())
+        .with_cache(Cache::new(CacheConfig::default()))
+        .with_forwarder(forwarder(vec![UpstreamConfig::udp(upstream.addr)]));
+
+    let first = resolver.resolve(&query("cached.example.")).await;
+    let second_query = query("CACHED.Example.");
+    let second = resolver.resolve(&second_query).await;
+
+    assert_eq!(upstream.seen.lock().unwrap().len(), 1, "one upstream query");
+    assert_eq!(ip(&first), Some(Ipv4Addr::new(192, 0, 2, 90).into()));
+    assert_eq!(ip(&second), ip(&first));
+    assert!(
+        second.answers[0]
+            .name()
+            .eq_exact(&second_query.question.name)
+    );
+    assert!(second.recursion_available);
+    let stats = resolver.cache().unwrap().stats();
+    assert_eq!((stats.hits, stats.misses), (1, 1));
+}
+
+#[tokio::test]
+async fn failures_are_not_cached() {
+    let dead = fake(silent(), silent()).await;
+    let resolver = Resolver::new(Vec::new())
+        .with_cache(Cache::new(CacheConfig::default()))
+        .with_forwarder(forwarder(vec![UpstreamConfig::udp(dead.addr)]));
+    let response = resolver.resolve(&query("down.example.")).await;
+    assert_eq!(response.rcode, ResponseCode::SERV_FAIL);
+    assert!(resolver.cache().unwrap().is_empty());
 }

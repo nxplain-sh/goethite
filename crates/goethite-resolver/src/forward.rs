@@ -20,6 +20,8 @@ use tokio::net::{TcpStream, UdpSocket};
 use tokio::time::{Instant, timeout};
 use tracing::{debug, warn};
 
+use crate::restore_question_case;
+
 /// The most upstream resolvers one forwarder accepts.
 pub const MAX_UPSTREAMS: usize = 16;
 
@@ -381,15 +383,6 @@ fn to_client(query: &Query, upstream: Response) -> Response {
     response.answers = upstream.answers;
     response.authority = upstream.authority;
     response.additional = upstream.additional;
-    let sections = [
-        &mut response.answers,
-        &mut response.authority,
-        &mut response.additional,
-    ];
-    for record in sections.into_iter().flatten() {
-        if record.name() == &query.question.name {
-            record.set_name(query.question.name.clone());
-        }
-    }
+    restore_question_case(&mut response, &query.question.name);
     response
 }
