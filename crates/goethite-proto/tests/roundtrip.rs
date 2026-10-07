@@ -26,6 +26,19 @@ proptest! {
     }
 
     #[test]
+    fn host_names_display_and_parse_back(name in strategies::host_name()) {
+        let shown = name.to_string();
+        let parsed: goethite_proto::Name = shown.parse().unwrap();
+        prop_assert_eq!(&parsed, &name);
+        prop_assert_eq!(parsed.to_string(), shown);
+    }
+
+    #[test]
+    fn wire_names_display_as_printable_ascii(name in strategies::name()) {
+        prop_assert!(name.to_string().bytes().all(|b| b.is_ascii_graphic()));
+    }
+
+    #[test]
     fn responses_respect_the_size_limit(
         query in strategies::query(),
         answers in 0..200_u8,

@@ -1,5 +1,7 @@
 //! Proptest strategies shared by the integration tests.
 
+#![allow(dead_code, reason = "each test crate uses a different subset")]
+
 use goethite_proto::{Edns, Name, Query, Question, RecordClass, RecordType};
 use proptest::prelude::*;
 
@@ -8,6 +10,14 @@ pub fn name() -> impl Strategy<Value = Name> {
     prop::collection::vec(prop::collection::vec(any::<u8>(), 1..=63), 0..=8)
         .prop_filter_map("name longer than 255 bytes", |labels| {
             Name::from_labels(labels.iter().map(Vec::as_slice)).ok()
+        })
+}
+
+/// Names made only of what `Name::from_str` accepts: letters, digits, `-`, `_`.
+pub fn host_name() -> impl Strategy<Value = Name> {
+    prop::collection::vec("[A-Za-z0-9_-]{1,63}", 0..=4)
+        .prop_filter_map("name longer than 255 bytes", |labels| {
+            Name::from_labels(labels.iter().map(String::as_bytes)).ok()
         })
 }
 

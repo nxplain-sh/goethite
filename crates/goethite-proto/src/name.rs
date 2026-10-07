@@ -1,7 +1,9 @@
 //! Domain names.
 
-use std::fmt;
+use std::fmt::{self, Write as _};
 use std::str::FromStr;
+
+use crate::codec::Escaped;
 
 /// An absolute (fully qualified) domain name.
 ///
@@ -13,15 +15,15 @@ pub struct Name(pub(crate) hickory_proto::rr::Name);
 
 /// Why a string or label sequence is not a valid [`Name`].
 #[derive(Debug, thiserror::Error)]
-#[error("invalid domain name: {reason}")]
+#[error("invalid domain name: {}", Escaped(.reason))]
 pub struct NameError {
     reason: String,
 }
 
 impl NameError {
-    fn new(err: &hickory_proto::ProtoError) -> Self {
+    fn new(reason: impl fmt::Display) -> Self {
         Self {
-            reason: err.to_string(),
+            reason: reason.to_string(),
         }
     }
 }
@@ -44,8 +46,7 @@ impl Name {
     where
         I: IntoIterator<Item = &'a [u8]>,
     {
-        let mut name =
-            hickory_proto::rr::Name::from_labels(labels).map_err(|e| NameError::new(&e))?;
+        let mut name = hickory_proto::rr::Name::from_labels(labels).map_err(NameError::new)?;
         name.set_fqdn(true);
         Ok(Self(name))
     }
@@ -65,25 +66,65 @@ impl Name {
 impl FromStr for Name {
     type Err = NameError;
 
-    /// Parses a name in presentation format, e.g. `goethite.test.`.
+    /// Parses a host-style name such as `goethite.test.`.
     ///
-    /// Only letters, digits, `-` and `_` are accepted in labels; the name is
-    /// treated as absolute whether or not it ends with a dot.
+    /// Labels may contain only ASCII letters, digits, `-` and `_`; escapes and
+    /// wildcards are rejected. The trailing dot is optional (the name is
+    /// always absolute), `.` is the root and the empty string is an error.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut name = hickory_proto::rr::Name::from_ascii(s).map_err(|e| NameError::new(&e))?;
-        name.set_fqdn(true);
-        Ok(Self(name))
+        if s == "." {
+            return Ok(Self::root());
+        }
+        let relative = s.strip_suffix('.').unwrap_or(s);
+        if relative.is_empty() {
+            return Err(NameError::new("empty name"));
+        }
+        let mut labels = Vec::new();
+        for label in relative.split('.') {
+            if label.is_empty() {
+                return Err(NameError::new(format!("empty label in {s:?}")));
+            }
+            if !label
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+            {
+                return Err(NameError::new(format!(
+                    "label {label:?} may only contain letters, digits, '-' and '_'"
+                )));
+            }
+            labels.push(label.as_bytes());
+        }
+        Self::from_labels(labels)
     }
 }
 
 impl fmt::Display for Name {
-    /// Writes the name in ASCII presentation format with a trailing dot.
+    /// Writes the name in RFC 1035 presentation format with a trailing dot.
     ///
-    /// Bytes outside letters, digits, `-` and `_` are escaped (`\.` or `\DDD`),
-    /// so names taken from the wire cannot inject control characters or
-    /// newlines into logs.
+    /// Letters, digits, `-` and `_` are written as they are, other printable
+    /// ASCII as `\c`, and every other byte as a decimal `\DDD` escape, so names
+    /// taken from the wire cannot inject control characters or newlines into
+    /// logs. The output reads back the same way in `dig` and zone files.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0.to_ascii())
+        if self.is_root() {
+            return f.write_char('.');
+        }
+        for label in &self.0 {
+            for &byte in label {
+                match byte {
+                    b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' => {
+                        f.write_char(char::from(byte))?;
+                    }
+                    0x21..=0x7e => {
+                        f.write_char('\\')?;
+                        f.write_char(char::from(byte))?;
+                    }
+                    _ => write!(f, "\\{byte:03}")?,
+                }
+            }
+            f.write_char('.')?;
+        }
+        Ok(())
     }
 }
 
@@ -104,6 +145,7 @@ mod tests {
         assert_eq!(a, b);
         assert_eq!(a.to_string(), "goethite.test.");
         assert_eq!(a.label_count(), 2);
+        assert_eq!("_dns.x-1.test".parse::<Name>().unwrap().label_count(), 3);
     }
 
     #[test]
@@ -116,7 +158,19 @@ mod tests {
 
     #[test]
     fn rejects_invalid_names() {
-        assert!("bad label.test.".parse::<Name>().is_err());
+        for bad in [
+            "",
+            "..",
+            "a..test",
+            ".test",
+            "bad label.test.",
+            "*.test",
+            "a\\.b.test",
+            "\\065.test",
+            "caf\u{e9}.test",
+        ] {
+            assert!(bad.parse::<Name>().is_err(), "{bad:?}");
+        }
         assert!(format!("{}.test.", "a".repeat(64)).parse::<Name>().is_err());
         assert!(Name::from_labels([&b""[..]]).is_err());
         let long = [&[b'a'; 63][..]; 4];
@@ -124,11 +178,21 @@ mod tests {
     }
 
     #[test]
-    fn display_escapes_unsafe_bytes() {
-        let name = Name::from_labels([&b"evil\nlog"[..], b"te.st"]).unwrap();
+    fn display_uses_rfc1035_decimal_escapes() {
+        let name = Name::from_labels([&b"evil\nlog"[..], b"te.st", b"\xff \\"]).unwrap();
         let shown = name.to_string();
-        assert!(!shown.contains('\n'));
-        assert_eq!(shown, "evil\\012log.te\\.st.");
+        assert_eq!(shown, "evil\\010log.te\\.st.\\255\\032\\\\.");
+        assert!(shown.chars().all(|c| c.is_ascii_graphic()));
+    }
+
+    #[test]
+    fn error_text_is_escaped() {
+        let err = "evil\n\u{1b}[31m.test".parse::<Name>().unwrap_err();
+        let shown = err.to_string();
+        assert!(
+            shown.chars().all(|c| c == ' ' || c.is_ascii_graphic()),
+            "{shown}"
+        );
     }
 
     #[test]
@@ -141,6 +205,7 @@ mod tests {
     fn root() {
         assert!(Name::root().is_root());
         assert_eq!(Name::root().to_string(), ".");
+        assert_eq!(".".parse::<Name>().unwrap(), Name::root());
         assert_eq!(Name::from_labels([]).unwrap(), Name::root());
     }
 }
