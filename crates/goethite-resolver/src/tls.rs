@@ -61,6 +61,17 @@ pub enum TlsError {
     Config(rustls::Error),
 }
 
+/// A TLS client configuration with goethite's settings (rustls, ring, TLS
+/// 1.2 and 1.3, `roots`), offering `alpn` if not empty. For other HTTPS
+/// clients in goethite, such as the filter list downloader.
+///
+/// # Errors
+///
+/// Returns [`TlsError`] if a custom root is invalid.
+pub fn tls_client_config(roots: &TlsRoots, alpn: &[&[u8]]) -> Result<Arc<ClientConfig>, TlsError> {
+    client_config(roots, alpn)
+}
+
 /// Builds the client configuration; `alpn` is offered if not empty.
 pub(crate) fn client_config(
     roots: &TlsRoots,

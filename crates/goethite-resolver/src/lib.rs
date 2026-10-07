@@ -12,14 +12,14 @@ mod cache;
 mod forward;
 mod tls;
 
-use std::net::Ipv4Addr;
+use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 
 use goethite_filter::Verdict;
 use tracing::debug;
 
 use goethite_proto::{
-    Name, NameError, Query, Record, RecordClass, RecordType, Response, ResponseCode,
+    Edns, Name, NameError, Query, Question, Record, RecordClass, RecordType, Response, ResponseCode,
 };
 
 pub use blocking::{BlockResponse, Blocking};
@@ -27,7 +27,7 @@ pub use cache::{Cache, CacheConfig, CacheStats, MAX_CACHED_RECORDS, MAX_CNAME_CH
 pub use forward::{
     Forwarder, ForwarderConfig, ForwarderError, MAX_UPSTREAMS, Transport, UpstreamConfig,
 };
-pub use tls::{TlsError, TlsRoots};
+pub use tls::{TlsError, TlsRoots, tls_client_config};
 
 /// The name every build answers itself, to check that the server is alive.
 pub const TEST_NAME: &str = "goethite.test.";
@@ -165,6 +165,49 @@ impl Resolver {
         response
     }
 
+    /// The IPv4 and IPv6 addresses of `name`, for goethite's own use (such as
+    /// downloading filter lists): local records, the cache, then the
+    /// upstreams. The filter is skipped on purpose, since a list may block
+    /// the very host it is downloaded from.
+    pub async fn lookup_addresses(&self, name: &Name) -> Vec<IpAddr> {
+        let mut addresses = Vec::new();
+        for qtype in [RecordType::A, RecordType::AAAA] {
+            let query = Query {
+                id: 0,
+                recursion_desired: true,
+                checking_disabled: false,
+                authentic_data: false,
+                question: Question {
+                    name: name.clone(),
+                    qtype,
+                    qclass: RecordClass::IN,
+                },
+                edns: Some(Edns::ours()),
+            };
+            let response = if let Some(response) = self.local_answer(&query) {
+                response
+            } else if let Some(response) = self.cache.as_ref().and_then(|cache| cache.get(&query)) {
+                response
+            } else if let Some(forwarder) = &self.forwarder {
+                let response = forwarder.forward(&query).await;
+                if let Some(cache) = &self.cache {
+                    cache.insert(&query, &response);
+                }
+                response
+            } else {
+                continue;
+            };
+            addresses.extend(
+                response
+                    .answers
+                    .iter()
+                    .filter(|record| record.record_type() == qtype)
+                    .filter_map(Record::ip),
+            );
+        }
+        addresses
+    }
+
     fn local_answer(&self, query: &Query) -> Option<Response> {
         let question = &query.question;
         let mut matching = self
@@ -200,8 +243,6 @@ fn is_meta_qtype(qtype: RecordType) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use goethite_proto::{Edns, Question};
-
     use super::*;
 
     fn resolver() -> Resolver {
