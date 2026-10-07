@@ -109,12 +109,13 @@ pub struct Server {
 }
 
 impl Server {
-    /// Binds the UDP socket and TCP listener on `config.listen`.
+    /// Binds the UDP socket and TCP listener on `config.listen`. The
+    /// resolver is shared, e.g. with the filter list updater.
     ///
     /// # Errors
     ///
     /// Returns [`ServerError::Bind`] if either socket cannot be bound.
-    pub async fn bind(config: ServerConfig, resolver: Resolver) -> Result<Self, ServerError> {
+    pub async fn bind(config: ServerConfig, resolver: Arc<Resolver>) -> Result<Self, ServerError> {
         let addr = config.listen;
         let udp = UdpSocket::bind(addr)
             .await
@@ -236,7 +237,7 @@ async fn stopped(stop: &mut watch::Receiver<bool>) {
 /// Decodes, resolves and encodes; shared by every listener.
 struct Engine {
     codec: Box<dyn DnsCodec>,
-    resolver: Resolver,
+    resolver: Arc<Resolver>,
 }
 
 impl Engine {

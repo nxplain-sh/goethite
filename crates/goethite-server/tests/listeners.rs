@@ -46,7 +46,9 @@ async fn start_with(config: impl FnOnce(&mut ServerConfig)) -> Running {
 async fn start_resolving(config: impl FnOnce(&mut ServerConfig), resolver: Resolver) -> Running {
     let mut server_config = ServerConfig::new("127.0.0.1:0".parse().unwrap());
     config(&mut server_config);
-    let server = Server::bind(server_config, resolver).await.unwrap();
+    let server = Server::bind(server_config, std::sync::Arc::new(resolver))
+        .await
+        .unwrap();
     let udp = server.udp_local_addr().unwrap();
     let tcp = server.tcp_local_addr().unwrap();
     let (stop, stopped) = oneshot::channel::<()>();
@@ -325,7 +327,7 @@ async fn shutdown_closes_listeners_and_idle_connections() {
 async fn binding_a_busy_address_fails() {
     let server = start().await;
     let config = ServerConfig::new(server.tcp);
-    let result = Server::bind(config, Resolver::new(Vec::new())).await;
+    let result = Server::bind(config, std::sync::Arc::new(Resolver::new(Vec::new()))).await;
     assert!(matches!(result, Err(ServerError::Bind { .. })));
     server.shutdown().await;
 }

@@ -121,7 +121,8 @@ fn run(config_path: &Path) -> Result<()> {
         } else {
             info!("filtering is turned off");
         }
-        let server = Server::bind(ServerConfig::new(config.server.listen), resolver).await?;
+        let server =
+            Server::bind(ServerConfig::new(config.server.listen), Arc::new(resolver)).await?;
         server.run(shutdown).await?;
         Ok(())
     })
