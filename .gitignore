@@ -7,6 +7,9 @@
 /fuzz/artifacts/
 /fuzz/coverage/
 
+# Lists downloaded with the example config
+/config/lists/
+
 # Website
 /site/node_modules/
 /site/dist/

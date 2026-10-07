@@ -13,17 +13,25 @@ publish.workspace = true
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
+http-body-util.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+rand.workspace = true
+rustls.workspace = true
+tokio-rustls.workspace = true
 goethite-filter.workspace = true
+goethite-proto.workspace = true
 goethite-resolver.workspace = true
 goethite-server.workspace = true
 serde.workspace = true
-tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal"] }
+tokio = { workspace = true, features = ["fs", "macros", "net", "rt-multi-thread", "signal", "time"] }
 toml.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
 hickory-proto.workspace = true
+hyper = { workspace = true, features = ["server"] }
 
 [lints]
 workspace = true

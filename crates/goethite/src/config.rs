@@ -54,8 +54,12 @@ pub struct FilterSection {
     pub blocked_ttl: u32,
     /// Rules written directly in the config, in any supported syntax.
     pub rules: Vec<String>,
-    /// The `[[filter.list]]` tables: rule list files.
+    /// The `[[filter.list]]` tables: rule list files and URLs.
     pub list: Vec<ListSection>,
+    /// Where downloaded lists are kept. Required if any list has a `url`.
+    pub cache_dir: Option<PathBuf>,
+    /// How often downloaded lists are refreshed, in hours.
+    pub update_hours: u32,
 }
 
 impl Default for FilterSection {
@@ -66,6 +70,8 @@ impl Default for FilterSection {
             blocked_ttl: 10,
             rules: Vec::new(),
             list: Vec::new(),
+            cache_dir: None,
+            update_hours: 24,
         }
     }
 }
@@ -90,16 +96,58 @@ impl FilterSection {
                 self.blocked_ttl
             );
         }
+        if !(1..=168).contains(&self.update_hours) {
+            bail!(
+                "filter.update_hours is {}; it must be between 1 and 168 (a week)",
+                self.update_hours
+            );
+        }
+        for (index, list) in self.list.iter().enumerate() {
+            let number = index.saturating_add(1);
+            match (&list.path, &list.url) {
+                (Some(_), Some(_)) => {
+                    bail!("[[filter.list]] number {number} has both path and url")
+                }
+                (None, None) => bail!("[[filter.list]] number {number} needs a path or a url"),
+                (None, Some(url)) => {
+                    crate::download::https_uri(url)
+                        .with_context(|| format!("[[filter.list]] number {number}"))?;
+                }
+                (Some(_), None) => {}
+            }
+        }
+        if self.cache_dir.is_none() && self.list.iter().any(|list| list.url.is_some()) {
+            bail!("filter.cache_dir is required to download lists from a url");
+        }
         Ok(())
+    }
+
+    /// Makes relative paths relative to `base`, the config file's directory.
+    fn resolve_paths(&mut self, base: &Path) {
+        let resolve = |path: &mut PathBuf| {
+            if path.is_relative() {
+                *path = base.join(&*path);
+            }
+        };
+        if let Some(dir) = &mut self.cache_dir {
+            resolve(dir);
+        }
+        for list in &mut self.list {
+            if let Some(path) = &mut list.path {
+                resolve(path);
+            }
+        }
     }
 }
 
-/// One `[[filter.list]]` table.
+/// One `[[filter.list]]` table: exactly one of `path` and `url`.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ListSection {
-    /// Path of the list file (hosts, domains or AdGuard syntax, mixed freely).
-    pub path: PathBuf,
+    /// A local list file (hosts, domains or AdGuard syntax, mixed freely).
+    pub path: Option<PathBuf>,
+    /// An `https://` URL to download the list from, every `update_hours`.
+    pub url: Option<String>,
 }
 
 /// `filter.block_response`.
@@ -370,6 +418,10 @@ impl Config {
             .validate()
             .and_then(|()| config.filter.validate())
             .with_context(|| format!("invalid config file {}", path.display()))?;
+        let mut config = config;
+        if let Some(base) = path.parent() {
+            config.filter.resolve_paths(base);
+        }
         if config.upstream.len() > MAX_UPSTREAMS {
             bail!(
                 "{} lists {} upstreams; at most {MAX_UPSTREAMS} are supported",
@@ -545,13 +597,54 @@ mod tests {
         assert_eq!(config.filter.rules.len(), 2);
         assert_eq!(
             config.filter.list[0].path,
-            PathBuf::from("/var/lib/goethite/lists/hosts.txt")
+            Some(PathBuf::from("/var/lib/goethite/lists/hosts.txt"))
         );
         assert!(config.filter.validate().is_ok());
+        assert_eq!(config.filter.update_hours, 24);
         assert!(Config::parse("[filter]\nblock_response = \"blackhole\"").is_err());
-        assert!(Config::parse("[[filter.list]]\nurl = \"x\"").is_err());
+        let not_https = Config::parse("[[filter.list]]\nurl = \"x\"").unwrap();
+        assert!(not_https.filter.validate().is_err());
+        assert!(Config::parse("[[filter.list]]\nlink = \"x\"").is_err());
         let ttl = Config::parse("[filter]\nblocked_ttl = 999999").unwrap();
         assert!(ttl.filter.validate().is_err());
+    }
+
+    #[test]
+    fn list_sources() {
+        let config = Config::parse(
+            r#"
+            [filter]
+            cache_dir = "lists"
+            update_hours = 12
+
+            [[filter.list]]
+            url = "https://lists.example/hosts"
+
+            [[filter.list]]
+            path = "local.txt"
+            "#,
+        )
+        .unwrap();
+        assert!(config.filter.validate().is_ok());
+        let mut filter = config.filter.clone();
+        filter.resolve_paths(Path::new("/etc/goethite"));
+        assert_eq!(filter.cache_dir, Some(PathBuf::from("/etc/goethite/lists")));
+        assert_eq!(
+            filter.list[1].path,
+            Some(PathBuf::from("/etc/goethite/local.txt"))
+        );
+
+        for bad in [
+            "[[filter.list]]\nurl = \"https://lists.example/hosts\"",
+            "[filter]\ncache_dir = \"c\"\n[[filter.list]]\nurl = \"http://lists.example/hosts\"",
+            "[filter]\ncache_dir = \"c\"\n[[filter.list]]\nurl = \"https://x/\"\npath = \"y\"",
+            "[filter]\ncache_dir = \"c\"\n[[filter.list]]",
+            "[filter]\nupdate_hours = 0",
+            "[filter]\nupdate_hours = 169",
+        ] {
+            let config = Config::parse(bad).unwrap();
+            assert!(config.filter.validate().is_err(), "{bad}");
+        }
     }
 
     #[test]

@@ -1,7 +1,9 @@
 //! The goethite binary: command-line interface, configuration and wiring.
 
 mod config;
+mod download;
 mod filters;
+mod lists;
 
 use std::future::Future;
 use std::io::IsTerminal;
@@ -11,7 +13,9 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use goethite_resolver::{Blocking, Cache, Forwarder, ForwarderConfig, Resolver, test_record};
+use goethite_resolver::{
+    Blocking, Cache, Forwarder, ForwarderConfig, Resolver, TlsRoots, test_record, tls_client_config,
+};
 use goethite_server::{Server, ServerConfig};
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
@@ -106,23 +110,35 @@ fn run(config_path: &Path) -> Result<()> {
         let mut resolver = Resolver::new(vec![test_record()?])
             .with_cache(cache)
             .with_forwarder(forwarder);
+        let mut blocking = None;
         if config.filter.enabled {
             let section = config.filter.clone();
             let filter = tokio::task::spawn_blocking(move || filters::build(&section))
                 .await
                 .context("building the filter failed")?;
-            let blocking = Arc::new(Blocking::new(
+            let shared = Arc::new(Blocking::new(
                 filter,
                 config.filter.block_response.to_block_response(),
                 config.filter.blocked_ttl,
             ));
-            reload_on_hangup(Arc::clone(&blocking), config.filter.clone())?;
-            resolver = resolver.with_blocking(blocking);
+            reload_on_hangup(Arc::clone(&shared), config.filter.clone())?;
+            resolver = resolver.with_blocking(Arc::clone(&shared));
+            blocking = Some(shared);
         } else {
             info!("filtering is turned off");
         }
-        let server =
-            Server::bind(ServerConfig::new(config.server.listen), Arc::new(resolver)).await?;
+        let resolver = Arc::new(resolver);
+        if let Some(blocking) = blocking {
+            let tls = tls_client_config(&TlsRoots::Bundled, &[b"h2", b"http/1.1"])?;
+            let downloader =
+                download::Downloader::new(Arc::clone(&resolver), tls, filters::MAX_LIST_LEN);
+            filters::spawn_updates(blocking, config.filter.clone(), downloader);
+        }
+        let server = Server::bind(
+            ServerConfig::new(config.server.listen),
+            Arc::clone(&resolver),
+        )
+        .await?;
         server.run(shutdown).await?;
         Ok(())
     })
