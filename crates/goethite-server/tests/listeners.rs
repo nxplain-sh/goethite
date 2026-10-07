@@ -265,6 +265,23 @@ async fn tcp_connections_beyond_the_limit_are_closed() {
 }
 
 #[tokio::test]
+async fn zone_transfers_and_meta_types_are_not_answered_with_data() {
+    let server = start().await;
+    let mut stream = TcpStream::connect(server.tcp).await.unwrap();
+    tcp_send(&mut stream, &query(17, "goethite.test.", RecordType::AXFR)).await;
+    let axfr = tcp_receive(&mut stream).await;
+    assert_eq!(axfr.metadata.response_code, ResponseCode::Refused);
+    assert_eq!(axfr.answers, vec![]);
+    drop(stream);
+
+    let tsig = udp_exchange(server.udp, &query(18, "goethite.test.", RecordType::TSIG))
+        .await
+        .unwrap();
+    assert_eq!(tsig.metadata.response_code, ResponseCode::FormErr);
+    server.shutdown().await;
+}
+
+#[tokio::test]
 async fn idle_tcp_connections_are_closed() {
     let server = start_with(|config| config.tcp_idle_timeout = Duration::from_millis(200)).await;
     let mut stream = TcpStream::connect(server.tcp).await.unwrap();

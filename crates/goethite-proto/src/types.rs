@@ -54,6 +54,18 @@ impl RecordType {
     pub const SVCB: Self = Self(64);
     /// HTTPS service binding.
     pub const HTTPS: Self = Self(65);
+    /// Transaction key (meta type).
+    pub const TKEY: Self = Self(249);
+    /// Transaction signature (meta type).
+    pub const TSIG: Self = Self(250);
+    /// Incremental zone transfer (query-only).
+    pub const IXFR: Self = Self(251);
+    /// Full zone transfer (query-only).
+    pub const AXFR: Self = Self(252);
+    /// Mailbox-related records (obsolete query type).
+    pub const MAILB: Self = Self(253);
+    /// Mail agent records (obsolete query type).
+    pub const MAILA: Self = Self(254);
     /// Any type (query-only meta type).
     pub const ANY: Self = Self(255);
 
@@ -74,6 +86,12 @@ impl RecordType {
             Self::DNSKEY => "DNSKEY",
             Self::SVCB => "SVCB",
             Self::HTTPS => "HTTPS",
+            Self::TKEY => "TKEY",
+            Self::TSIG => "TSIG",
+            Self::IXFR => "IXFR",
+            Self::AXFR => "AXFR",
+            Self::MAILB => "MAILB",
+            Self::MAILA => "MAILA",
             Self::ANY => "ANY",
             _ => return None,
         })

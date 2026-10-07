@@ -51,11 +51,22 @@ impl Resolver {
 
     /// Answers `query`.
     ///
+    /// - zone transfers (`AXFR`, `IXFR`): `REFUSED`, since none are offered
+    ///   (RFC 5936);
+    /// - meta-types and obsolete query types that have no place in a question
+    ///   (`OPT`, `TKEY`, `TSIG`, `MAILA`, `MAILB`, 128 to 248): `FORMERR`, as
+    ///   Unbound answers them (RFC 6895);
     /// - a name with local records, class `IN`: those records of the asked
     ///   type, or an empty `NOERROR` (NODATA) if there are none of that type;
     /// - anything else: `REFUSED`.
     pub fn resolve(&self, query: &Query) -> Response {
         let question = &query.question;
+        if matches!(question.qtype, RecordType::AXFR | RecordType::IXFR) {
+            return Response::for_query(query, ResponseCode::REFUSED);
+        }
+        if is_meta_qtype(question.qtype) {
+            return Response::for_query(query, ResponseCode::FORM_ERR);
+        }
         let mut matching = self
             .local
             .iter()
@@ -75,6 +86,19 @@ impl Resolver {
             .collect();
         response
     }
+}
+
+/// Types that are not valid in a question: meta-types other than `ANY` and
+/// the zone transfers, plus the obsolete mail query types.
+fn is_meta_qtype(qtype: RecordType) -> bool {
+    matches!(
+        qtype,
+        RecordType::OPT
+            | RecordType::TKEY
+            | RecordType::TSIG
+            | RecordType::MAILB
+            | RecordType::MAILA
+    ) || (128..=248).contains(&qtype.0)
 }
 
 #[cfg(test)]
@@ -126,6 +150,40 @@ mod tests {
         let response = resolver().resolve(&query(TEST_NAME, RecordType::AAAA, RecordClass::IN));
         assert_eq!(response.rcode, ResponseCode::NO_ERROR);
         assert_eq!(response.answers, vec![]);
+    }
+
+    #[test]
+    fn zone_transfers_are_refused() {
+        for qtype in [RecordType::AXFR, RecordType::IXFR] {
+            let response = resolver().resolve(&query(TEST_NAME, qtype, RecordClass::IN));
+            assert_eq!(response.rcode, ResponseCode::REFUSED, "{qtype}");
+            assert!(!response.authoritative);
+            assert_eq!(response.answers, vec![]);
+        }
+    }
+
+    #[test]
+    fn meta_types_get_formerr() {
+        for qtype in [
+            RecordType::OPT,
+            RecordType::TKEY,
+            RecordType::TSIG,
+            RecordType::MAILA,
+            RecordType::MAILB,
+            RecordType(128),
+            RecordType(248),
+        ] {
+            for name in [TEST_NAME, "example.com."] {
+                let response = resolver().resolve(&query(name, qtype, RecordClass::IN));
+                assert_eq!(response.rcode, ResponseCode::FORM_ERR, "{name} {qtype}");
+            }
+        }
+        // ANY (255) and ordinary types above the meta range are not meta-types.
+        let any = resolver().resolve(&query(TEST_NAME, RecordType::ANY, RecordClass::IN));
+        assert_eq!(any.rcode, ResponseCode::NO_ERROR);
+        assert_eq!(any.answers.len(), 1);
+        let caa = resolver().resolve(&query(TEST_NAME, RecordType(257), RecordClass::IN));
+        assert_eq!(caa.rcode, ResponseCode::NO_ERROR);
     }
 
     #[test]
