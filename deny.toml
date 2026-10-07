@@ -23,13 +23,22 @@ ignore = []
 
 [licenses]
 # Licenses compatible with shipping goethite under MIT OR Apache-2.0.
-# Unicode-3.0 covers the ICU crates behind IDNA name handling.
+# Unicode-3.0 covers the ICU crates behind IDNA name handling; ISC and
+# BSD-3-Clause come with the TLS stack (ring, rustls-webpki, untrusted, subtle).
 allow = [
     "Apache-2.0",
+    "BSD-3-Clause",
+    "ISC",
     "MIT",
     "Unicode-3.0",
 ]
 confidence-threshold = 0.93
+
+# webpki-roots is the Mozilla root certificate data, under a permissive data
+# license.
+[[licenses.exceptions]]
+crate = "webpki-roots"
+allow = ["CDLA-Permissive-2.0"]
 
 # libfuzzer-sys bundles LLVM's libFuzzer (NCSA). It is only used by the fuzz
 # targets in fuzz/, which CI checks with --manifest-path, and never ships.

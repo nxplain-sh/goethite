@@ -1,10 +1,12 @@
-//! Forwarding queries to upstream resolvers over plain DNS.
+//! Forwarding queries to upstream resolvers.
 //!
-//! Every exchange uses defenses against off-path spoofing: a fresh UDP socket
-//! with an OS-chosen random source port, connected to the upstream so that
-//! datagrams from other addresses are never seen; a random transaction ID; and
-//! optionally 0x20 case randomization of the query name. A response is only
-//! accepted if its ID, opcode and question (in exactly the sent case) match.
+//! Upstreams are reached over plain DNS (UDP or TCP), DNS over TLS or DNS over
+//! HTTPS. Plain exchanges use defenses against off-path spoofing: a fresh UDP
+//! socket with an OS-chosen random source port, connected to the upstream so
+//! that datagrams from other addresses are never seen; a random transaction
+//! ID; and optionally 0x20 case randomization of the query name. Over every
+//! transport, a response is only accepted if its ID, opcode and question (in
+//! exactly the sent case) match.
 
 use std::io;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -15,12 +17,16 @@ use goethite_proto::{
     DnsCodec, Edns, EncodeError, HickoryCodec, MAX_UDP_PAYLOAD, Opcode, Query, Question, Response,
     ResponseCode, ResponseError,
 };
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use hyper::Uri;
+use rustls::pki_types::ServerName;
 use tokio::net::{TcpStream, UdpSocket};
 use tokio::time::{Instant, timeout};
 use tracing::{debug, warn};
 
 use crate::restore_question_case;
+use crate::tls::{
+    DohClient, DohError, DotClient, TlsError, TlsRoots, client_config, exchange_framed,
+};
 
 /// The most upstream resolvers one forwarder accepts.
 pub const MAX_UPSTREAMS: usize = 16;
@@ -36,13 +42,25 @@ const FAILURES_BEFORE_DOWN: u32 = 3;
 const DOWN_FOR: Duration = Duration::from_secs(30);
 
 /// How an upstream is reached.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Transport {
     /// Plain DNS over UDP, retried over TCP when the answer is truncated.
     Udp,
     /// Plain DNS over TCP only.
     Tcp,
+    /// DNS over TLS (RFC 7858). The certificate must be valid for
+    /// `server_name`.
+    Tls {
+        /// The name the certificate must be valid for, e.g. `dns.quad9.net`.
+        server_name: String,
+    },
+    /// DNS over HTTPS (RFC 8484): queries are sent to `url` as HTTP/2 POST requests. The
+    /// certificate must be valid for the URL's host.
+    Https {
+        /// The query URL, e.g. `https://dns.quad9.net/dns-query`.
+        url: String,
+    },
 }
 
 /// One upstream resolver.
@@ -67,6 +85,26 @@ impl UpstreamConfig {
             randomize_case: true,
         }
     }
+
+    /// A DNS-over-TLS upstream whose certificate is valid for `server_name`.
+    pub fn tls(address: SocketAddr, server_name: impl Into<String>) -> Self {
+        Self {
+            address,
+            transport: Transport::Tls {
+                server_name: server_name.into(),
+            },
+            randomize_case: true,
+        }
+    }
+
+    /// A DNS-over-HTTPS upstream at `address`, queried at `url`.
+    pub fn https(address: SocketAddr, url: impl Into<String>) -> Self {
+        Self {
+            address,
+            transport: Transport::Https { url: url.into() },
+            randomize_case: true,
+        }
+    }
 }
 
 /// Forwarding settings.
@@ -78,15 +116,18 @@ pub struct ForwarderConfig {
     pub attempt_timeout: Duration,
     /// How long forwarding one query may take in total, across failover.
     pub total_timeout: Duration,
+    /// Certificate authorities that DoT and DoH upstreams must chain to.
+    pub tls_roots: TlsRoots,
 }
 
 impl ForwarderConfig {
-    /// Settings for `upstreams` with default timeouts.
+    /// Settings for `upstreams` with default timeouts and the bundled roots.
     pub fn new(upstreams: Vec<UpstreamConfig>) -> Self {
         Self {
             upstreams,
             attempt_timeout: Duration::from_secs(2),
             total_timeout: Duration::from_secs(4),
+            tls_roots: TlsRoots::Bundled,
         }
     }
 }
@@ -101,6 +142,15 @@ pub enum ForwarderError {
     /// More upstreams than [`MAX_UPSTREAMS`] were configured.
     #[error("at most {MAX_UPSTREAMS} upstream resolvers are supported, got {0}")]
     TooManyUpstreams(usize),
+    /// A DoT server name is not a valid DNS name or IP address.
+    #[error("invalid TLS server name {0:?}")]
+    InvalidServerName(String),
+    /// A DoH URL is not an `https://` URL with a host.
+    #[error("invalid DoH URL {0:?}: it must be an https:// URL with a host")]
+    InvalidUrl(String),
+    /// TLS could not be set up.
+    #[error(transparent)]
+    Tls(#[from] TlsError),
 }
 
 /// Why one exchange with one upstream failed.
@@ -112,6 +162,8 @@ enum ExchangeError {
     Encode(#[from] EncodeError),
     #[error(transparent)]
     Decode(#[from] ResponseError),
+    #[error(transparent)]
+    Doh(#[from] DohError),
     #[error("response does not match the query")]
     Mismatch,
 }
@@ -127,6 +179,45 @@ pub struct Forwarder {
 struct Upstream {
     config: UpstreamConfig,
     health: Mutex<Health>,
+    connection: Connection,
+}
+
+/// Per-upstream connection state.
+enum Connection {
+    /// Plain DNS: a fresh socket per exchange.
+    Plain,
+    /// DNS over TLS, with reused connections.
+    Tls(DotClient),
+    /// DNS over HTTPS, multiplexed over one HTTP/2 connection.
+    Https(DohClient),
+}
+
+impl Connection {
+    fn new(transport: &Transport, roots: &TlsRoots) -> Result<Self, ForwarderError> {
+        Ok(match transport {
+            Transport::Udp | Transport::Tcp => Self::Plain,
+            Transport::Tls { server_name } => {
+                let name = ServerName::try_from(server_name.clone())
+                    .map_err(|_| ForwarderError::InvalidServerName(server_name.clone()))?;
+                Self::Tls(DotClient::new(client_config(roots, &[])?, name))
+            }
+            Transport::Https { url } => {
+                let invalid = || ForwarderError::InvalidUrl(url.clone());
+                let uri: Uri = url.parse().map_err(|_| invalid())?;
+                if uri.scheme_str() != Some("https") {
+                    return Err(invalid());
+                }
+                let host = uri.host().ok_or_else(invalid)?;
+                // IPv6 hosts come bracketed in URLs.
+                let host = host
+                    .trim_start_matches('[')
+                    .trim_end_matches(']')
+                    .to_owned();
+                let name = ServerName::try_from(host).map_err(|_| invalid())?;
+                Self::Https(DohClient::new(client_config(roots, &[b"h2"])?, name, uri))
+            }
+        })
+    }
 }
 
 #[derive(Default)]
@@ -172,15 +263,19 @@ impl Forwarder {
         if config.upstreams.len() > MAX_UPSTREAMS {
             return Err(ForwarderError::TooManyUpstreams(config.upstreams.len()));
         }
-        Ok(Self {
-            upstreams: config
-                .upstreams
-                .into_iter()
-                .map(|config| Upstream {
-                    config,
+        let upstreams = config
+            .upstreams
+            .into_iter()
+            .map(|upstream| {
+                Ok(Upstream {
+                    connection: Connection::new(&upstream.transport, &config.tls_roots)?,
+                    config: upstream,
                     health: Mutex::default(),
                 })
-                .collect(),
+            })
+            .collect::<Result<_, ForwarderError>>()?;
+        Ok(Self {
+            upstreams,
             attempt_timeout: config.attempt_timeout,
             total_timeout: config.total_timeout,
             codec: HickoryCodec,
@@ -252,12 +347,25 @@ impl Forwarder {
         upstream: &Upstream,
         query: &Query,
     ) -> Result<Response, ExchangeError> {
-        let outgoing = upstream_query(query, upstream.config.randomize_case);
+        let mut outgoing = upstream_query(query, upstream.config.randomize_case);
+        if matches!(upstream.connection, Connection::Https(_)) {
+            // RFC 8484 4.1: DoH clients use ID 0, which keeps responses
+            // cacheable by HTTP caches.
+            outgoing.id = 0;
+        }
         let mut wire = Vec::new();
         self.codec.encode_query(&outgoing, &mut wire)?;
         let address = upstream.config.address;
-        match upstream.config.transport {
-            Transport::Udp => {
+        match (&upstream.connection, &upstream.config.transport) {
+            (Connection::Tls(client), _) => {
+                let reply = client.exchange(address, &wire).await?;
+                self.accept(&reply, &outgoing)
+            }
+            (Connection::Https(client), _) => {
+                let reply = client.exchange(address, &wire).await?;
+                self.accept(&reply, &outgoing)
+            }
+            (Connection::Plain, Transport::Udp) => {
                 let response = self.exchange_udp(address, &wire, &outgoing).await?;
                 if response.truncated {
                     debug!(%address, "truncated answer, retrying over TCP");
@@ -266,7 +374,18 @@ impl Forwarder {
                     Ok(response)
                 }
             }
-            Transport::Tcp => self.exchange_tcp(address, &wire, &outgoing).await,
+            (Connection::Plain, _) => self.exchange_tcp(address, &wire, &outgoing).await,
+        }
+    }
+
+    /// Decodes a reply received over a connection-oriented transport and
+    /// checks that it answers `sent`.
+    fn accept(&self, reply: &[u8], sent: &Query) -> Result<Response, ExchangeError> {
+        let response = self.codec.decode_response(reply)?;
+        if answers(&response, sent) {
+            Ok(response)
+        } else {
+            Err(ExchangeError::Mismatch)
         }
     }
 
@@ -310,24 +429,10 @@ impl Forwarder {
         wire: &[u8],
         sent: &Query,
     ) -> Result<Response, ExchangeError> {
-        let len = u16::try_from(wire.len()).map_err(|_| io::Error::other("query too large"))?;
-        let mut frame = Vec::with_capacity(wire.len().saturating_add(2));
-        frame.extend_from_slice(&len.to_be_bytes());
-        frame.extend_from_slice(wire);
-
         let mut stream = TcpStream::connect(address).await?;
         stream.set_nodelay(true)?;
-        stream.write_all(&frame).await?;
-        let mut prefix = [0_u8; 2];
-        stream.read_exact(&mut prefix).await?;
-        let mut buf = vec![0_u8; usize::from(u16::from_be_bytes(prefix))];
-        stream.read_exact(&mut buf).await?;
-        let response = self.codec.decode_response(&buf)?;
-        if answers(&response, sent) {
-            Ok(response)
-        } else {
-            Err(ExchangeError::Mismatch)
-        }
+        let reply = exchange_framed(&mut stream, wire).await?;
+        self.accept(&reply, sent)
     }
 }
 

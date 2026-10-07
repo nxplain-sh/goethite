@@ -9,6 +9,7 @@
 
 mod cache;
 mod forward;
+mod tls;
 
 use std::net::Ipv4Addr;
 
@@ -20,6 +21,7 @@ pub use cache::{Cache, CacheConfig, CacheStats, MAX_CACHED_RECORDS, MAX_CNAME_CH
 pub use forward::{
     Forwarder, ForwarderConfig, ForwarderError, MAX_UPSTREAMS, Transport, UpstreamConfig,
 };
+pub use tls::{TlsError, TlsRoots};
 
 /// The name every build answers itself, to check that the server is alive.
 pub const TEST_NAME: &str = "goethite.test.";

@@ -12,14 +12,21 @@ publish.workspace = true
 
 [dependencies]
 goethite-proto.workspace = true
+http-body-util.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
 rand.workspace = true
+rustls.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["io-util", "net", "time"] }
+tokio = { workspace = true, features = ["io-util", "net", "rt", "time"] }
+tokio-rustls.workspace = true
 tracing.workspace = true
+webpki-roots.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
 hickory-proto.workspace = true
+hyper = { workspace = true, features = ["server"] }
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
 
 [[bench]]
