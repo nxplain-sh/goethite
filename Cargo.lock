@@ -83,6 +83,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
+name = "arc-swap"
+version = "1.9.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c049c0be4daef0b145cb3555416b3b8ef5b7888a38aea1a3a155801fe7b0810b"
+dependencies = [
+ "rustversion",
+]
+
+[[package]]
 name = "atomic-waker"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -358,6 +367,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "fst"
+version = "0.4.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7ab85b9b05e3978cc9a9cf8fea7f01b494e1a09ed3037e16ba39edc7a29eb61a"
+
+[[package]]
 name = "futures-channel"
 version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -419,6 +434,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "clap",
+ "goethite-filter",
  "goethite-resolver",
  "goethite-server",
  "hickory-proto",
@@ -440,6 +456,13 @@ version = "0.0.0"
 [[package]]
 name = "goethite-filter"
 version = "0.0.0"
+dependencies = [
+ "criterion",
+ "fst",
+ "goethite-proto",
+ "proptest",
+ "thiserror",
+]
 
 [[package]]
 name = "goethite-proto"
@@ -454,7 +477,9 @@ dependencies = [
 name = "goethite-resolver"
 version = "0.0.0"
 dependencies = [
+ "arc-swap",
  "criterion",
+ "goethite-filter",
  "goethite-proto",
  "hickory-proto",
  "http-body-util",
@@ -1163,6 +1188,12 @@ dependencies = [
  "rustls-pki-types",
  "untrusted",
 ]
+
+[[package]]
+name = "rustversion"
+version = "1.0.23"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 
 [[package]]
 name = "rusty-fork"

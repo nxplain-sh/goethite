@@ -23,6 +23,27 @@ Results:
 | --- | --- | --- | --- | --- | --- | --- |
 | 2026-10-07 | M2 (sharded TTL cache) | Apple M3 Pro, macOS, `cargo bench` (release) | 306 ns | 72 ns | 458 ns | 319 ns |
 
+### Filter
+
+```sh
+cargo bench -p goethite-filter --bench filter
+```
+
+A synthetic list of 1,000,000 rules (a third AdGuard `||...^`, the rest hosts entries, over
+50,000 registered domains and 8 TLDs) compiles into **6.2 MiB** (FST plus Bloom prefilter).
+Lookups, median, Apple M3 Pro, 2026-10-07:
+
+| Name | Bloom + FST | FST walk only | Note |
+| --- | --- | --- | --- |
+| blocked | 157 ns | 146 ns | a blocked name always walks the whole FST |
+| near miss | 68 ns | 133 ns | shares a long prefix with rules |
+| miss | 67 ns | 87 ns | `www.example.com` |
+| miss, unknown TLD | 62 ns | 62 ns | `www.example.dev` |
+
+Most queries are misses, so the Bloom prefilter stays (it costs about 11 ns on blocked names and
+1.25 MiB at a million rules). Parsing and compiling 100,000 rules takes about 100 ms; a million,
+about a second, off the async runtime.
+
 These cover the resolver only. Decoding the query and encoding the response, and the socket round
 trip, come on top; the end-to-end number below is the one the p99 target refers to.
 
