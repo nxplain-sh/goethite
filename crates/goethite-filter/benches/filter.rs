@@ -18,7 +18,7 @@ use std::fmt::Write as _;
 use std::hint::black_box;
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use goethite_filter::{Filter, FilterBuilder};
+use goethite_filter::{Filter, FilterBuilder, Source, Sources};
 use goethite_proto::Name;
 
 const RULES: usize = 1_000_000;
@@ -42,7 +42,7 @@ fn lines(count: usize) -> String {
 
 fn filter(count: usize) -> Filter {
     let mut builder = FilterBuilder::new();
-    builder.add_list(&lines(count));
+    builder.add_list(Source::new(0).unwrap(), &lines(count));
     builder.build().unwrap()
 }
 
@@ -55,7 +55,7 @@ fn lookups(c: &mut Criterion) {
     );
     // `||ad0.track0.com^` is rule 0.
     let blocked: Name = "sub.ad0.track0.com".parse().unwrap();
-    assert_eq!(filter.check(&blocked), goethite_filter::Verdict::Blocked);
+    assert!(filter.check(&blocked, Sources::ALL).is_blocked());
     // `ad300.track300` exists, but under `.info`: a long shared prefix.
     let near_miss: Name = "sub.ad300.track300.com".parse().unwrap();
     let miss: Name = "www.example.com".parse().unwrap();
@@ -68,7 +68,7 @@ fn lookups(c: &mut Criterion) {
         ("miss, unknown TLD", &unknown_tld),
     ] {
         c.bench_function(&format!("filter/check {label} (1M rules)"), |b| {
-            b.iter(|| black_box(filter.check(black_box(name))));
+            b.iter(|| black_box(filter.check(black_box(name), Sources::ALL)));
         });
     }
 }
@@ -80,7 +80,7 @@ fn build(c: &mut Criterion) {
     group.bench_function("parse and compile 100k rules", |b| {
         b.iter(|| {
             let mut builder = FilterBuilder::new();
-            builder.add_list(black_box(&text));
+            builder.add_list(Source::new(0).unwrap(), black_box(&text));
             black_box(builder.build().unwrap())
         });
     });

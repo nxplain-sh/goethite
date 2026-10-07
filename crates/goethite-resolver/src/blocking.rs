@@ -4,7 +4,7 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
-use goethite_filter::{Filter, Verdict};
+use goethite_filter::{Filter, Sources, Verdict};
 use goethite_proto::{Name, Query, Record, RecordType, Response, ResponseCode};
 
 /// How a blocked name is answered.
@@ -52,9 +52,9 @@ impl Blocking {
         self.filter.load_full()
     }
 
-    /// The verdict of the current filter for `name`.
+    /// The verdict of the current filter for `name`, with every source.
     pub fn check(&self, name: &Name) -> Verdict {
-        self.filter.load().check(name)
+        self.filter.load().check(name, Sources::ALL)
     }
 
     /// The response for a blocked `query`.
@@ -86,14 +86,14 @@ impl Blocking {
 
 #[cfg(test)]
 mod tests {
-    use goethite_filter::FilterBuilder;
+    use goethite_filter::{FilterBuilder, Source};
     use goethite_proto::{Edns, Question, RecordClass};
 
     use super::*;
 
     fn blocking(response: BlockResponse) -> Blocking {
         let mut builder = FilterBuilder::new();
-        builder.add_list("||ads.example^\n");
+        builder.add_list(Source::new(0).unwrap(), "||ads.example^\n");
         Blocking::new(builder.build().unwrap(), response, 10)
     }
 
@@ -142,7 +142,7 @@ mod tests {
     fn replacing_the_filter() {
         let blocking = blocking(BlockResponse::NullIp);
         let name: Name = "x.ads.example.".parse().unwrap();
-        assert_eq!(blocking.check(&name), Verdict::Blocked);
+        assert!(blocking.check(&name).is_blocked());
         blocking.replace(Filter::empty());
         assert_eq!(blocking.check(&name), Verdict::Pass);
         assert_eq!(blocking.filter().rule_count(), 0);

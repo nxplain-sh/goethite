@@ -81,7 +81,7 @@ See [Filtering](../filtering/) for the rule syntax.
 
 ### `[[filter.list]]`
 
-Up to 64 lists, each with exactly one of:
+Up to 63 lists, each with exactly one of:
 
 | Key | Meaning |
 | --- | --- |

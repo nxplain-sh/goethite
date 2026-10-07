@@ -44,6 +44,19 @@ Most queries are misses, so the Bloom prefilter stays (it costs about 11 ns on b
 1.25 MiB at a million rules). Parsing and compiling 100,000 rules takes about 100 ms; a million,
 about a second, off the async runtime.
 
+After rules gained a source (the list they came from, so groups can pick lists) and the lookup key
+moved from the heap to a stack buffer, same machine and list, 2026-10-07:
+
+| Name | Bloom + FST |
+| --- | --- |
+| blocked | 122 ns |
+| near miss | 30 ns |
+| miss | 26 ns |
+| miss, unknown TLD | 26 ns |
+
+Memory stays at 6.2 MiB (the per-name entries are shared: a million rules from one list use a
+handful) and compiling 100,000 rules still takes 98 ms.
+
 These cover the resolver only. Decoding the query and encoding the response, and the socket round
 trip, come on top; the end-to-end number below is the one the p99 target refers to.
 

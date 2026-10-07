@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use goethite_filter::{Filter, FilterBuilder, ListStats};
+use goethite_filter::{Filter, FilterBuilder, ListStats, Source};
 use goethite_resolver::Blocking;
 use tracing::{debug, error, info, warn};
 
@@ -48,22 +48,32 @@ pub fn check(section: &FilterSection) -> Result<()> {
 /// `strict`, and skipped otherwise.
 fn compile_lists(section: &FilterSection, strict: bool) -> Result<Filter> {
     let mut builder = FilterBuilder::new();
-    if !section.rules.is_empty() {
-        let stats = builder.add_list(&section.rules.join("\n"));
+    // Config rules are source 0, each list the next one. Every source
+    // applies to every client until groups exist.
+    let sources = (0..).map_while(Source::new);
+    let mut sources = sources.skip(1);
+    if !section.rules.is_empty()
+        && let Some(source) = Source::new(0)
+    {
+        let stats = builder.add_list(source, &section.rules.join("\n"));
         log_stats("config rules", stats);
     }
-    for (source, path) in list_files(section) {
+    for (name, path) in list_files(section) {
+        let Some(source) = sources.next() else {
+            error!(list = %name, "too many filter lists; skipping this one");
+            continue;
+        };
         let Some(path) = path else {
-            info!(list = %source, "not downloaded yet");
+            info!(list = %name, "not downloaded yet");
             continue;
         };
         match read_list(&path) {
             Ok(text) => {
-                let stats = builder.add_list(&text);
-                log_stats(&source, stats);
+                let stats = builder.add_list(source, &text);
+                log_stats(&name, stats);
             }
             Err(err) if strict => return Err(err),
-            Err(err) => error!(list = %source, "{err:#}; skipping this list"),
+            Err(err) => error!(list = %name, "{err:#}; skipping this list"),
         }
     }
     let filter = builder.build().context("cannot compile the filter")?;
@@ -198,7 +208,7 @@ pub async fn reload(blocking: &Arc<Blocking>, section: FilterSection) {
 
 #[cfg(test)]
 mod tests {
-    use goethite_filter::Verdict;
+    use goethite_filter::Sources;
 
     use super::*;
     use crate::config::ListSection;
@@ -226,14 +236,13 @@ mod tests {
         let filter = build(&section);
         std::fs::remove_dir_all(&dir).unwrap();
         assert_eq!(filter.rule_count(), 2);
-        assert_eq!(
-            filter.check(&"ads.example".parse().unwrap()),
-            Verdict::Blocked
-        );
-        assert_eq!(
-            filter.check(&"x.tracker.example".parse().unwrap()),
-            Verdict::Blocked
-        );
+        let blocked = |name: &str| {
+            filter
+                .check(&name.parse().unwrap(), Sources::ALL)
+                .is_blocked()
+        };
+        assert!(blocked("ads.example"));
+        assert!(blocked("x.tracker.example"));
     }
 
     #[test]
@@ -276,7 +285,7 @@ mod update_tests {
     use std::net::{Ipv4Addr, SocketAddr};
     use std::sync::Mutex;
 
-    use goethite_filter::Verdict;
+    use goethite_filter::{Sources, Verdict};
     use goethite_proto::Record;
     use goethite_resolver::{Resolver, TlsRoots, tls_client_config};
     use http_body_util::Full;
@@ -403,7 +412,9 @@ mod update_tests {
     }
 
     fn verdict(section: &FilterSection, name: &str) -> Verdict {
-        compile(section).unwrap().check(&name.parse().unwrap())
+        compile(section)
+            .unwrap()
+            .check(&name.parse().unwrap(), Sources::ALL)
     }
 
     async fn download_cycle(alpn: &'static [u8]) {
@@ -429,7 +440,7 @@ mod update_tests {
             "nothing yet"
         );
         assert!(update(&section, &downloader).await);
-        assert_eq!(verdict(&section, "ads.example"), Verdict::Blocked);
+        assert!(verdict(&section, "ads.example").is_blocked());
 
         // Unchanged: revalidated with the ETag, nothing transferred.
         assert!(!update(&section, &downloader).await);
@@ -442,7 +453,7 @@ mod update_tests {
             list.etag = "\"v2\"".into();
         }
         assert!(!update(&section, &downloader).await);
-        assert_eq!(verdict(&section, "ads.example"), Verdict::Blocked);
+        assert!(verdict(&section, "ads.example").is_blocked());
 
         // A real update replaces it.
         {
@@ -451,7 +462,7 @@ mod update_tests {
             list.etag = "\"v3\"".into();
         }
         assert!(update(&section, &downloader).await);
-        assert_eq!(verdict(&section, "x.new.example"), Verdict::Blocked);
+        assert!(verdict(&section, "x.new.example").is_blocked());
         assert_eq!(verdict(&section, "ads.example"), Verdict::Pass);
 
         // Redirects are followed, but never to http://.

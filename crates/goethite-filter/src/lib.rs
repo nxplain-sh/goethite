@@ -14,6 +14,7 @@ mod filter;
 pub mod rule;
 
 pub use filter::{
-    Filter, FilterBuilder, FilterError, ListStats, MAX_RULES, Verdict, reference_check,
+    Filter, FilterBuilder, FilterError, ListStats, MAX_RULES, MAX_SOURCES, Match, Source, Sources,
+    Verdict, reference_check,
 };
 pub use rule::{Action, LineKind, Rule, Scope, parse_line};

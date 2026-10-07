@@ -89,8 +89,9 @@ impl SecuritySection {
     }
 }
 
-/// The most `[[filter.list]]` tables accepted.
-const MAX_LISTS: usize = 64;
+/// The most `[[filter.list]]` tables accepted: the filter tells 64 sources
+/// apart, and the config rules take one.
+const MAX_LISTS: usize = 63;
 
 /// The most inline `filter.rules` accepted.
 const MAX_INLINE_RULES: usize = 10_000;

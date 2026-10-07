@@ -22,6 +22,10 @@ below it (`*.ads.example`), and exceptions (`@@`) override blocks. Lists are unt
 - A lookup walks the FST once along the queried name's key. At each label boundary where a key
   ends, subtree flags apply; exact flags apply only at the end of the name, subdomains-only flags
   only before it. One walk checks every suffix of the name.
+- Every rule has a *source*, the list it came from, one of 64. The FST value indexes a shared
+  table of entries holding, per action and scope, the set of sources with such a rule, so one
+  compiled filter serves groups that use different lists: a lookup passes the set of sources
+  that apply. (Added in Phase 2; the first version stored the flags directly.)
 - A Bloom filter over each rule's top two labels (or its only label) is checked first. It uses a
   fast, randomly seeded hash: a collision only costs one walk.
 - Exceptions win over blocks. `reference_check` defines the semantics rule by rule; a property

@@ -16,7 +16,6 @@ mod tls;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 
-use goethite_filter::Verdict;
 use tracing::debug;
 
 use goethite_proto::{
@@ -159,7 +158,7 @@ impl Resolver {
             return response;
         }
         if let Some(blocking) = &self.blocking
-            && blocking.check(&question.name) == Verdict::Blocked
+            && blocking.check(&question.name).is_blocked()
         {
             debug!(name = %question.name, qtype = %question.qtype, "blocked");
             return blocking.respond(query);

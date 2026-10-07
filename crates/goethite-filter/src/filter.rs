@@ -3,19 +3,28 @@
 //! Every rule becomes one key: its labels in reverse order (`com`, then
 //! `example`, then `ads` for `ads.example.com.`), each lowercased and prefixed
 //! with its length, so label boundaries stay unambiguous whatever bytes a
-//! label holds. The key's value is a set of flags: block or allow, and exact,
-//! subtree or subdomains-only. Rules for the same name share a key.
+//! label holds. Rules for the same name share a key.
+//!
+//! Every rule also has a [`Source`], usually the list it came from, so one
+//! compiled filter serves groups of clients that use different lists: a
+//! lookup names the [`Sources`] that apply. A key's value indexes a small
+//! table of entries, each holding, for block and allow and for each scope
+//! (exact, subtree, subdomains only), the set of sources with such a rule.
+//! Keys with the same combination share an entry.
 //!
 //! Matching walks the FST once along the queried name's key. At every label
-//! boundary where a key ends, its flags apply: subtree flags always, exact
-//! flags only at the end of the name, subdomains-only flags only before it.
+//! boundary where a key ends, its entry applies: subtree rules always, exact
+//! rules only at the end of the name, subdomains-only rules only before it.
 //! One walk therefore checks every suffix of the name at once.
 //!
 //! A Bloom filter over each rule's top two labels (or its only label) sits in
 //! front: a name whose top one or two labels no rule shares cannot match, and
 //! is answered without touching the FST.
 
-use fst::raw::{Fst, Output};
+use std::collections::HashMap;
+use std::fmt::Write as _;
+
+use fst::raw::Output;
 use fst::{Map, MapBuilder};
 use goethite_proto::Name;
 
@@ -25,28 +34,148 @@ use crate::rule::{Action, LineKind, Rule, Scope, parse_line};
 /// The most rules one filter accepts; more are counted and dropped.
 pub const MAX_RULES: usize = 5_000_000;
 
-const BLOCK_EXACT: u64 = 1;
-const BLOCK_SUBTREE: u64 = 1 << 1;
-const BLOCK_SUBDOMAINS: u64 = 1 << 2;
-const ALLOW_EXACT: u64 = 1 << 3;
-const ALLOW_SUBTREE: u64 = 1 << 4;
-const ALLOW_SUBDOMAINS: u64 = 1 << 5;
+/// The most sources one filter tells apart.
+pub const MAX_SOURCES: usize = 64;
 
-const BLOCK: u64 = BLOCK_EXACT | BLOCK_SUBTREE | BLOCK_SUBDOMAINS;
-const ALLOW: u64 = ALLOW_EXACT | ALLOW_SUBTREE | ALLOW_SUBDOMAINS;
-/// Flags that apply when the key covers the whole queried name.
-const AT_NAME: u64 = BLOCK_EXACT | BLOCK_SUBTREE | ALLOW_EXACT | ALLOW_SUBTREE;
-/// Flags that apply when the key is a proper suffix of the queried name.
-const ABOVE_NAME: u64 = BLOCK_SUBTREE | BLOCK_SUBDOMAINS | ALLOW_SUBTREE | ALLOW_SUBDOMAINS;
+/// The longest key: a name is at most 255 bytes on the wire, and its key
+/// drops the root label.
+const MAX_KEY_LEN: usize = 255;
 
-fn flag(rule: &Rule) -> u64 {
-    match (rule.action, rule.scope) {
-        (Action::Block, Scope::Exact) => BLOCK_EXACT,
-        (Action::Block, Scope::Subtree) => BLOCK_SUBTREE,
-        (Action::Block, Scope::Subdomains) => BLOCK_SUBDOMAINS,
-        (Action::Allow, Scope::Exact) => ALLOW_EXACT,
-        (Action::Allow, Scope::Subtree) => ALLOW_SUBTREE,
-        (Action::Allow, Scope::Subdomains) => ALLOW_SUBDOMAINS,
+/// Where a rule came from, such as a filter list: one of [`MAX_SOURCES`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct Source(u8);
+
+impl Source {
+    /// The source with this index, if it is below [`MAX_SOURCES`].
+    pub fn new(index: usize) -> Option<Self> {
+        u8::try_from(index)
+            .ok()
+            .filter(|&index| usize::from(index) < MAX_SOURCES)
+            .map(Self)
+    }
+
+    /// Its index.
+    pub fn index(self) -> usize {
+        usize::from(self.0)
+    }
+
+    fn bit(self) -> u64 {
+        1_u64.checked_shl(u32::from(self.0)).unwrap_or(0)
+    }
+}
+
+/// A set of sources.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct Sources(u64);
+
+impl Sources {
+    /// Every source.
+    pub const ALL: Self = Self(u64::MAX);
+    /// No source: nothing matches.
+    pub const NONE: Self = Self(0);
+
+    /// This set plus `source`.
+    #[must_use]
+    pub fn with(self, source: Source) -> Self {
+        Self(self.0 | source.bit())
+    }
+
+    /// Both sets together.
+    #[must_use]
+    pub fn union(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+
+    /// Whether `source` is in the set.
+    pub fn contains(self, source: Source) -> bool {
+        self.0 & source.bit() != 0
+    }
+
+    /// Whether the set is empty.
+    pub fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+
+    /// The lowest source in `mask & self`, if any.
+    fn first_in(self, mask: u64) -> Option<Source> {
+        let both = self.0 & mask;
+        (both != 0)
+            .then(|| u8::try_from(both.trailing_zeros()).ok())
+            .flatten()
+            .map(Source)
+    }
+}
+
+impl FromIterator<Source> for Sources {
+    fn from_iter<I: IntoIterator<Item = Source>>(iter: I) -> Self {
+        iter.into_iter().fold(Self::NONE, Self::with)
+    }
+}
+
+/// Index of a rule's action and scope in an [`Entry`].
+fn slot(action: Action, scope: Scope) -> usize {
+    match (action, scope) {
+        (Action::Block, Scope::Exact) => 0,
+        (Action::Block, Scope::Subtree) => 1,
+        (Action::Block, Scope::Subdomains) => 2,
+        (Action::Allow, Scope::Exact) => 3,
+        (Action::Allow, Scope::Subtree) => 4,
+        (Action::Allow, Scope::Subdomains) => 5,
+    }
+}
+
+/// For one key: which sources have a rule of each action and scope, indexed
+/// by [`slot`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+struct Entry([u64; 6]);
+
+impl Entry {
+    fn get(&self, action: Action, scope: Scope) -> u64 {
+        self.0.get(slot(action, scope)).copied().unwrap_or(0)
+    }
+}
+
+/// The rule that decided a verdict.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Match {
+    /// Where the rule came from.
+    pub source: Source,
+    /// The rule's scope.
+    pub scope: Scope,
+    /// How many labels the rule's name has: the rule names the last `labels`
+    /// labels of the queried name.
+    pub labels: u8,
+}
+
+impl Match {
+    /// The rule in AdGuard syntax, written out from the queried `name`: for
+    /// example `||ads.example^`, `|ads.example^` or `*.ads.example`, with
+    /// `@@` in front for an exception.
+    pub fn rule_text(&self, name: &Name, action: Action) -> String {
+        let skip = name.label_count().saturating_sub(usize::from(self.labels));
+        let mut domain = String::new();
+        for label in name.labels().skip(skip) {
+            if !domain.is_empty() {
+                domain.push('.');
+            }
+            for &byte in label {
+                let byte = byte.to_ascii_lowercase();
+                if byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_' {
+                    domain.push(char::from(byte));
+                } else {
+                    let _ = write!(domain, "\\{byte:03}");
+                }
+            }
+        }
+        let prefix = match action {
+            Action::Block => "",
+            Action::Allow => "@@",
+        };
+        match self.scope {
+            Scope::Exact => format!("{prefix}|{domain}^"),
+            Scope::Subtree => format!("{prefix}||{domain}^"),
+            Scope::Subdomains => format!("{prefix}*.{domain}"),
+        }
     }
 }
 
@@ -56,20 +185,15 @@ pub enum Verdict {
     /// No rule matches.
     Pass,
     /// A block rule matches and no exception does.
-    Blocked,
+    Blocked(Match),
     /// An exception matches, so the name is never blocked.
-    Allowed,
+    Allowed(Match),
 }
 
 impl Verdict {
-    fn from_flags(flags: u64) -> Self {
-        if flags & ALLOW != 0 {
-            Self::Allowed
-        } else if flags & BLOCK != 0 {
-            Self::Blocked
-        } else {
-            Self::Pass
-        }
+    /// Whether the name is blocked.
+    pub fn is_blocked(&self) -> bool {
+        matches!(self, Self::Blocked(_))
     }
 }
 
@@ -106,7 +230,7 @@ pub struct FilterError(fst::Error);
 /// Collects rules and compiles them into a [`Filter`].
 #[derive(Default)]
 pub struct FilterBuilder {
-    entries: Vec<(Vec<u8>, u64)>,
+    rules: Vec<(Vec<u8>, Source, u8)>,
     stats: ListStats,
 }
 
@@ -116,31 +240,32 @@ impl FilterBuilder {
         Self::default()
     }
 
-    /// Adds one rule. Returns false, and adds nothing, for a rule naming the
-    /// root (which the parser never produces) and once [`MAX_RULES`] rules
-    /// have been added.
-    pub fn add_rule(&mut self, rule: &Rule) -> bool {
+    /// Adds one rule from `source`. Returns false, and adds nothing, for a
+    /// rule naming the root (which the parser never produces) and once
+    /// [`MAX_RULES`] rules have been added.
+    pub fn add_rule(&mut self, source: Source, rule: &Rule) -> bool {
         if rule.name.is_root() {
             self.stats.invalid = self.stats.invalid.saturating_add(1);
             return false;
         }
-        if self.entries.len() >= MAX_RULES {
+        if self.rules.len() >= MAX_RULES {
             self.stats.over_limit = self.stats.over_limit.saturating_add(1);
             return false;
         }
-        self.entries.push((key(&rule.name), flag(rule)));
+        let slot = u8::try_from(slot(rule.action, rule.scope)).unwrap_or(0);
+        self.rules.push((key(&rule.name), source, slot));
         self.stats.rules = self.stats.rules.saturating_add(1);
         true
     }
 
-    /// Adds every rule in `text`, one per line, and returns the counts for
-    /// this text alone.
-    pub fn add_list(&mut self, text: &str) -> ListStats {
+    /// Adds every rule in `text`, one per line, from `source`, and returns
+    /// the counts for this text alone.
+    pub fn add_list(&mut self, source: Source, text: &str) -> ListStats {
         let before = self.stats;
         let mut lines = ListStats::default();
         for line in text.lines() {
             match parse_line(line, |rule| {
-                self.add_rule(&rule);
+                self.add_rule(source, &rule);
             }) {
                 LineKind::Rules(_) => {}
                 LineKind::Ignored => lines.ignored = lines.ignored.saturating_add(1),
@@ -170,33 +295,59 @@ impl FilterBuilder {
     /// Returns [`FilterError`] if the FST cannot be built, which does not
     /// happen for keys this builder produced.
     pub fn build(mut self) -> Result<Filter, FilterError> {
-        self.entries.sort_unstable();
-        let mut merged: Vec<(Vec<u8>, u64)> = Vec::with_capacity(self.entries.len());
-        for (key, flags) in self.entries {
-            match merged.last_mut() {
-                Some((last, last_flags)) if *last == key => *last_flags |= flags,
-                _ => merged.push((key, flags)),
-            }
-        }
-        let mut bloom = Bloom::with_capacity(merged.len());
+        self.rules.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+        let mut entries: Vec<Entry> = Vec::new();
+        let mut index_of: HashMap<Entry, u64> = HashMap::new();
+        let mut keys = 0_usize;
         let mut builder = MapBuilder::memory();
-        for (key, flags) in &merged {
-            bloom.insert(anchor(key));
-            builder.insert(key, *flags).map_err(FilterError)?;
+        let mut bloom = Bloom::with_capacity(count_keys(&self.rules));
+        let mut rules = self.rules.into_iter().peekable();
+        while let Some((key, source, slot)) = rules.next() {
+            let mut entry = Entry::default();
+            let mut add = |source: Source, slot: u8| {
+                if let Some(mask) = entry.0.get_mut(usize::from(slot)) {
+                    *mask |= source.bit();
+                }
+            };
+            add(source, slot);
+            while let Some((_, source, slot)) = rules.next_if(|next| next.0 == key) {
+                add(source, slot);
+            }
+            let index = *index_of.entry(entry).or_insert_with(|| {
+                entries.push(entry);
+                u64::try_from(entries.len().saturating_sub(1)).unwrap_or(u64::MAX)
+            });
+            bloom.insert(anchor(&key));
+            builder.insert(&key, index).map_err(FilterError)?;
+            keys = keys.saturating_add(1);
         }
         Ok(Filter {
             map: builder.into_map(),
+            entries: entries.into_boxed_slice(),
             bloom,
             rules: self.stats.rules,
+            keys,
         })
     }
+}
+
+/// Distinct keys in sorted `rules`, to size the Bloom filter.
+fn count_keys(rules: &[(Vec<u8>, Source, u8)]) -> usize {
+    rules
+        .iter()
+        .zip(rules.iter().skip(1))
+        .filter(|(a, b)| a.0 != b.0)
+        .count()
+        .saturating_add(usize::from(!rules.is_empty()))
 }
 
 /// A compiled, immutable filter. Cheap to share; swap a new one in to update.
 pub struct Filter {
     map: Map<Vec<u8>>,
+    entries: Box<[Entry]>,
     bloom: Bloom,
     rules: usize,
+    keys: usize,
 }
 
 impl Filter {
@@ -204,14 +355,21 @@ impl Filter {
     pub fn empty() -> Self {
         Self {
             map: Map::default(),
+            entries: Box::default(),
             bloom: Bloom::with_capacity(0),
             rules: 0,
+            keys: 0,
         }
     }
 
     /// Number of rules compiled into the filter.
     pub fn rule_count(&self) -> usize {
         self.rules
+    }
+
+    /// Number of distinct names among the rules.
+    pub fn name_count(&self) -> usize {
+        self.keys
     }
 
     /// Bytes of memory used by the compiled rules.
@@ -221,13 +379,25 @@ impl Filter {
             .as_bytes()
             .len()
             .saturating_add(self.bloom.size())
+            .saturating_add(self.entries.len().saturating_mul(size_of::<Entry>()))
     }
 
-    /// What the rules say about `name`.
-    pub fn check(&self, name: &Name) -> Verdict {
-        let key = key(name);
-        let top_one = anchor_len(&key, 1);
-        let top_two = anchor_len(&key, 2);
+    /// What the rules from `sources` say about `name`.
+    ///
+    /// An exception from any of `sources` wins over every block. Otherwise
+    /// the block rule with the longest name decides; among rules for the same
+    /// name, an exact rule comes before a subtree rule and that before a
+    /// subdomains rule, and then the lowest source.
+    pub fn check(&self, name: &Name, sources: Sources) -> Verdict {
+        if sources.is_empty() {
+            return Verdict::Pass;
+        }
+        let mut buffer = [0_u8; MAX_KEY_LEN];
+        let Some(key) = key_into(name, &mut buffer) else {
+            return Verdict::Pass;
+        };
+        let top_one = anchor_len(key, 1);
+        let top_two = anchor_len(key, 2);
         let maybe = |len: Option<usize>| {
             len.and_then(|len| key.get(..len))
                 .is_some_and(|anchor| self.bloom.may_contain(anchor))
@@ -235,7 +405,75 @@ impl Filter {
         if !maybe(top_one) && !maybe(top_two) {
             return Verdict::Pass;
         }
-        Verdict::from_flags(walk(self.map.as_fst(), &key))
+        self.walk(key, sources)
+    }
+
+    /// Walks the FST along `key`, keeping the deepest block and allow match.
+    fn walk(&self, key: &[u8], sources: Sources) -> Verdict {
+        let fst = self.map.as_fst();
+        let mut node = fst.root();
+        let mut output = Output::zero();
+        let mut position = 0_usize;
+        let mut labels = 0_u8;
+        let mut block = None;
+        let mut allow = None;
+        while let Some(&len) = key.get(position) {
+            let label_end = position.saturating_add(1).saturating_add(usize::from(len));
+            let Some(label) = key.get(position..label_end) else {
+                break;
+            };
+            for &byte in label {
+                let Some(index) = node.find_input(byte) else {
+                    return decide(block, allow);
+                };
+                let transition = node.transition(index);
+                output = output.cat(transition.out);
+                node = fst.node(transition.addr);
+            }
+            position = label_end;
+            labels = labels.saturating_add(1);
+            if !node.is_final() {
+                continue;
+            }
+            let found = output.cat(node.final_output()).value();
+            let Some(entry) = usize::try_from(found)
+                .ok()
+                .and_then(|index| self.entries.get(index))
+            else {
+                continue;
+            };
+            let scopes = if position == key.len() {
+                [Scope::Exact, Scope::Subtree]
+            } else {
+                [Scope::Subtree, Scope::Subdomains]
+            };
+            let first = |action| {
+                scopes.into_iter().find_map(|scope| {
+                    sources
+                        .first_in(entry.get(action, scope))
+                        .map(|source| Match {
+                            source,
+                            scope,
+                            labels,
+                        })
+                })
+            };
+            if let Some(found) = first(Action::Block) {
+                block = Some(found);
+            }
+            if let Some(found) = first(Action::Allow) {
+                allow = Some(found);
+            }
+        }
+        decide(block, allow)
+    }
+}
+
+fn decide(block: Option<Match>, allow: Option<Match>) -> Verdict {
+    match (allow, block) {
+        (Some(found), _) => Verdict::Allowed(found),
+        (None, Some(found)) => Verdict::Blocked(found),
+        (None, None) => Verdict::Pass,
     }
 }
 
@@ -245,49 +483,31 @@ impl Default for Filter {
     }
 }
 
-/// Collects the flags that apply to the name encoded in `key`.
-fn walk(fst: &Fst<Vec<u8>>, key: &[u8]) -> u64 {
-    let mut node = fst.root();
-    let mut output = Output::zero();
-    let mut flags = 0;
-    let mut position = 0_usize;
-    while let Some(&len) = key.get(position) {
-        let label_end = position.saturating_add(1).saturating_add(usize::from(len));
-        let Some(label) = key.get(position..label_end) else {
-            break;
-        };
-        for &byte in label {
-            let Some(index) = node.find_input(byte) else {
-                return flags;
-            };
-            let transition = node.transition(index);
-            output = output.cat(transition.out);
-            node = fst.node(transition.addr);
-        }
-        position = label_end;
-        if node.is_final() {
-            let found = output.cat(node.final_output()).value();
-            let applicable = if position == key.len() {
-                AT_NAME
-            } else {
-                ABOVE_NAME
-            };
-            flags |= found & applicable;
-        }
-    }
-    flags
-}
-
 /// The key for `name`: labels from the root down, each lowercased and
 /// prefixed with its length.
 fn key(name: &Name) -> Vec<u8> {
-    let mut key = Vec::with_capacity(name.label_count().saturating_mul(16));
+    let mut buffer = [0_u8; MAX_KEY_LEN];
+    key_into(name, &mut buffer)
+        .map(<[u8]>::to_vec)
+        .unwrap_or_default()
+}
+
+/// Writes the key for `name` into `buffer`, without allocating. `None` only
+/// for a name longer than any valid name.
+fn key_into<'a>(name: &Name, buffer: &'a mut [u8; MAX_KEY_LEN]) -> Option<&'a [u8]> {
+    let mut len = 0_usize;
     for label in name.labels().rev() {
+        let end = len.checked_add(1)?.checked_add(label.len())?;
+        let out = buffer.get_mut(len..end)?;
+        let (prefix, bytes) = out.split_first_mut()?;
         // Labels are at most 63 bytes, so the length always fits.
-        key.push(u8::try_from(label.len()).unwrap_or(u8::MAX));
-        key.extend(label.iter().map(u8::to_ascii_lowercase));
+        *prefix = u8::try_from(label.len()).unwrap_or(u8::MAX);
+        for (to, &from) in bytes.iter_mut().zip(label) {
+            *to = from.to_ascii_lowercase();
+        }
+        len = end;
     }
-    key
+    buffer.get(..len)
 }
 
 /// The length of the first `labels` labels of `key`, if it has that many.
@@ -306,16 +526,34 @@ fn anchor(key: &[u8]) -> &[u8] {
     key.get(..len).unwrap_or(key)
 }
 
-/// The verdict of `rules` for `name`, computed rule by rule. This is the
-/// definition [`Filter::check`] must agree with; tests and fuzzing compare
-/// the two.
-pub fn reference_check(rules: &[Rule], name: &Name) -> Verdict {
-    let mut flags = 0;
-    let valid = rules.iter().filter(|rule| !rule.name.is_root());
-    for rule in valid.filter(|rule| rule.matches(name)) {
-        flags |= flag(rule);
-    }
-    Verdict::from_flags(flags)
+/// The verdict of `rules` from `sources` for `name`, computed rule by rule.
+/// This is the definition [`Filter::check`] must agree with; tests and
+/// fuzzing compare the two.
+pub fn reference_check(rules: &[(Source, Rule)], name: &Name, sources: Sources) -> Verdict {
+    let rank = |scope| match scope {
+        Scope::Exact => 0,
+        Scope::Subtree => 1,
+        Scope::Subdomains => 2,
+    };
+    let best = |action| {
+        rules
+            .iter()
+            .filter(|(source, rule)| {
+                rule.action == action
+                    && sources.contains(*source)
+                    && !rule.name.is_root()
+                    && rule.matches(name)
+            })
+            .map(|(source, rule)| Match {
+                source: *source,
+                scope: rule.scope,
+                labels: u8::try_from(rule.name.label_count()).unwrap_or(u8::MAX),
+            })
+            // Longest name first, then exact before subtree before
+            // subdomains, then the lowest source.
+            .min_by_key(|found| (std::cmp::Reverse(found.labels), rank(found.scope), found.source))
+    };
+    decide(best(Action::Block), best(Action::Allow))
 }
 
 #[cfg(test)]
@@ -326,10 +564,23 @@ mod tests {
         s.parse().unwrap()
     }
 
+    fn source(index: usize) -> Source {
+        Source::new(index).unwrap()
+    }
+
     fn filter(list: &str) -> Filter {
         let mut builder = FilterBuilder::new();
-        builder.add_list(list);
+        builder.add_list(source(0), list);
         builder.build().unwrap()
+    }
+
+    /// The verdict with every source, reduced to its kind.
+    fn kind(filter: &Filter, query: &str) -> &'static str {
+        match filter.check(&name(query), Sources::ALL) {
+            Verdict::Pass => "pass",
+            Verdict::Blocked(_) => "blocked",
+            Verdict::Allowed(_) => "allowed",
+        }
     }
 
     #[test]
@@ -342,46 +593,137 @@ mod tests {
              0.0.0.0 pixel.example\n",
         );
         for (query, verdict) in [
-            ("ads.example", Verdict::Blocked),
-            ("x.y.ads.example", Verdict::Blocked),
-            ("good.ads.example", Verdict::Allowed),
-            ("x.good.ads.example", Verdict::Allowed),
-            ("tracker.example", Verdict::Blocked),
-            ("x.tracker.example", Verdict::Pass),
-            ("cdn.example", Verdict::Pass),
-            ("img.cdn.example", Verdict::Blocked),
-            ("pixel.example", Verdict::Blocked),
-            ("example", Verdict::Pass),
-            ("badads.example", Verdict::Pass),
-            ("ADS.Example", Verdict::Blocked),
-            ("unrelated.test", Verdict::Pass),
+            ("ads.example", "blocked"),
+            ("x.y.ads.example", "blocked"),
+            ("good.ads.example", "allowed"),
+            ("x.good.ads.example", "allowed"),
+            ("tracker.example", "blocked"),
+            ("x.tracker.example", "pass"),
+            ("cdn.example", "pass"),
+            ("img.cdn.example", "blocked"),
+            ("pixel.example", "blocked"),
+            ("example", "pass"),
+            ("badads.example", "pass"),
+            ("ADS.Example", "blocked"),
+            ("unrelated.test", "pass"),
         ] {
-            assert_eq!(filter.check(&name(query)), verdict, "{query}");
+            assert_eq!(kind(&filter, query), verdict, "{query}");
         }
         assert_eq!(filter.rule_count(), 5);
+        assert_eq!(filter.name_count(), 5);
+    }
+
+    #[test]
+    fn matches_name_the_deciding_rule() {
+        let filter = filter("||ads.example^\n|x.ads.example^\n*.cdn.example\n@@|ok.ads.example^\n");
+        let check = |query: &str| filter.check(&name(query), Sources::ALL);
+        let Verdict::Blocked(found) = check("y.x.ads.example") else {
+            panic!("blocked")
+        };
+        // The subtree rule for ads.example; x.ads.example is exact only.
+        assert_eq!((found.scope, found.labels), (Scope::Subtree, 2));
+        assert_eq!(
+            found.rule_text(&name("y.x.ads.example"), Action::Block),
+            "||ads.example^"
+        );
+        let Verdict::Blocked(exact) = check("X.ads.example") else {
+            panic!("blocked")
+        };
+        // The deepest rule decides.
+        assert_eq!((exact.scope, exact.labels), (Scope::Exact, 3));
+        assert_eq!(
+            exact.rule_text(&name("X.ads.example"), Action::Block),
+            "|x.ads.example^"
+        );
+        let Verdict::Blocked(below) = check("img.cdn.example") else {
+            panic!("blocked")
+        };
+        assert_eq!(
+            below.rule_text(&name("img.cdn.example"), Action::Block),
+            "*.cdn.example"
+        );
+        let Verdict::Allowed(ok) = check("ok.ads.example") else {
+            panic!("allowed")
+        };
+        assert_eq!(
+            ok.rule_text(&name("ok.ads.example"), Action::Allow),
+            "@@|ok.ads.example^"
+        );
+    }
+
+    #[test]
+    fn sources_select_rules() {
+        let mut builder = FilterBuilder::new();
+        builder.add_list(source(0), "||ads.example^\n");
+        builder.add_list(source(5), "||ads.example^\n||social.example^\n");
+        builder.add_list(source(63), "@@||ads.example^\n");
+        assert!(Source::new(64).is_none());
+        let filter = builder.build().unwrap();
+        let check = |query: &str, sources: &[usize]| {
+            filter.check(&name(query), sources.iter().map(|&i| source(i)).collect())
+        };
+        let Verdict::Blocked(found) = check("ads.example", &[0, 5]) else {
+            panic!("blocked")
+        };
+        assert_eq!(found.source, source(0), "the lowest source");
+        let Verdict::Blocked(found) = check("ads.example", &[5]) else {
+            panic!("blocked")
+        };
+        assert_eq!(found.source, source(5));
+        assert!(check("social.example", &[5]).is_blocked());
+        assert_eq!(check("social.example", &[0]), Verdict::Pass);
+        assert!(matches!(
+            check("ads.example", &[0, 63]),
+            Verdict::Allowed(_)
+        ));
+        assert_eq!(check("ads.example", &[]), Verdict::Pass);
+        assert_eq!(filter.name_count(), 2);
     }
 
     #[test]
     fn top_level_rules_and_the_root() {
         let filter = filter("||zip^\n");
-        assert_eq!(filter.check(&name("anything.zip")), Verdict::Blocked);
-        assert_eq!(filter.check(&name("zip")), Verdict::Blocked);
-        assert_eq!(filter.check(&name("zip.example")), Verdict::Pass);
-        assert_eq!(filter.check(&Name::root()), Verdict::Pass);
+        assert_eq!(kind(&filter, "anything.zip"), "blocked");
+        assert_eq!(kind(&filter, "zip"), "blocked");
+        assert_eq!(kind(&filter, "zip.example"), "pass");
+        assert_eq!(filter.check(&Name::root(), Sources::ALL), Verdict::Pass);
     }
 
     #[test]
     fn labels_with_unusual_bytes_do_not_confuse_boundaries() {
         let mut builder = FilterBuilder::new();
         let dotted = Name::from_labels([&b"a.b"[..], b"example"]).unwrap();
-        builder.add_rule(&Rule {
-            name: dotted.clone(),
-            scope: Scope::Exact,
-            action: Action::Block,
-        });
+        builder.add_rule(
+            source(0),
+            &Rule {
+                name: dotted.clone(),
+                scope: Scope::Exact,
+                action: Action::Block,
+            },
+        );
         let filter = builder.build().unwrap();
-        assert_eq!(filter.check(&dotted), Verdict::Blocked);
-        assert_eq!(filter.check(&name("a.b.example")), Verdict::Pass);
+        let Verdict::Blocked(found) = filter.check(&dotted, Sources::ALL) else {
+            panic!("blocked")
+        };
+        assert_eq!(found.rule_text(&dotted, Action::Block), "|a\\046b.example^");
+        assert_eq!(kind(&filter, "a.b.example"), "pass");
+    }
+
+    #[test]
+    fn the_longest_names_fit_the_key_buffer() {
+        let label = [b'a'; 63];
+        let longest = Name::from_labels([&label[..], &label, &label, &label[..61]]).unwrap();
+        let mut builder = FilterBuilder::new();
+        builder.add_rule(
+            source(0),
+            &Rule {
+                name: longest.clone(),
+                scope: Scope::Exact,
+                action: Action::Block,
+            },
+        );
+        let filter = builder.build().unwrap();
+        assert!(filter.check(&longest, Sources::ALL).is_blocked());
     }
 
     #[test]
@@ -394,13 +736,13 @@ mod tests {
             action: Action::Block,
         };
         let mut builder = FilterBuilder::new();
-        assert!(!builder.add_rule(&root_rule));
+        assert!(!builder.add_rule(source(0), &root_rule));
         assert_eq!(builder.stats().invalid, 1);
         let filter = builder.build().unwrap();
-        let rules = [root_rule];
+        let rules = [(source(0), root_rule)];
         for query in [Name::root(), name("example")] {
-            assert_eq!(filter.check(&query), Verdict::Pass);
-            assert_eq!(reference_check(&rules, &query), Verdict::Pass);
+            assert_eq!(filter.check(&query, Sources::ALL), Verdict::Pass);
+            assert_eq!(reference_check(&rules, &query, Sources::ALL), Verdict::Pass);
         }
     }
 
@@ -408,6 +750,7 @@ mod tests {
     fn counts_and_limits() {
         let mut builder = FilterBuilder::new();
         let stats = builder.add_list(
+            source(0),
             "! comment\n||a.example^\n/regex/\nnot valid!\n\n0.0.0.0 b.example c.example\n",
         );
         assert_eq!(
@@ -422,6 +765,9 @@ mod tests {
         );
         let filter = builder.build().unwrap();
         assert!(filter.memory_bytes() > 0);
-        assert_eq!(Filter::empty().check(&name("a.example")), Verdict::Pass);
+        assert_eq!(
+            Filter::empty().check(&name("a.example"), Sources::ALL),
+            Verdict::Pass
+        );
     }
 }

@@ -14,7 +14,7 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use goethite_filter::{Filter, FilterBuilder};
+use goethite_filter::{Filter, FilterBuilder, Source};
 use goethite_proto::{Edns, Name, Query, Question, RecordClass, RecordType, ResponseCode};
 use goethite_resolver::{
     BlockResponse, Blocking, Cache, CacheConfig, Forwarder, ForwarderConfig, RebindingProtection,
@@ -401,7 +401,7 @@ async fn failures_are_not_cached() {
 
 fn filter(list: &str) -> Filter {
     let mut builder = FilterBuilder::new();
-    builder.add_list(list);
+    builder.add_list(Source::new(0).unwrap(), list);
     builder.build().unwrap()
 }
 

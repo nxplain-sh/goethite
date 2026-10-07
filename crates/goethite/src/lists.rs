@@ -11,7 +11,7 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use goethite_filter::{FilterBuilder, ListStats};
+use goethite_filter::{FilterBuilder, ListStats, Source};
 
 use crate::download::Validators;
 
@@ -96,7 +96,10 @@ fn write_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
 /// page served with status 200, or a list changed into something else, fails.
 pub fn validate(bytes: &[u8]) -> Result<ListStats> {
     let text = String::from_utf8_lossy(bytes);
-    let stats = FilterBuilder::new().add_list(&text);
+    let Some(source) = Source::new(0) else {
+        bail!("no filter source available");
+    };
+    let stats = FilterBuilder::new().add_list(source, &text);
     if stats.rules == 0 {
         bail!("it holds no rules");
     }
