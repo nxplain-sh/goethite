@@ -18,8 +18,13 @@ tokio = { workspace = true, features = ["io-util", "net", "time"] }
 tracing.workspace = true
 
 [dev-dependencies]
+criterion.workspace = true
 hickory-proto.workspace = true
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
+
+[[bench]]
+name = "cache"
+harness = false
 
 [lints]
 workspace = true

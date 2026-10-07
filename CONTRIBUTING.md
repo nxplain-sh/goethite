@@ -33,6 +33,13 @@ cargo deny --manifest-path fuzz/Cargo.toml check
 cargo audit --file fuzz/Cargo.lock
 ```
 
+Benchmarks (criterion; see [`bench/README.md`](bench/README.md) for recording results and the
+dnsperf script):
+
+```sh
+cargo bench -p goethite-resolver --bench cache
+```
+
 Run the server and query it:
 
 ```sh
