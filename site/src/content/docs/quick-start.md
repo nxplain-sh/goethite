@@ -3,9 +3,9 @@ title: Quick start
 description: Build goethite from source and query the development server.
 ---
 
-goethite is **pre-alpha**. It forwards queries to the upstream resolvers you configure, over plain
-DNS with failover, and caches the answers. Encrypted upstreams and filtering arrive in the next
-milestones.
+goethite is **pre-alpha**. It forwards queries to the upstream resolvers you configure, over DNS
+over TLS, DNS over HTTPS or plain DNS, with failover, and caches the answers. Filtering arrives in
+the next milestones.
 
 ## Prerequisites
 
@@ -24,14 +24,22 @@ The example config binds to `127.0.0.1:15353`, so the development server runs wi
 (Port 5353 is avoided because multicast DNS already uses it on most desktops.)
 Production deployments use port `53`.
 
-It forwards to [Quad9](https://quad9.net/) (`9.9.9.9`, then `149.112.112.112`). goethite never
-picks an upstream for you: the config must list at least one `[[upstream]]`:
+It forwards to [Quad9](https://quad9.net/) (`9.9.9.9`, then `149.112.112.112`) over DNS over TLS.
+goethite never picks an upstream for you: the config must list at least one `[[upstream]]`:
 
 ```toml
 [[upstream]]
-address = "9.9.9.9"      # an IP address, port 53 unless given
-protocol = "udp"         # retried over TCP when the answer is truncated; or "tcp"
+address = "9.9.9.9"          # an IP address; the port defaults to the protocol's
+protocol = "tls"             # "tls", "https", "udp" or "tcp"
+tls_name = "dns.quad9.net"   # the name the certificate must be valid for
+
+[[upstream]]
+address = "9.9.9.9"
+protocol = "https"
+url = "https://dns.quad9.net/dns-query"
 ```
+
+Certificates are checked against the Mozilla root certificates built into goethite.
 
 ## Query it
 
@@ -55,7 +63,8 @@ other name is forwarded upstream:
 dig @127.0.0.1 -p 15353 example.com
 ```
 
-The header shows `ra` (recursion available) and the answer comes from Quad9:
+The header shows `ra` (recursion available) and the answer comes from Quad9, over an encrypted
+connection:
 
 ```text
 ;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 4242

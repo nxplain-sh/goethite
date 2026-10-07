@@ -11,8 +11,8 @@ zero-downtime upgrades. It is named after the iron-oxide mineral that is a main 
 ## Status
 
 **Pre-alpha, Phase 1 in progress.** goethite forwards queries to the upstream resolvers you
-configure, over plain DNS with failover and spoofing defenses, and caches the answers. Encrypted
-upstreams and filtering come in the next Phase 1 milestones, so it is not yet a useful blocker. See the roadmap
+configure, over DNS over TLS, DNS over HTTPS or plain DNS, with failover, and caches the answers.
+Filtering comes in the next Phase 1 milestones, so it is not yet a useful blocker. See the roadmap
 in [`AGENTS.md`](AGENTS.md#roadmap-respect-the-order).
 
 ## Quick start (development)
@@ -28,12 +28,12 @@ In another terminal:
 
 ```sh
 dig @127.0.0.1 -p 15353 goethite.test        # -> 127.0.0.53, answered by goethite itself
-dig @127.0.0.1 -p 15353 example.com          # -> forwarded to Quad9, the example upstream
-dig @127.0.0.1 -p 15353 example.com +tcp     # same over TCP
+dig @127.0.0.1 -p 15353 example.com          # -> forwarded to Quad9 over DNS over TLS
+dig @127.0.0.1 -p 15353 example.com +tcp     # same, client side over TCP
 ```
 
-The example config forwards to Quad9 over plain DNS. Upstreams are configured in
-`[[upstream]]` tables and at least one is required; see
+The example config forwards to Quad9 over DNS over TLS. Upstreams are configured in
+`[[upstream]]` tables (`udp`, `tcp`, `tls` or `https`) and at least one is required; see
 [`config/goethite.example.toml`](config/goethite.example.toml).
 
 Development binds to `127.0.0.1:15353`, so no root is needed (port 5353 is avoided because

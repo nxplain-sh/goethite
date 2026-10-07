@@ -23,6 +23,10 @@ When an item is picked up, move it into an issue or PR and delete it from this l
 - **[P1] Out-of-order TCP answers.** A TCP connection resolves its queries one at a time, so a
   slow forwarded query delays the ones pipelined behind it (RFC 7766 allows answering out of
   order).
+- **[P2] Custom CA certificates for upstreams in the config**, for private resolvers or
+  TLS-inspecting networks (`TlsRoots::Custom` exists in the library; see ADR 0003).
+- **[later] Pipelined DoT.** A DoT connection carries one query at a time; RFC 7766 allows
+  several in flight with out-of-order answers.
 - **[P1] Less allocation per forwarded query.** Each exchange allocates a receive buffer and
   re-encodes records through hickory; a cache hit clones its records to count TTLs down. Measure
   with `bench/` before and after.

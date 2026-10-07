@@ -15,9 +15,9 @@ Resolution pipeline: client identification → policy/group lookup → local rew
 (including CNAME uncloaking) → cache → upstream (forward or recursive) → DNSSEC validation →
 response.
 
-Today (Phase 1, milestone 2) goethite has UDP/TCP listeners, a built-in `goethite.test.` record,
-plain-DNS forwarding to configured upstreams with failover, and a cache. There is no filtering and
-no encrypted upstream yet.
+Today (Phase 1, milestone 3) goethite has UDP/TCP listeners, a built-in `goethite.test.` record,
+forwarding to configured upstreams over DNS over TLS, DNS over HTTPS or plain DNS with failover,
+and a cache. There is no filtering yet.
 
 ### Trust boundaries
 
@@ -85,7 +85,7 @@ for that phase and not implemented yet. Phases follow the roadmap in
 | Slow or dead upstreams exhausting the server (B1, B2) | Per-attempt and total timeouts, failover with a back-off for failing upstreams, a cap on UDP queries in flight; queries beyond it are dropped | 1 | done |
 | Cache poisoning (B2)                        | Only the CNAME chain answering the question and the records at its end are cached, never unrelated answer, authority or additional records; chains are capped at 16 and loops are refused; negative answers need an SOA for a zone containing the name and are cached for at most min(SOA TTL, SOA minimum); TTL clamps; DO and CD are part of the cache key | 1 | done |
 | Cache memory exhaustion (B1, B2)            | A bounded number of entries (configurable, at most 1,000,000), answers with more than 32 records are not cached, oldest entries are evicted first, shards are chosen with a per-process random hash key | 1 | done |
-| On-path tampering / snooping upstream (B2)  | Encrypted upstreams (DoH, DoT) with failover                                                       | 1     | planned |
+| On-path tampering / snooping upstream (B2)  | DoT and DoH upstreams with rustls (TLS 1.2+, ring), certificates checked against the bundled Mozilla roots for an explicitly configured name; no bootstrap resolution; DoH requires HTTP/2, status 200, the DNS content type and caps bodies at 64 KiB ([ADR 0003](adr/0003-upstream-tls.md)) | 1 | done |
 | DNS rebinding                               | Rebinding protection: drop private/loopback answers for public names                               | 1     | planned |
 | Abuse as a DoS amplifier / query floods     | Response rate limiting (RRL)                                                                       | 1     | planned |
 | Process compromise impact (B6)              | Drop privileges after binding port 53. Hardened systemd unit (no new privileges, `CAP_NET_BIND_SERVICE` only, protected paths). | 1 | planned |
