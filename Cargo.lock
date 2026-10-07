@@ -335,6 +335,11 @@ name = "goethite-resolver"
 version = "0.0.0"
 dependencies = [
  "goethite-proto",
+ "hickory-proto",
+ "rand 0.10.3",
+ "thiserror",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

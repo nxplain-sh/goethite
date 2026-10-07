@@ -235,7 +235,7 @@ impl Engine {
     /// Answers the message in `wire`, encoding the response into `out`.
     ///
     /// Returns `false` if nothing must be sent (the message was dropped).
-    fn answer(
+    async fn answer(
         &self,
         wire: &[u8],
         transport: Transport,
@@ -244,7 +244,7 @@ impl Engine {
     ) -> bool {
         let (response, udp_limit) = match self.codec.decode_query(wire) {
             Ok(query) => {
-                let response = self.resolver.resolve(&query);
+                let response = self.resolver.resolve(&query).await;
                 trace!(
                     %peer,
                     %transport,
@@ -300,7 +300,7 @@ async fn serve_udp(socket: UdpSocket, engine: Arc<Engine>, mut stop: watch::Rece
             debug!(%peer, "dropped oversized udp datagram");
             continue;
         };
-        if engine.answer(wire, Transport::Udp, peer, &mut out)
+        if engine.answer(wire, Transport::Udp, peer, &mut out).await
             && let Err(err) = socket.send_to(&out, peer).await
         {
             debug!(%peer, %err, "udp send failed");
@@ -416,7 +416,7 @@ async fn serve_tcp_connection(
         }
 
         // A dropped message means the peer is not speaking DNS: hang up.
-        if !engine.answer(&query, Transport::Tcp, peer, &mut response) {
+        if !engine.answer(&query, Transport::Tcp, peer, &mut response).await {
             break;
         }
         let Ok(len) = u16::try_from(response.len()) else {

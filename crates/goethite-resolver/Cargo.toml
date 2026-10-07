@@ -1,6 +1,6 @@
 [package]
 name = "goethite-resolver"
-description = "Resolution for goethite: local records today; cache, forwarding, recursion and DNSSEC later."
+description = "Resolution for goethite: local records and forwarding today; cache, encrypted upstreams, recursion and DNSSEC later."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,6 +12,14 @@ publish.workspace = true
 
 [dependencies]
 goethite-proto.workspace = true
+rand.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["io-util", "net", "time"] }
+tracing.workspace = true
+
+[dev-dependencies]
+hickory-proto.workspace = true
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
 
 [lints]
 workspace = true
