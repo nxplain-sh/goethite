@@ -11,8 +11,9 @@ zero-downtime upgrades. It is named after the iron-oxide mineral that is a main 
 ## Status
 
 **Pre-alpha, Phase 1 in progress.** goethite forwards queries to the upstream resolvers you
-configure, over DNS over TLS, DNS over HTTPS or plain DNS, with failover, and caches the answers.
-Filtering comes in the next Phase 1 milestones, so it is not yet a useful blocker. See the roadmap
+configure, over DNS over TLS, DNS over HTTPS or plain DNS, with failover; caches the answers; and
+blocks names from hosts files, domain lists and AdGuard-style rules in local files. Downloading and
+updating lists comes next. See the roadmap
 in [`AGENTS.md`](AGENTS.md#roadmap-respect-the-order).
 
 ## Quick start (development)
@@ -30,6 +31,7 @@ In another terminal:
 dig @127.0.0.1 -p 15353 goethite.test        # -> 127.0.0.53, answered by goethite itself
 dig @127.0.0.1 -p 15353 example.com          # -> forwarded to Quad9 over DNS over TLS
 dig @127.0.0.1 -p 15353 example.com +tcp     # same, client side over TCP
+dig @127.0.0.1 -p 15353 doubleclick.net      # -> 0.0.0.0, blocked by the example rules
 ```
 
 The example config forwards to Quad9 over DNS over TLS. Upstreams are configured in

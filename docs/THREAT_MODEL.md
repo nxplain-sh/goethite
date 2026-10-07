@@ -15,9 +15,9 @@ Resolution pipeline: client identification → policy/group lookup → local rew
 (including CNAME uncloaking) → cache → upstream (forward or recursive) → DNSSEC validation →
 response.
 
-Today (Phase 1, milestone 3) goethite has UDP/TCP listeners, a built-in `goethite.test.` record,
+Today (Phase 1, milestone 4) goethite has UDP/TCP listeners, a built-in `goethite.test.` record,
 forwarding to configured upstreams over DNS over TLS, DNS over HTTPS or plain DNS with failover,
-and a cache. There is no filtering yet.
+a cache, and filtering from local list files. Lists are not downloaded yet.
 
 ### Trust boundaries
 
@@ -89,7 +89,8 @@ for that phase and not implemented yet. Phases follow the roadmap in
 | DNS rebinding                               | Rebinding protection: drop private/loopback answers for public names                               | 1     | planned |
 | Abuse as a DoS amplifier / query floods     | Response rate limiting (RRL)                                                                       | 1     | planned |
 | Process compromise impact (B6)              | Drop privileges after binding port 53. Hardened systemd unit (no new privileges, `CAP_NET_BIND_SERVICE` only, protected paths). | 1 | planned |
-| Hostile filter lists (B3)                   | Download size limits, rule count and length limits, validation before use, atomic swap of compiled lists (old list kept on failure) | 1 | planned |
+| Hostile filter lists (B3)                   | Local files: at most 128 MiB per list, 4096-byte lines, 5,000,000 rules; unsupported and invalid lines are counted and skipped, never guessed at (no regex engine to exhaust); rules naming the root are refused; compiled off the async runtime and swapped in atomically, keeping the old filter if compiling fails; the parser and compiler are fuzzed (`parse_list`) and checked against a rule-by-rule reference | 1 | done |
+| Hostile list downloads (B3)                 | Download size and time limits, HTTPS only, validation before use, the last good copy kept on disk | 1 | planned |
 | Unauthorized admin access (B4)              | Admin token. The API binds to loopback until a token is configured.                                | 2     | planned |
 | Unaccountable config changes                | Audit log for every config change                                                                  | 2     | planned |
 | XSS / injection in the web UI               | Strict CSP with no inline scripts. Bundled assets, never a CDN. `/api/docs` off by default and loopback-only. | 2 | planned |

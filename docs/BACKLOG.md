@@ -50,6 +50,13 @@ When an item is picked up, move it into an issue or PR and delete it from this l
   (query, response, frame) at the 64 KiB message limit. Revisit together with RFC 7766
   out-of-order pipelining and a per-connection query limit.
 - **[P1] `goethite check-config`** to validate a config file without starting the server.
+- **[P1] Hosts entries with real addresses as rewrites.** `192.168.1.5 printer.lan` lines are
+  skipped as unsupported; they belong with configurable local records.
+- **[P2] More filter syntax:** `$important`, `$badfilter`, `$client`, `$dnstype`, `$denyallow`
+  (with client groups), and internationalized names in lists (convert to punycode).
+- **[later] Regular-expression rules.** They cannot live in the FST; they would need a separate,
+  bounded matcher (e.g. a size-limited `regex-automata` DFA) run only after the FST.
+- **[P1] Re-read the config file on SIGHUP**, not only the filter lists.
 - **[P1] Name parsing for filter lists.** `Name::from_str` only accepts host-style names (no
   escapes, no wildcards). Filter syntax needs wildcards and may need RFC 1035 escapes; extend the
   parser (and its `parse_name` fuzz target) rather than adding a second one.
