@@ -51,6 +51,26 @@ fn queries() {
 }
 
 #[test]
+fn name_seeds() {
+    let dir = format!("{}/../../fuzz/seeds/parse_name", env!("CARGO_MANIFEST_DIR"));
+    let parse = |seed: &str| {
+        let text = std::fs::read_to_string(format!("{dir}/{seed}")).unwrap();
+        text.parse::<goethite_proto::Name>()
+    };
+    assert_eq!(
+        parse("goethite-test").unwrap().to_string(),
+        "goethite.test."
+    );
+    assert!(parse("root").unwrap().is_root());
+    assert_eq!(
+        parse("mixed-case-relative").unwrap().to_string(),
+        "Mixed-Case_Label.Example."
+    );
+    assert_eq!(parse("underscore").unwrap().label_count(), 3);
+    assert!(parse("empty-label").is_err());
+}
+
+#[test]
 fn rejected_queries() {
     assert_eq!(rejection("notify"), ResponseCode::NOT_IMP);
     assert_eq!(rejection("no-question"), ResponseCode::FORM_ERR);

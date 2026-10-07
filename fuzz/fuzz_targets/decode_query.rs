@@ -4,6 +4,7 @@
 //! - decoding never panics;
 //! - a decoded query re-encodes, and the result decodes to the same query
 //!   (including the case of the name);
+//! - the name displays as printable ASCII only, so it is safe to log;
 //! - any response goethite would send fits in a 512-byte UDP datagram.
 
 #![no_main]
@@ -25,10 +26,9 @@ fuzz_target!(|data: &[u8]| {
                 .decode_query(&out)
                 .expect("a re-encoded query decodes");
             assert_eq!(again, query);
-            assert_eq!(
-                again.question.name.to_string(),
-                query.question.name.to_string()
-            );
+            let shown = query.question.name.to_string();
+            assert_eq!(again.question.name.to_string(), shown);
+            assert!(shown.bytes().all(|b| b.is_ascii_graphic()));
             Response::for_query(&query, ResponseCode::REFUSED)
         }
         Err(err) => match err.response() {
