@@ -2,7 +2,9 @@
 
 The project website and docs, built with [Astro Starlight](https://starlight.astro.build) and
 deployed to GitHub Pages (`https://nxplain-sh.github.io/goethite/`) by
-`.github/workflows/pages.yml` on every push to `main` that touches `site/**`.
+`.github/workflows/pages.yml` on every push to `main` that touches `site/**`. The repository needs
+Pages enabled once, with Settings → Pages → Source set to **GitHub Actions**; otherwise the deploy
+job fails. Node.js 22.19 or newer is required (CI uses Node 24).
 
 ```sh
 cd site

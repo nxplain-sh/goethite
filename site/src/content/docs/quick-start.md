@@ -57,4 +57,5 @@ dig @127.0.0.1 -p 15353 +tcp goethite.test
 ## Stop it
 
 Press <kbd>Ctrl</kbd>+<kbd>C</kbd> (or send `SIGTERM`). goethite stops accepting new queries,
-lets in-flight TCP connections finish, and exits.
+finishes answering queries already in progress (for up to 5 seconds), closes open TCP
+connections, and exits.
