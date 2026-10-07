@@ -2,7 +2,9 @@
 
 #![allow(dead_code, reason = "each test crate uses a different subset")]
 
-use goethite_proto::{Edns, Name, Query, Question, RecordClass, RecordType};
+use std::net::{Ipv4Addr, Ipv6Addr};
+
+use goethite_proto::{Edns, Name, Query, Question, Record, RecordClass, RecordType};
 use proptest::prelude::*;
 
 /// Any valid name, with arbitrary label bytes and mixed case.
@@ -47,4 +49,19 @@ pub fn query() -> impl Strategy<Value = Query> {
                 dnssec_ok,
             }),
         })
+}
+
+/// A, AAAA or CNAME records with arbitrary names and TTLs.
+pub fn record() -> impl Strategy<Value = Record> {
+    (name(), any::<u32>(), 0..3_u8, any::<[u8; 16]>(), name()).prop_map(
+        |(owner, ttl, kind, bytes, target)| match kind {
+            0 => Record::a(
+                owner,
+                ttl,
+                Ipv4Addr::new(bytes[0], bytes[1], bytes[2], bytes[3]),
+            ),
+            1 => Record::aaaa(owner, ttl, Ipv6Addr::from(bytes)),
+            _ => Record::cname(owner, ttl, target),
+        },
+    )
 }

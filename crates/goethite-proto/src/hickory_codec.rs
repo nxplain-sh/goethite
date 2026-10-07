@@ -3,13 +3,13 @@
 //! This is the only module that touches hickory-proto's message types.
 
 use hickory_proto::op::{self, Message, MessageType, OpCode};
-use hickory_proto::rr::{self, DNSClass, RData, rdata};
+use hickory_proto::rr::{self, DNSClass};
 use hickory_proto::serialize::binary::{BinDecodable, BinDecoder, BinEncodable, BinEncoder};
 
 use crate::codec::RawHeader;
 use crate::{
-    DecodeError, DnsCodec, Edns, EncodeError, Name, Query, Question, RecordClass, RecordData,
-    RecordType, Response, WireError,
+    DecodeError, DnsCodec, Edns, EncodeError, Name, Opcode, Query, Question, Record, RecordClass,
+    RecordType, Response, ResponseCode, ResponseError, WireError,
 };
 
 /// The default [`DnsCodec`], backed by hickory-proto.
@@ -52,12 +52,48 @@ impl DnsCodec for HickoryCodec {
             recursion_desired: message.metadata.recursion_desired,
             checking_disabled: message.metadata.checking_disabled,
             authentic_data: message.metadata.authentic_data,
-            question: Question {
-                name: Name(question.name().clone()),
-                qtype: RecordType(question.query_type().into()),
-                qclass: RecordClass(question.query_class().into()),
-            },
+            question: question_from_hickory(question),
             edns,
+        })
+    }
+
+    fn decode_response(&self, wire: &[u8]) -> Result<Response, ResponseError> {
+        RawHeader::check_response(wire)?;
+        let message =
+            Message::from_vec(wire).map_err(|e| ResponseError::Malformed(WireError::new(e)))?;
+        let metadata = message.metadata;
+        let question = message.queries.first().map(question_from_hickory);
+        Ok(Response {
+            id: metadata.id,
+            opcode: Opcode(metadata.op_code.into()),
+            authoritative: metadata.authoritative,
+            truncated: metadata.truncation,
+            recursion_desired: metadata.recursion_desired,
+            recursion_available: metadata.recursion_available,
+            authentic_data: metadata.authentic_data,
+            checking_disabled: metadata.checking_disabled,
+            // hickory has already merged the extended bits from the OPT record.
+            rcode: ResponseCode(metadata.response_code.into()),
+            question,
+            answers: message
+                .answers
+                .into_iter()
+                .map(record_from_hickory)
+                .collect(),
+            authority: message
+                .authorities
+                .into_iter()
+                .map(record_from_hickory)
+                .collect(),
+            additional: message
+                .additionals
+                .into_iter()
+                .map(record_from_hickory)
+                .collect(),
+            edns: message.edns.map(|edns| Edns {
+                udp_payload_size: edns.max_payload(),
+                dnssec_ok: edns.flags().dnssec_ok,
+            }),
         })
     }
 
@@ -234,6 +270,14 @@ fn emit(message: &Message, out: &mut Vec<u8>) -> Result<(), EncodeError> {
     })
 }
 
+fn question_from_hickory(question: &op::Query) -> Question {
+    Question {
+        name: Name(question.name().clone()),
+        qtype: RecordType(question.query_type().into()),
+        qclass: RecordClass(question.query_class().into()),
+    }
+}
+
 fn question_to_hickory(question: &Question) -> op::Query {
     let mut query = op::Query::query(question.name.0.clone(), question.qtype.0.into());
     query.set_query_class(question.qclass.0.into());
@@ -247,13 +291,21 @@ fn edns_to_hickory(edns: Edns) -> op::Edns {
     out
 }
 
-fn record_to_hickory(record: &crate::Record) -> rr::Record {
-    let data = match record.data {
-        RecordData::A(addr) => RData::A(rdata::A(addr)),
-        RecordData::Aaaa(addr) => RData::AAAA(rdata::AAAA(addr)),
-    };
-    let mut out = rr::Record::from_rdata(record.name.0.clone(), record.ttl, data);
-    out.dns_class = DNSClass::IN;
+fn record_from_hickory(record: rr::Record) -> Record {
+    let rr::Record {
+        name,
+        dns_class,
+        ttl,
+        data,
+        ..
+    } = record;
+    Record::from_parts(Name(name), RecordClass(dns_class.into()), ttl, data)
+}
+
+fn record_to_hickory(record: &Record) -> rr::Record {
+    let mut out =
+        rr::Record::from_rdata(record.name().0.clone(), record.ttl(), record.data.clone());
+    out.dns_class = DNSClass::from(record.class().0);
     out
 }
 
@@ -262,6 +314,7 @@ fn response_to_hickory(response: &Response, with_records: bool) -> Message {
     let mut message = Message::new(response.id, MessageType::Response, opcode);
     let metadata = &mut message.metadata;
     metadata.authoritative = response.authoritative;
+    metadata.truncation = response.truncated;
     metadata.recursion_desired = response.recursion_desired;
     metadata.recursion_available = response.recursion_available;
     metadata.authentic_data = response.authentic_data;
@@ -272,6 +325,8 @@ fn response_to_hickory(response: &Response, with_records: bool) -> Message {
     }
     if with_records {
         message.add_answers(response.answers.iter().map(record_to_hickory));
+        message.add_authorities(response.authority.iter().map(record_to_hickory));
+        message.add_additionals(response.additional.iter().map(record_to_hickory));
     }
     if let Some(edns) = response.edns {
         message.set_edns(edns_to_hickory(edns));
@@ -284,7 +339,6 @@ mod tests {
     use std::net::Ipv4Addr;
 
     use super::*;
-    use crate::{Opcode, Record, ResponseCode};
 
     fn header(flags: [u8; 2], counts: [u16; 4]) -> Vec<u8> {
         let mut wire = vec![0xab, 0xcd, flags[0], flags[1]];
@@ -534,6 +588,51 @@ mod tests {
     }
 
     #[test]
+    fn response_header_is_checked_before_parsing() {
+        let decode = |flags: [u8; 2], counts| HickoryCodec.decode_response(&header(flags, counts));
+        assert!(matches!(
+            HickoryCodec.decode_response(&[0x80; 5]),
+            Err(ResponseError::TooShort { len: 5 })
+        ));
+        assert!(matches!(
+            decode([0x01, 0], [1, 0, 0, 0]),
+            Err(ResponseError::NotAResponse)
+        ));
+        for questions in [0, 2, u16::MAX] {
+            assert!(matches!(
+                decode([0x81, 0x80], [questions, 0, 0, 0]),
+                Err(ResponseError::QuestionCount(n)) if n == questions
+            ));
+        }
+        // 12 header bytes cannot hold a question and 65,535 records.
+        assert!(matches!(
+            decode([0x81, 0x80], [1, u16::MAX, 0, 0]),
+            Err(ResponseError::ImpossibleCounts)
+        ));
+    }
+
+    #[test]
+    fn decodes_upstream_responses() {
+        let query = sample_query();
+        let mut response = Response::for_query(&query, ResponseCode::NX_DOMAIN);
+        response.recursion_available = true;
+        response.authority.push(Record::soa(
+            "test.".parse().unwrap(),
+            300,
+            "ns.test.".parse().unwrap(),
+            60,
+        ));
+        let mut wire = Vec::new();
+        HickoryCodec
+            .encode_response(&response, 4096, &mut wire)
+            .unwrap();
+        let decoded = HickoryCodec.decode_response(&wire).unwrap();
+        assert_eq!(decoded, response);
+        assert_eq!(decoded.authority[0].soa_minimum(), Some(60));
+        assert_eq!(decoded.authority[0].record_type(), RecordType::SOA);
+    }
+
+    #[test]
     fn unsupported_edns_version_gets_badvers() {
         let mut wire = encode(&sample_query());
         // The OPT record ends the message: name(1) type(2) class(2) then the
@@ -562,11 +661,11 @@ mod tests {
         let query = sample_query();
         let mut response = Response::for_query(&query, ResponseCode::NO_ERROR);
         for i in 0..100 {
-            response.answers.push(Record {
-                name: query.question.name.clone(),
-                ttl: 60,
-                data: RecordData::A(Ipv4Addr::new(10, 0, 0, i)),
-            });
+            response.answers.push(Record::a(
+                query.question.name.clone(),
+                60,
+                Ipv4Addr::new(10, 0, 0, i),
+            ));
         }
 
         let mut out = Vec::new();

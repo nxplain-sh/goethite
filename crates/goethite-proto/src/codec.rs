@@ -20,6 +20,17 @@ pub trait DnsCodec: Send + Sync {
     /// [`DecodeError::response`] says whether to reply or drop it silently.
     fn decode_query(&self, wire: &[u8]) -> Result<Query, DecodeError>;
 
+    /// Decodes a response received from an upstream server.
+    ///
+    /// The header is checked before full parsing: the message must be a
+    /// response with exactly one question, and its section counts must fit in
+    /// its length.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`ResponseError`] if `wire` is not a usable response.
+    fn decode_response(&self, wire: &[u8]) -> Result<Response, ResponseError>;
+
     /// Encodes `query` into `out`, replacing its contents.
     ///
     /// # Errors
@@ -124,6 +135,30 @@ impl DecodeError {
             }
         }
     }
+}
+
+/// Why an upstream message could not be decoded as a response.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum ResponseError {
+    /// The message is too short to contain a DNS header.
+    #[error("message is {len} bytes, shorter than a DNS header")]
+    TooShort {
+        /// Length of the message in bytes.
+        len: usize,
+    },
+    /// The message is a query, not a response.
+    #[error("message is a query, not a response")]
+    NotAResponse,
+    /// The response does not carry exactly one question (RFC 9619).
+    #[error("response has {0} questions instead of one")]
+    QuestionCount(u16),
+    /// The header announces more records than the message could hold.
+    #[error("response announces more records than it has room for")]
+    ImpossibleCounts,
+    /// The message is not valid DNS wire format.
+    #[error("malformed response: {0}")]
+    Malformed(WireError),
 }
 
 /// The header fields needed to answer a query that was rejected.
@@ -245,6 +280,31 @@ impl RawHeader {
             opcode: self.opcode,
             recursion_desired: self.recursion_desired,
         }
+    }
+
+    /// Checks a response header before full parsing: one question, and no
+    /// more records than the remaining bytes could possibly hold.
+    pub(crate) fn check_response(wire: &[u8]) -> Result<Self, ResponseError> {
+        /// The smallest question: root name, type and class.
+        const MIN_QUESTION_LEN: usize = 5;
+        /// The smallest record: root name, type, class, TTL, data length.
+        const MIN_RECORD_LEN: usize = 11;
+
+        let header = Self::parse(wire).ok_or(ResponseError::TooShort { len: wire.len() })?;
+        if !header.is_response {
+            return Err(ResponseError::NotAResponse);
+        }
+        if header.question_count != 1 {
+            return Err(ResponseError::QuestionCount(header.question_count));
+        }
+        let records = usize::from(header.answer_count)
+            .saturating_add(usize::from(header.authority_count))
+            .saturating_add(usize::from(header.additional_count));
+        let room = wire.len().saturating_sub(HEADER_LEN + MIN_QUESTION_LEN);
+        if records.saturating_mul(MIN_RECORD_LEN) > room {
+            return Err(ResponseError::ImpossibleCounts);
+        }
+        Ok(header)
     }
 
     /// Applies the header part of the decode policy described on [`DecodeError`].

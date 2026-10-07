@@ -56,6 +56,35 @@ impl Name {
         self.0.is_root()
     }
 
+    /// Whether both names are equal including the case of every letter.
+    pub fn eq_exact(&self, other: &Name) -> bool {
+        self.0.eq_case(&other.0)
+    }
+
+    /// A copy with the case of each letter flipped when `flip` returns true.
+    ///
+    /// Used for 0x20 randomization (draft-vixie-dnsext-dns0x20): the upstream
+    /// must echo the exact case, which an off-path attacker cannot guess.
+    #[must_use]
+    pub fn with_random_case(&self, mut flip: impl FnMut() -> bool) -> Name {
+        let labels: Vec<Vec<u8>> = self
+            .0
+            .iter()
+            .map(|label| {
+                label
+                    .iter()
+                    .map(|&b| match b {
+                        b'a'..=b'z' if flip() => b.to_ascii_uppercase(),
+                        b'A'..=b'Z' if flip() => b.to_ascii_lowercase(),
+                        _ => b,
+                    })
+                    .collect()
+            })
+            .collect();
+        // Same label lengths as `self`, so this cannot fail.
+        Self::from_labels(labels.iter().map(Vec::as_slice)).unwrap_or_else(|_| self.clone())
+    }
+
     /// The number of labels, not counting the root.
     pub fn label_count(&self) -> usize {
         // Not hickory's `num_labels`, which leaves out a leading `*`.
@@ -193,6 +222,22 @@ mod tests {
             shown.chars().all(|c| c == ' ' || c.is_ascii_graphic()),
             "{shown}"
         );
+    }
+
+    #[test]
+    fn exact_equality_and_case_randomization() {
+        let name: Name = "goethite.test.".parse().unwrap();
+        let upper = name.with_random_case(|| true);
+        assert_eq!(upper.to_string(), "GOETHITE.TEST.");
+        assert_eq!(upper, name);
+        assert!(!upper.eq_exact(&name));
+        assert!(name.with_random_case(|| false).eq_exact(&name));
+        let mut toggle = false;
+        let mixed = name.with_random_case(|| {
+            toggle = !toggle;
+            toggle
+        });
+        assert_eq!(mixed.to_string(), "GoEtHiTe.TeSt.");
     }
 
     #[test]

@@ -22,8 +22,38 @@ fn check(wire: &[u8]) -> Result<(), TestCaseError> {
     Ok(())
 }
 
+/// Upstream responses are untrusted too: decoding must never panic, and a
+/// decoded response must re-encode.
+fn check_response(wire: &[u8]) -> Result<(), TestCaseError> {
+    if let Ok(response) = HickoryCodec.decode_response(wire) {
+        let mut reencoded = Vec::new();
+        HickoryCodec
+            .encode_response(&response, usize::from(u16::MAX), &mut reencoded)
+            .map_err(|e| TestCaseError::fail(e.to_string()))?;
+    }
+    Ok(())
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(4096))]
+
+    #[test]
+    fn random_bytes_as_responses(wire in prop::collection::vec(any::<u8>(), 0..1024)) {
+        check_response(&wire)?;
+    }
+
+    /// Random bytes behind a header that passes the response pre-check.
+    #[test]
+    fn random_body_behind_a_plausible_response_header(
+        id in any::<u16>(),
+        counts in any::<[u8; 3]>(),
+        body in prop::collection::vec(any::<u8>(), 0..512),
+    ) {
+        let mut wire = id.to_be_bytes().to_vec();
+        wire.extend_from_slice(&[0x81, 0x80, 0, 1, 0, counts[0] % 8, 0, counts[1] % 4, 0, counts[2] % 4]);
+        wire.extend_from_slice(&body);
+        check_response(&wire)?;
+    }
 
     #[test]
     fn random_bytes(wire in prop::collection::vec(any::<u8>(), 0..1024)) {

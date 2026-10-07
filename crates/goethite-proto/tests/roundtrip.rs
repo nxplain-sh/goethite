@@ -4,7 +4,7 @@ mod strategies;
 
 use std::net::Ipv4Addr;
 
-use goethite_proto::{DnsCodec, HickoryCodec, Record, RecordData, Response, ResponseCode};
+use goethite_proto::{DnsCodec, HickoryCodec, Record, Response, ResponseCode};
 use hickory_proto::op::Message;
 use proptest::prelude::*;
 
@@ -23,6 +23,31 @@ proptest! {
             decoded.question.name.to_string(),
             query.question.name.to_string()
         );
+    }
+
+    #[test]
+    fn response_roundtrips(
+        query in strategies::query(),
+        rcode in 0..16_u16,
+        flags in any::<(bool, bool, bool)>(),
+        answers in prop::collection::vec(strategies::record(), 0..6),
+        authority in prop::collection::vec(strategies::record(), 0..3),
+        additional in prop::collection::vec(strategies::record(), 0..3),
+    ) {
+        let mut response = Response::for_query(&query, ResponseCode(rcode));
+        (response.authoritative, response.recursion_available, response.authentic_data) = flags;
+        response.answers = answers;
+        response.authority = authority;
+        response.additional = additional;
+
+        let mut wire = Vec::new();
+        HickoryCodec.encode_response(&response, usize::from(u16::MAX), &mut wire).unwrap();
+        let decoded = HickoryCodec.decode_response(&wire).unwrap();
+        prop_assert_eq!(&decoded, &response);
+        // `Name` equality ignores case; records must keep it on the wire.
+        for (got, want) in decoded.answers.iter().zip(&response.answers) {
+            prop_assert!(got.name().eq_exact(want.name()));
+        }
     }
 
     #[test]
@@ -46,11 +71,7 @@ proptest! {
     ) {
         let mut response = Response::for_query(&query, ResponseCode::NO_ERROR);
         response.answers = (0..answers)
-            .map(|i| Record {
-                name: query.question.name.clone(),
-                ttl: 60,
-                data: RecordData::A(Ipv4Addr::new(192, 0, 2, i)),
-            })
+            .map(|i| Record::a(query.question.name.clone(), 60, Ipv4Addr::new(192, 0, 2, i)))
             .collect();
 
         let mut wire = Vec::new();

@@ -1,7 +1,11 @@
 //! Queries, responses and records.
 
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::fmt;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
+use hickory_proto::rr::{RData, rdata};
+
+use crate::codec::Escaped;
 use crate::{Name, Opcode, RecordClass, RecordType, ResponseCode};
 
 /// Size of the fixed DNS message header.
@@ -25,6 +29,14 @@ pub struct Question {
     pub qtype: RecordType,
     /// The class being asked for, nearly always `IN`.
     pub qclass: RecordClass,
+}
+
+impl Question {
+    /// Whether `other` asks the same thing with the name in exactly the same
+    /// case. Used to match upstream responses to 0x20-randomized queries.
+    pub fn matches_exactly(&self, other: &Question) -> bool {
+        self.qtype == other.qtype && self.qclass == other.qclass && self.name.eq_exact(&other.name)
+    }
 }
 
 /// The EDNS(0) parameters of a message (RFC 6891).
@@ -82,41 +94,123 @@ impl Query {
     }
 }
 
-/// The data of a resource record.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum RecordData {
-    /// An IPv4 address.
-    A(Ipv4Addr),
-    /// An IPv6 address.
-    Aaaa(Ipv6Addr),
+/// A resource record of any type.
+///
+/// The record data is opaque: goethite forwards and caches records it does
+/// not understand, and looks inside only the few it acts on (addresses,
+/// aliases, SOA minimums).
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct Record {
+    name: Name,
+    class: RecordClass,
+    ttl: u32,
+    pub(crate) data: RData,
 }
 
-impl RecordData {
-    /// The record type this data belongs to.
+impl Record {
+    /// An `IN A` record.
+    pub fn a(name: Name, ttl: u32, addr: Ipv4Addr) -> Self {
+        Self::new(name, ttl, RData::A(rdata::A(addr)))
+    }
+
+    /// An `IN AAAA` record.
+    pub fn aaaa(name: Name, ttl: u32, addr: Ipv6Addr) -> Self {
+        Self::new(name, ttl, RData::AAAA(rdata::AAAA(addr)))
+    }
+
+    /// An `IN CNAME` record pointing at `target`.
+    pub fn cname(name: Name, ttl: u32, target: Name) -> Self {
+        Self::new(name, ttl, RData::CNAME(rdata::CNAME(target.0)))
+    }
+
+    /// An `IN SOA` record; only the fields negative caching needs are taken.
+    pub fn soa(zone: Name, ttl: u32, primary: Name, minimum: u32) -> Self {
+        let mailbox = hickory_proto::rr::Name::root();
+        let soa = rdata::SOA::new(primary.0, mailbox, 1, 3600, 600, 86_400, minimum);
+        Self::new(zone, ttl, RData::SOA(soa))
+    }
+
+    fn new(name: Name, ttl: u32, data: RData) -> Self {
+        Self {
+            name,
+            class: RecordClass::IN,
+            ttl,
+            data,
+        }
+    }
+
+    pub(crate) fn from_parts(name: Name, class: RecordClass, ttl: u32, data: RData) -> Self {
+        Self {
+            name,
+            class,
+            ttl,
+            data,
+        }
+    }
+
+    /// Owner name.
+    pub fn name(&self) -> &Name {
+        &self.name
+    }
+
+    /// Replaces the owner name, keeping everything else.
+    pub fn set_name(&mut self, name: Name) {
+        self.name = name;
+    }
+
+    /// The record's class.
+    pub fn class(&self) -> RecordClass {
+        self.class
+    }
+
+    /// Time to live in seconds.
+    pub fn ttl(&self) -> u32 {
+        self.ttl
+    }
+
+    /// Replaces the time to live.
+    pub fn set_ttl(&mut self, ttl: u32) {
+        self.ttl = ttl;
+    }
+
+    /// The record's type.
     pub fn record_type(&self) -> RecordType {
-        match self {
-            Self::A(_) => RecordType::A,
-            Self::Aaaa(_) => RecordType::AAAA,
+        RecordType(self.data.record_type().into())
+    }
+
+    /// The address of an `A` or `AAAA` record.
+    pub fn ip(&self) -> Option<IpAddr> {
+        self.data.ip_addr()
+    }
+
+    /// The target of a `CNAME` record.
+    pub fn cname_target(&self) -> Option<Name> {
+        match &self.data {
+            RData::CNAME(target) => Some(Name(target.0.clone())),
+            _ => None,
+        }
+    }
+
+    /// The `MINIMUM` field of an `SOA` record (the negative-caching TTL).
+    pub fn soa_minimum(&self) -> Option<u32> {
+        match &self.data {
+            RData::SOA(soa) => Some(soa.minimum),
+            _ => None,
         }
     }
 }
 
-/// A resource record in class `IN`.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct Record {
-    /// Owner name.
-    pub name: Name,
-    /// Time to live in seconds.
-    pub ttl: u32,
-    /// Record data.
-    pub data: RecordData,
-}
-
-impl Record {
-    /// The record's type.
-    pub fn record_type(&self) -> RecordType {
-        self.data.record_type()
+impl fmt::Debug for Record {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Record({} {} {} {} {})",
+            self.name,
+            self.ttl,
+            self.class,
+            self.record_type(),
+            Escaped(&self.data.to_string())
+        )
     }
 }
 
@@ -133,6 +227,9 @@ pub struct Response {
     pub opcode: Opcode,
     /// `AA`: the answer comes from an authoritative source.
     pub authoritative: bool,
+    /// `TC`: the message was truncated. Set by goethite when a response does
+    /// not fit, and read from upstream responses.
+    pub truncated: bool,
     /// `RD`, copied from the query.
     pub recursion_desired: bool,
     /// `RA`: the server offers recursion.
@@ -147,6 +244,10 @@ pub struct Response {
     pub question: Option<Question>,
     /// Answer section.
     pub answers: Vec<Record>,
+    /// Authority section, e.g. the SOA record of a negative answer.
+    pub authority: Vec<Record>,
+    /// Additional section, without the OPT record (see `edns`).
+    pub additional: Vec<Record>,
     /// EDNS parameters; present whenever the query used EDNS.
     pub edns: Option<Edns>,
 }
@@ -162,6 +263,7 @@ impl Response {
             id: query.id,
             opcode: Opcode::QUERY,
             authoritative: false,
+            truncated: false,
             recursion_desired: query.recursion_desired,
             recursion_available: false,
             authentic_data: false,
@@ -169,6 +271,8 @@ impl Response {
             rcode,
             question: Some(query.question.clone()),
             answers: Vec::new(),
+            authority: Vec::new(),
+            additional: Vec::new(),
             edns: query.edns.map(|edns| Edns {
                 dnssec_ok: edns.dnssec_ok,
                 ..Edns::ours()
@@ -189,6 +293,7 @@ impl Response {
             id,
             opcode,
             authoritative: false,
+            truncated: false,
             recursion_desired,
             recursion_available: false,
             authentic_data: false,
@@ -196,6 +301,8 @@ impl Response {
             rcode,
             question: None,
             answers: Vec::new(),
+            authority: Vec::new(),
+            additional: Vec::new(),
             edns,
         }
     }

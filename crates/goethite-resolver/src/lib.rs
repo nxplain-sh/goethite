@@ -10,7 +10,7 @@
 use std::net::Ipv4Addr;
 
 use goethite_proto::{
-    Name, NameError, Query, Record, RecordClass, RecordData, RecordType, Response, ResponseCode,
+    Name, NameError, Query, Record, RecordClass, RecordType, Response, ResponseCode,
 };
 
 /// The name every Phase 0 build answers, to check that the server is alive.
@@ -29,11 +29,7 @@ pub const TEST_TTL: u32 = 60;
 /// Never in practice; [`TEST_NAME`] is a valid name. The `Result` keeps name
 /// parsing panic-free.
 pub fn test_record() -> Result<Record, NameError> {
-    Ok(Record {
-        name: TEST_NAME.parse::<Name>()?,
-        ttl: TEST_TTL,
-        data: RecordData::A(TEST_ADDR),
-    })
+    Ok(Record::a(TEST_NAME.parse::<Name>()?, TEST_TTL, TEST_ADDR))
 }
 
 /// Answers queries.
@@ -70,7 +66,7 @@ impl Resolver {
         let mut matching = self
             .local
             .iter()
-            .filter(|record| record.name == question.name)
+            .filter(|record| record.name() == &question.name)
             .peekable();
         if question.qclass != RecordClass::IN || matching.peek().is_none() {
             return Response::for_query(query, ResponseCode::REFUSED);
