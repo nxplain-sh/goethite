@@ -57,6 +57,7 @@ Every parser gets a fuzz target. Targets live in `fuzz/fuzz_targets/` and use
 | Target         | What it does                                                                                 |
 | -------------- | -------------------------------------------------------------------------------------------- |
 | `decode_query` | Decodes bytes via `goethite-proto`. On success, re-encodes, decodes again and asserts the two results are equal, including the case of the name, and that the name displays as printable ASCII. Every response goethite would send must fit in 512 bytes. |
+| `decode_response` | Decodes bytes as an upstream response. On success, re-encodes and decodes again; the two results must be equal, since forwarding relies on that. |
 | `parse_name`   | Parses text as a domain name. On success, the name's display must parse back to the same name. |
 
 Seeds are committed in `fuzz/seeds/<target>/`, and `crates/goethite-proto/tests/fuzz_seeds.rs`

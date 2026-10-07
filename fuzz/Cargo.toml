@@ -26,6 +26,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "decode_response"
+path = "fuzz_targets/decode_response.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "parse_name"
 path = "fuzz_targets/parse_name.rs"
 test = false

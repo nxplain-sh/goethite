@@ -12,8 +12,12 @@ use goethite_proto::{
 };
 
 fn seed(name: &str) -> Vec<u8> {
+    seed_in("decode_query", name)
+}
+
+fn seed_in(target: &str, name: &str) -> Vec<u8> {
     let path = format!(
-        "{}/../../fuzz/seeds/decode_query/{name}.bin",
+        "{}/../../fuzz/seeds/{target}/{name}.bin",
         env!("CARGO_MANIFEST_DIR")
     );
     std::fs::read(&path).unwrap_or_else(|err| panic!("{path}: {err}"))
@@ -48,6 +52,26 @@ fn queries() {
         decode("chaos-version-bind").question.qclass,
         RecordClass::CH
     );
+}
+
+#[test]
+fn response_seeds() {
+    let decode = |seed: &str| HickoryCodec.decode_response(&seed_in("decode_response", seed));
+    let a = decode("a-answer-edns").unwrap();
+    assert_eq!(a.answers[0].ip(), Some([192, 0, 2, 1].into()));
+    assert!(a.edns.is_some());
+    let chain = decode("cname-chain-compressed").unwrap();
+    assert_eq!(
+        chain.answers[0].cname_target().unwrap().to_string(),
+        "cdn.example.com."
+    );
+    assert_eq!(chain.answers[1].name().to_string(), "cdn.example.com.");
+    let nx = decode("nxdomain-soa").unwrap();
+    assert_eq!(nx.rcode, ResponseCode::NX_DOMAIN);
+    assert_eq!(nx.authority[0].soa_minimum(), Some(300));
+    assert!(decode("truncated").unwrap().truncated);
+    let mixed = decode("aaaa-mixed-case").unwrap();
+    assert_eq!(mixed.answers[0].name().to_string(), "ExAmPlE.CoM.");
 }
 
 #[test]
