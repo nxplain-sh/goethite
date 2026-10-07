@@ -61,6 +61,29 @@ bench/dnsperf.sh 127.0.0.1 15353 30     # server, port, seconds
 
 The first pass fills the cache from the upstreams; the script then runs a second, measured pass
 that is served from the cache. Record the queries per second and the latency percentiles that
-dnsperf reports, together with the machine and the upstreams used.
+dnsperf reports, together with the machine and the upstreams used. For percentiles, add
+`-O latency-histogram` and sum the buckets.
 
-No end-to-end run has been recorded yet, so goethite makes no end-to-end performance claim yet.
+Rate limiting does not apply to loopback clients. Driving goethite from another host, turn it off
+(`[server.rate_limit] queries_per_second = 0`), or dnsperf measures the limiter.
+
+### Results
+
+2026-10-07, commit `be255dd` (the code of v0.1.0), release build. Linux arm64 in a podman (libkrun) VM with 5 vCPUs
+on an Apple M3 Pro; dnsperf 2.14.0 runs in the same VM, so it competes with goethite for the
+CPUs. goethite uses the example config (5 `SO_REUSEPORT` UDP sockets, upstreams Quad9 over DNS
+over TLS) and answers from its cache; the 96 names in `queries.txt` are cached in a warm-up pass
+first. Each run lasts 20 s with `-c 4`:
+
+| Offered load | Answered | Lost | p50 | p90 | p99 | p99.9 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 50,000 q/s (`-Q 50000`) | 49,671 q/s | 0 | 44 µs | 73 µs | 117 µs | 303 µs |
+| 100,000 q/s (`-Q 100000`) | 99,973 q/s | 0 | 43 µs | 115 µs | 735 µs | 1.6 ms |
+| as fast as possible (`-T 4`) | 153,773 q/s | 0 | | | | |
+
+Percentiles are bucket upper bounds from dnsperf's latency histogram. The slowest 0.03% (at
+50,000 q/s) include names whose TTL ran out during the run and were fetched from Quad9 again.
+
+So the target of a sub-millisecond p99 for cached answers holds at up to 100,000 queries per
+second on this machine. A bare-metal run with dnsperf on a separate host is still to be
+recorded.

@@ -21,9 +21,12 @@ export default defineConfig({
 			},
 			sidebar: [
 				{ label: 'Quick start', slug: 'quick-start' },
+				{ label: 'Install on Linux', slug: 'install' },
+				{ label: 'Configuration', slug: 'configuration' },
 				{ label: 'Filtering', slug: 'filtering' },
 				{ label: 'Security settings', slug: 'security' },
 				{ label: 'API reference', slug: 'api-reference' },
+				{ label: 'Changelog', slug: 'changelog' },
 			],
 			// Fonts are bundled from npm and served from this site: no font CDN at runtime.
 			customCss: [

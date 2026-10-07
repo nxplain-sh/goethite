@@ -46,7 +46,7 @@ Run the server and query it:
 ```sh
 cargo run -- run --config config/goethite.example.toml
 dig @127.0.0.1 -p 15353 goethite.test        # -> 127.0.0.53
-dig @127.0.0.1 -p 15353 example.com          # -> REFUSED
+dig @127.0.0.1 -p 15353 example.com          # -> forwarded upstream
 dig @127.0.0.1 -p 15353 goethite.test +tcp
 ```
 
