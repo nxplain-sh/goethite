@@ -4,8 +4,11 @@ mod strategies;
 
 use std::net::Ipv4Addr;
 
-use goethite_proto::{DnsCodec, HickoryCodec, Record, Response, ResponseCode};
+use goethite_proto::{
+    DnsCodec, HickoryCodec, RESPONSE_PADDING_BLOCK, Record, Response, ResponseCode,
+};
 use hickory_proto::op::Message;
+use hickory_proto::rr::rdata::opt::EdnsCode;
 use proptest::prelude::*;
 
 proptest! {
@@ -33,12 +36,16 @@ proptest! {
         answers in prop::collection::vec(strategies::record(), 0..6),
         authority in prop::collection::vec(strategies::record(), 0..3),
         additional in prop::collection::vec(strategies::record(), 0..3),
+        pad in any::<bool>(),
     ) {
         let mut response = Response::for_query(&query, ResponseCode(rcode));
         (response.authoritative, response.recursion_available, response.authentic_data) = flags;
         response.answers = answers;
         response.authority = authority;
         response.additional = additional;
+        if let Some(edns) = response.edns.as_mut() {
+            edns.padding = pad;
+        }
 
         let mut wire = Vec::new();
         HickoryCodec.encode_response(&response, usize::from(u16::MAX), &mut wire).unwrap();
@@ -68,11 +75,15 @@ proptest! {
         query in strategies::query(),
         answers in 0..200_u8,
         max_len in 512..=4096_usize,
+        pad in any::<bool>(),
     ) {
         let mut response = Response::for_query(&query, ResponseCode::NO_ERROR);
         response.answers = (0..answers)
             .map(|i| Record::a(query.question.name.clone(), 60, Ipv4Addr::new(192, 0, 2, i)))
             .collect();
+        if let Some(edns) = response.edns.as_mut() {
+            edns.padding = pad;
+        }
 
         let mut wire = Vec::new();
         HickoryCodec.encode_response(&response, max_len, &mut wire).unwrap();
@@ -86,6 +97,19 @@ proptest! {
             prop_assert!(decoded.answers.is_empty());
         } else {
             prop_assert_eq!(decoded.answers.len(), usize::from(answers));
+            // Padded only when asked: to a whole block, or as far as the
+            // limit allows.
+            let padded = decoded
+                .edns
+                .as_ref()
+                .is_some_and(|edns| edns.options().get(EdnsCode::Padding).is_some());
+            prop_assert!(pad || !padded);
+            if padded {
+                prop_assert!(
+                    wire.len() % RESPONSE_PADDING_BLOCK == 0 || wire.len() == max_len,
+                    "{} bytes, limit {}", wire.len(), max_len
+                );
+            }
         }
     }
 }

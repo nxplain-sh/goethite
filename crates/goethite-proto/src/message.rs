@@ -42,8 +42,9 @@ impl Question {
 /// The EDNS(0) parameters of a message (RFC 6891).
 ///
 /// Only version 0 exists; queries with any other version are rejected with
-/// `BADVERS` while decoding, so the version is not stored. EDNS options are
-/// not modelled yet.
+/// `BADVERS` while decoding, so the version is not stored. Of the EDNS
+/// options, only Padding is modelled; the codec checks the others' lengths
+/// and drops them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Edns {
     /// The largest UDP payload the sender can receive. Values below 512 are
@@ -51,6 +52,13 @@ pub struct Edns {
     pub udp_payload_size: u16,
     /// The DNSSEC OK (`DO`) bit.
     pub dnssec_ok: bool,
+    /// The Padding option (RFC 7830). Decoded: the message carried one.
+    /// Encoded: the message is padded as RFC 8467 recommends, a query to a
+    /// multiple of [`QUERY_PADDING_BLOCK`] bytes and a response to a
+    /// multiple of [`RESPONSE_PADDING_BLOCK`], within its size limit.
+    /// Padding hides a message's length from someone watching an encrypted
+    /// connection; it is pointless, and never used, in plain DNS.
+    pub padding: bool,
 }
 
 impl Edns {
@@ -59,9 +67,16 @@ impl Edns {
         Self {
             udp_payload_size: MAX_UDP_PAYLOAD,
             dnssec_ok: false,
+            padding: false,
         }
     }
 }
+
+/// Queries are padded to a multiple of this many bytes (RFC 8467 4.1).
+pub const QUERY_PADDING_BLOCK: usize = 128;
+
+/// Responses are padded to a multiple of this many bytes (RFC 8467 4.1).
+pub const RESPONSE_PADDING_BLOCK: usize = 468;
 
 /// A standard query (`OPCODE` = `QUERY`) with exactly one question.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -374,6 +389,7 @@ mod tests {
             Some(Edns {
                 udp_payload_size: size,
                 dnssec_ok: false,
+                padding: false,
             })
         };
         assert_eq!(query(edns(100)).max_udp_response_len(), 512);
@@ -386,6 +402,7 @@ mod tests {
         let q = query(Some(Edns {
             udp_payload_size: 4096,
             dnssec_ok: true,
+            padding: true,
         }));
         let r = Response::for_query(&q, ResponseCode::REFUSED);
         assert_eq!(r.id, 7);
@@ -397,6 +414,7 @@ mod tests {
             Some(Edns {
                 udp_payload_size: MAX_UDP_PAYLOAD,
                 dnssec_ok: true,
+                padding: false,
             })
         );
         assert_eq!(r.rcode, ResponseCode::REFUSED);

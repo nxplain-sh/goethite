@@ -141,6 +141,20 @@ web UI's client editor shows the target address with a client ID.
 
 goethite is not a proxy, and does not send its own upstream queries over ODoH.
 
+## Padding
+
+Encryption hides a query's name, not its length, and a name's length can give it away. So
+goethite pads with EDNS (RFC 7830), in the sizes RFC 8467 recommends:
+
+- **Answers to clients.** A query that arrives padded over DoT, DoH or DoQ gets an answer padded to
+  a multiple of 468 bytes; try it with `kdig +tls +padding`. ODoH pads in its own encryption
+  layer instead, and plain DNS is never padded, since anyone on the path can read it anyway.
+- **Queries to upstreams.** goethite pads its own queries to [DoT and DoH upstreams](../configuration/#upstream)
+  to a multiple of 128 bytes; upstreams that pad, such as Quad9 and Cloudflare, pad their answers
+  in turn.
+
+Padding costs a few hundred bytes per answer and needs no setting.
+
 ## Limits
 
 Encrypted connections count against the same limits as TCP: `max_tcp_connections` (256) in total

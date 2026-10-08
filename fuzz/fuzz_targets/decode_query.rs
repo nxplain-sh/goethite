@@ -5,7 +5,8 @@
 //! - a decoded query re-encodes, and the result decodes to the same query
 //!   (including the case of the name);
 //! - the name displays as printable ASCII only, so it is safe to log;
-//! - any response goethite would send fits in a 512-byte UDP datagram.
+//! - any response goethite would send fits in a 512-byte UDP datagram,
+//!   padded (RFC 7830) or not.
 
 #![no_main]
 
@@ -39,5 +40,13 @@ fuzz_target!(|data: &[u8]| {
     codec
         .encode_response(&response, udp_limit, &mut out)
         .expect("responses to queries fit in 512 bytes");
+    assert!(out.len() <= udp_limit);
+    let mut padded = response;
+    if let Some(edns) = padded.edns.as_mut() {
+        edns.padding = true;
+    }
+    codec
+        .encode_response(&padded, udp_limit, &mut out)
+        .expect("padded responses to queries fit in 512 bytes");
     assert!(out.len() <= udp_limit);
 });

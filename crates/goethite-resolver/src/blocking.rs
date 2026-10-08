@@ -65,6 +65,7 @@ mod tests {
             edns: Some(Edns {
                 udp_payload_size: 1232,
                 dnssec_ok: false,
+                padding: false,
             }),
         }
     }

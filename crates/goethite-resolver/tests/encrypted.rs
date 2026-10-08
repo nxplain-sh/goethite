@@ -14,9 +14,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use goethite_proto::{Edns, Query, Question, RecordClass, RecordType, Response, ResponseCode};
+use goethite_proto::{
+    Edns, QUERY_PADDING_BLOCK, Query, Question, RecordClass, RecordType, Response, ResponseCode,
+};
 use goethite_resolver::{Forwarder, ForwarderConfig, ForwarderError, TlsRoots, UpstreamConfig};
 use hickory_proto::op::{Message, MessageType, OpCode};
+use hickory_proto::rr::rdata::opt::EdnsCode;
 use hickory_proto::rr::{self, RData, rdata};
 use http_body_util::{BodyExt, Full};
 use hyper::body::{Bytes, Incoming};
@@ -68,9 +71,29 @@ struct Counters {
     connections: Arc<AtomicUsize>,
     queries: Arc<AtomicUsize>,
     ids: Arc<std::sync::Mutex<Vec<u16>>>,
+    /// Each query's length on the wire, and whether it carried Padding.
+    sizes: Arc<std::sync::Mutex<Vec<(usize, bool)>>>,
+}
+
+/// Notes `wire`'s length and padding in `counters`.
+fn note_size(counters: &Counters, wire: &[u8], query: &Message) {
+    let padded = query
+        .edns
+        .as_ref()
+        .is_some_and(|edns| edns.options().get(EdnsCode::Padding).is_some());
+    counters.sizes.lock().unwrap().push((wire.len(), padded));
 }
 
 impl Counters {
+    /// Whether every query was padded to a multiple of 128 bytes.
+    fn all_padded(&self) -> bool {
+        let sizes = self.sizes.lock().unwrap();
+        !sizes.is_empty()
+            && sizes
+                .iter()
+                .all(|&(len, padded)| padded && len % QUERY_PADDING_BLOCK == 0)
+    }
+
     fn connections(&self) -> usize {
         self.connections.load(Ordering::SeqCst)
     }
@@ -107,6 +130,7 @@ async fn dot_server(ip: Ipv4Addr, one_per_connection: bool) -> (SocketAddr, Coun
                     let mut buf = vec![0; usize::from(u16::from_be_bytes(prefix))];
                     tls.read_exact(&mut buf).await.unwrap();
                     let query = Message::from_vec(&buf).unwrap();
+                    note_size(&seen, &buf, &query);
                     seen.queries.fetch_add(1, Ordering::SeqCst);
                     let wire = answer(&query, ip).to_vec().unwrap();
                     let len = u16::try_from(wire.len()).unwrap().to_be_bytes();
@@ -154,6 +178,7 @@ async fn doh_server(ip: Ipv4Addr, reply: DohReply) -> (SocketAddr, Counters) {
                         assert_eq!(request.headers()[CONTENT_TYPE], "application/dns-message");
                         let body = request.into_body().collect().await.unwrap().to_bytes();
                         let query = Message::from_vec(&body).unwrap();
+                        note_size(&seen, &body, &query);
                         seen.queries.fetch_add(1, Ordering::SeqCst);
                         seen.ids.lock().unwrap().push(query.metadata.id);
                         let wire = Bytes::from(answer(&query, ip).to_vec().unwrap());
@@ -193,6 +218,7 @@ fn query(name: &str) -> Query {
         edns: Some(Edns {
             udp_payload_size: 1232,
             dnssec_ok: false,
+            padding: false,
         }),
     }
 }
@@ -227,6 +253,11 @@ async fn dot_forwards_and_reuses_connections() {
         counters.connections(),
         1,
         "one TLS connection for all queries"
+    );
+    assert!(
+        counters.all_padded(),
+        "{:?}",
+        counters.sizes.lock().unwrap()
     );
 }
 
@@ -297,6 +328,11 @@ async fn doh_multiplexes_queries_over_one_connection_with_id_zero() {
     assert_eq!(counters.queries(), 4);
     assert_eq!(counters.connections(), 1, "HTTP/2 multiplexing");
     assert!(counters.ids.lock().unwrap().iter().all(|&id| id == 0));
+    assert!(
+        counters.all_padded(),
+        "{:?}",
+        counters.sizes.lock().unwrap()
+    );
 }
 
 #[tokio::test]

@@ -76,7 +76,9 @@ for 30 seconds.
 | `randomize_case` | `true` | 0x20 case randomization of query names, a defense against spoofed answers. Turn it off only for an upstream that does not preserve case. |
 
 Certificates are checked against the Mozilla root certificates built into goethite, not the
-operating system's store. Each query has 2 seconds per upstream and 4 seconds in total.
+operating system's store. Each query has 2 seconds per upstream and 4 seconds in total. Queries to
+`tls` and `https` upstreams are [padded](../encrypted-dns/#padding) so their size says less
+about the name.
 
 ## `[recursion]`
 

@@ -482,6 +482,7 @@ mod tests {
             edns: Some(Edns {
                 udp_payload_size: 1232,
                 dnssec_ok: false,
+                padding: false,
             }),
         }
     }
@@ -535,6 +536,7 @@ mod tests {
         with_do.edns = Some(Edns {
             udp_payload_size: 1232,
             dnssec_ok: true,
+            padding: false,
         });
         let mut with_cd = q.clone();
         with_cd.checking_disabled = true;
@@ -735,6 +737,7 @@ mod tests {
         q.edns = Some(Edns {
             udp_payload_size: 1232,
             dnssec_ok: true,
+            padding: false,
         });
         let mut response = answer(&q, vec![www, sig.clone(), stray]);
         response.authentic_data = true;

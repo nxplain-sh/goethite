@@ -18,6 +18,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use goethite_filter::{Filter, Sources};
+use goethite_proto::RESPONSE_PADDING_BLOCK;
 use goethite_resolver::{
     BlockResponse, ClientPolicy, GroupPolicy, Policy, PolicyParts, PolicyState, Resolver,
     test_record,
@@ -25,7 +26,8 @@ use goethite_resolver::{
 use goethite_server::{
     QueryEvent, QueryObserver, Server, ServerConfig, ServerError, ServerStats, Transport,
 };
-use hickory_proto::op::{Message, MessageType, OpCode, Query, ResponseCode};
+use hickory_proto::op::{Edns, Message, MessageType, OpCode, Query, ResponseCode};
+use hickory_proto::rr::rdata::opt::{EdnsCode, EdnsOption};
 use hickory_proto::rr::{Name, RData, RecordType, rdata::A};
 use http_body_util::{BodyExt, Full};
 use hyper::body::Bytes;
@@ -201,6 +203,10 @@ async fn connect(
 }
 
 async fn dot_exchange(stream: &mut TlsStream<TcpStream>, wire: &[u8]) -> Message {
+    Message::from_vec(&dot_exchange_raw(stream, wire).await).unwrap()
+}
+
+async fn dot_exchange_raw(stream: &mut TlsStream<TcpStream>, wire: &[u8]) -> Vec<u8> {
     let len = u16::try_from(wire.len()).unwrap().to_be_bytes();
     stream.write_all(&len).await.unwrap();
     stream.write_all(wire).await.unwrap();
@@ -215,7 +221,60 @@ async fn dot_exchange(stream: &mut TlsStream<TcpStream>, wire: &[u8]) -> Message
         .await
         .unwrap()
         .unwrap();
-    Message::from_vec(&buf).unwrap()
+    buf
+}
+
+/// A query with EDNS, padded with a Padding option (RFC 7830) if `padded`.
+fn edns_query(id: u16, name: &str, padded: bool) -> Vec<u8> {
+    let mut message = Message::new(id, MessageType::Query, OpCode::Query);
+    message.metadata.recursion_desired = true;
+    message.add_query(Query::query(Name::from_str(name).unwrap(), RecordType::A));
+    let mut edns = Edns::new();
+    edns.set_max_payload(1232);
+    if padded {
+        edns.options_mut()
+            .insert(EdnsOption::Unknown(EdnsCode::Padding.into(), vec![0; 40]));
+    }
+    message.set_edns(edns);
+    message.to_vec().unwrap()
+}
+
+fn is_padded(wire: &[u8]) -> bool {
+    Message::from_vec(wire)
+        .unwrap()
+        .edns
+        .is_some_and(|edns| edns.options().get(EdnsCode::Padding).is_some())
+}
+
+#[tokio::test]
+async fn padded_queries_get_padded_answers_over_tls_and_quic() {
+    let server = start();
+    let mut stream = connect(&server, server.dot, "dns.example", &[b"dot"]).await;
+    let padded = dot_exchange_raw(&mut stream, &edns_query(1, "goethite.test.", true)).await;
+    assert!(is_padded(&padded));
+    assert_eq!(padded.len() % RESPONSE_PADDING_BLOCK, 0);
+    assert_test_answer(&Message::from_vec(&padded).unwrap(), 1);
+    // A query without padding gets an answer without it.
+    let plain = dot_exchange_raw(&mut stream, &edns_query(2, "goethite.test.", false)).await;
+    assert!(!is_padded(&plain));
+    assert!(plain.len() < padded.len());
+
+    let (_endpoint, connection) = quic(&server, "dns.example").await;
+    let (mut send, mut recv) = connection.open_bi().await.unwrap();
+    let wire = edns_query(0, "goethite.test.", true);
+    send.write_all(&u16::try_from(wire.len()).unwrap().to_be_bytes())
+        .await
+        .unwrap();
+    send.write_all(&wire).await.unwrap();
+    send.finish().unwrap();
+    let reply = timeout(WAIT, recv.read_to_end(65_537))
+        .await
+        .unwrap()
+        .unwrap();
+    let answer = &reply[2..];
+    assert!(is_padded(answer));
+    assert_eq!(answer.len() % RESPONSE_PADDING_BLOCK, 0);
+    server.shutdown().await;
 }
 
 #[tokio::test]

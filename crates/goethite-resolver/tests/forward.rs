@@ -143,6 +143,7 @@ fn query(name: &str) -> Query {
         edns: Some(Edns {
             udp_payload_size: 4096,
             dnssec_ok: false,
+            padding: false,
         }),
     }
 }
@@ -328,6 +329,7 @@ async fn dnssec_ok_bit_is_passed_up_and_copied_back() {
     query.edns = Some(Edns {
         udp_payload_size: 1232,
         dnssec_ok: true,
+        padding: false,
     });
     let response = forwarder.forward(&query).await;
     assert!(response.edns.unwrap().dnssec_ok);

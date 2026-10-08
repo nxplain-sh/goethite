@@ -157,6 +157,13 @@ impl Transport {
     pub fn is_encrypted(self) -> bool {
         matches!(self, Self::Tls | Self::Https | Self::Quic | Self::Oblivious)
     }
+
+    /// Whether answers are padded with EDNS (RFC 7830) when the query was:
+    /// over TLS, HTTPS and QUIC. Plain DNS is readable anyway, and Oblivious
+    /// DoH pads in its own encryption layer (RFC 9230 6.2).
+    pub fn pads(self) -> bool {
+        matches!(self, Self::Tls | Self::Https | Self::Quic)
+    }
 }
 
 impl fmt::Display for Transport {
@@ -713,7 +720,14 @@ impl Engine {
                         elapsed: start.elapsed(),
                     });
                 }
-                (resolution.response, query.max_udp_response_len())
+                let mut response = resolution.response;
+                if transport.pads() && query.edns.is_some_and(|edns| edns.padding) {
+                    // RFC 7830 4: a padded query gets a padded answer.
+                    if let Some(edns) = response.edns.as_mut() {
+                        edns.padding = true;
+                    }
+                }
+                (response, query.max_udp_response_len())
             }
             Err(err) => {
                 let Some(response) = err.response() else {

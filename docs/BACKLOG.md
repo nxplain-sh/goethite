@@ -102,7 +102,6 @@ Phase 3's scope shipped in v0.3.0. These items came up along the way.
 
 ## Phase 4: v0.4
 
-- **[P4] EDNS padding (RFC 7830 / RFC 8467)** for DoT, DoH and DoQ, both server and upstream.
 - **[P4] Forward chosen domains while recursing:** `printer.lan` or `fritz.box` to the router,
   everything else from the root down, like AdGuard Home's per-domain upstreams.
 - **[later] Recursion extras:** coalescing identical queries in flight, prefetching popular

@@ -364,6 +364,16 @@ impl Forwarder {
             // cacheable by HTTP caches.
             outgoing.id = 0;
         }
+        if matches!(
+            upstream.connection,
+            Connection::Tls(_) | Connection::Https(_)
+        ) {
+            // RFC 8467: over encryption, pad the query (to 128 bytes) so its
+            // length says less about the name; the upstream pads its answer.
+            if let Some(edns) = outgoing.edns.as_mut() {
+                edns.padding = true;
+            }
+        }
         let mut wire = Vec::new();
         self.codec.encode_query(&outgoing, &mut wire)?;
         let address = upstream.config.address;
@@ -413,6 +423,7 @@ fn upstream_query(query: &Query, randomize_case: bool) -> Query {
         edns: Some(Edns {
             udp_payload_size: MAX_UDP_PAYLOAD,
             dnssec_ok: query.edns.is_some_and(|edns| edns.dnssec_ok),
+            padding: false,
         }),
     }
 }

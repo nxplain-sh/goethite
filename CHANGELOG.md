@@ -29,6 +29,9 @@ configuration format.
   Special-use names and private reverse zones are answered without asking anyone. The query log
   shows the server that answered, and the status API, metrics, web UI and TUI show recursion's
   counters.
+- **EDNS padding** (RFC 7830, RFC 8467 block sizes): answers to padded queries over DoT, DoH and
+  DoQ are padded to 468-byte blocks, and goethite's queries to DoT and DoH upstreams to 128-byte
+  blocks, so message sizes say less about the names in them.
 - The web UI links to the documentation and the API reference from the top bar of every page and
   the sign-in page; the API reference is the node's own when it serves one to the browser.
   `/api/v1/status` says whether it does (`api_docs`).
