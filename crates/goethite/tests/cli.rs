@@ -300,6 +300,10 @@ mod serving {
             .unwrap()
     }
 
+    /// The DNS server's "listening" line. The API logs "API listening" too,
+    /// in no fixed order, so "listening" alone may match the wrong one.
+    const DNS_LISTENING: &str = "listening udp=";
+
     fn ask(server: SocketAddr, name: &str) -> Message {
         let mut query = Message::new(0x5353, MessageType::Query, OpCode::Query);
         query.add_query(Query::query(Name::from_str(name).unwrap(), RecordType::A));
@@ -348,7 +352,7 @@ mod serving {
 
     fn serves_then_stops_on(signal: &str) {
         let mut server = Running::start(&format!("serves_then_stops_on_{signal}"), upstream());
-        let line = server.wait_for_log("listening");
+        let line = server.wait_for_log(DNS_LISTENING);
         let udp = field(&line, "udp");
 
         let answer = ask(udp, "goethite.test.");
@@ -390,7 +394,7 @@ mod serving {
             list.display().to_string()
         );
         let mut server = Running::start_with("blocks_and_reloads", upstream(), &extra);
-        let udp = field(&server.wait_for_log("listening"), "udp");
+        let udp = field(&server.wait_for_log(DNS_LISTENING), "udp");
         let null = RData::A(A(Ipv4Addr::UNSPECIFIED));
         let forwarded = RData::A(A(Ipv4Addr::new(192, 0, 2, 53)));
 
@@ -430,7 +434,7 @@ mod serving {
     #[test]
     fn gives_up_capabilities_and_sets_no_new_privs() {
         let mut server = Running::start("privileges", upstream());
-        let udp = field(&server.wait_for_log("listening"), "udp");
+        let udp = field(&server.wait_for_log(DNS_LISTENING), "udp");
         let pid = server.child.id();
         assert_eq!(proc_status(pid, "NoNewPrivs"), "1");
         assert_eq!(proc_status(pid, "CapEff"), "0000000000000000");
@@ -472,7 +476,7 @@ mod serving {
         let mut server = Running::start_config("switch_user", &config);
         let line = server.wait_for_log("dropped privileges");
         assert!(line.contains("user=nobody"), "{line}");
-        let udp = field(&server.wait_for_log("listening"), "udp");
+        let udp = field(&server.wait_for_log(DNS_LISTENING), "udp");
         let pid = server.child.id();
         let uid = proc_status(pid, "Uid");
         assert!(uid.split_whitespace().all(|id| id == "65534"), "{uid}");
@@ -508,7 +512,7 @@ mod serving {
         assert!(log.contains("rules_added=1"), "{log}");
 
         let mut server = Running::start_config("import", &config);
-        server.wait_for_log("listening");
+        server.wait_for_log(DNS_LISTENING);
         let refused = import();
         let log = String::from_utf8_lossy(&refused.stderr);
         assert!(!refused.status.success());
