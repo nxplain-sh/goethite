@@ -47,6 +47,7 @@ configuration format.
 
 - The web UI has one theme, light, whatever the system prefers; the theme switch in its header
   is gone.
+- Settings moved from the web UI's page tabs to its header, beside Pause and Sign out.
 
 ## [0.3.0] - 2026-10-08
 

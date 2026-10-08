@@ -55,6 +55,9 @@ export function Shell() {
 						</button>
 					)
 				) : null}
+				<Link to="/settings" className="button small">
+					Settings
+				</Link>
 				{currentToken() === null ? null : (
 					<button
 						type="button"
@@ -79,7 +82,6 @@ export function Shell() {
 				<Link to="/groups">Groups</Link>
 				<Link to="/clients">Clients</Link>
 				<Link to="/schedules">Schedules</Link>
-				<Link to="/settings">Settings</Link>
 				<Link to="/audit">Audit log</Link>
 			</nav>
 			<ErrorNotice error={status.error ?? pause.error ?? resume.error} />

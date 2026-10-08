@@ -123,6 +123,11 @@ code,
 	box-shadow: 2px 2px 0 var(--ink);
 }
 
+.topbar a.button[aria-current='page'] {
+	background: var(--accent);
+	color: var(--on-accent);
+}
+
 /* Buttons and inputs */
 
 .button {

@@ -49,9 +49,9 @@ the network; otherwise the token crosses it in clear text.
   their group. With an ID, the editor shows the DNS over HTTPS URL and the DNS over TLS and QUIC
   names to set the device up with.
 - **Schedules**: weekly windows in a time zone; a window can run past midnight.
-- **Settings**: filtering on or off, how blocked names are answered, and how often lists are
-  downloaded.
 - **Audit log**: who changed what, from where, with the resource before and after.
+- **Settings**, in the header beside Pause and Sign out: filtering on or off, how blocked names
+  are answered, and how often lists are downloaded.
 
 Changes are made with the revision you saw: if someone else changed the same thing meanwhile, the
 UI says so and offers their version instead of overwriting it. What [Terraform](../terraform/)
