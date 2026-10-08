@@ -316,6 +316,9 @@ function TopRow({
 }
 
 function Upstreams({ status }: { status: Status }) {
+	if (status.recursion != null) {
+		return <Recursion recursion={status.recursion} />
+	}
 	return (
 		<Panel title="Upstreams">
 			<table className="table">
@@ -342,6 +345,33 @@ function Upstreams({ status }: { status: Status }) {
 					))}
 				</tbody>
 			</table>
+		</Panel>
+	)
+}
+
+/** Resolving from the root servers down, instead of asking upstreams. */
+function Recursion({ recursion }: { recursion: NonNullable<Status['recursion']> }) {
+	return (
+		<Panel title="Recursion">
+			<p>
+				Resolving from the root servers down
+				{recursion.qname_minimisation ? ', showing each server as little of a name as it needs' : ''}
+				{recursion.ipv6 ? ', over IPv4 and IPv6' : ', over IPv4'}.
+			</p>
+			<dl className="setup">
+				<dt>Queries sent</dt>
+				<dd className="mono">
+					{count(recursion.sent)} ({count(recursion.tcp)} over TCP)
+				</dd>
+				<dt>Timed out</dt>
+				<dd className="mono">{count(recursion.timeouts)}</dd>
+				<dt>Unresolved</dt>
+				<dd className="mono">{count(recursion.failures)}</dd>
+				<dt>Known</dt>
+				<dd className="mono">
+					{count(recursion.zones)} zones, {count(recursion.servers)} servers
+				</dd>
+			</dl>
 		</Panel>
 	)
 }

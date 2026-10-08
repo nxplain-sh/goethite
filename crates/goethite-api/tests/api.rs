@@ -65,6 +65,7 @@ impl Control for FakeControl {
             },
             lists: Vec::new(),
             upstreams: Vec::new(),
+            recursion: None,
             cache: None,
             query_log: QueryLogStatus {
                 enabled: true,

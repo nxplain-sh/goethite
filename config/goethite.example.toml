@@ -102,6 +102,16 @@ tls_name = "dns.quad9.net"
 # [[upstream]]
 # address = "9.9.9.9"
 
+# Or ask no upstream at all: resolve every name from the root servers down,
+# as Unbound does. Remove the [[upstream]] tables above to use it. Each
+# server sees only as much of a name as it needs (QNAME minimisation);
+# servers are asked over IPv6 too when this host has an IPv6 route.
+#
+# [recursion]
+# enabled = true
+# qname_minimisation = true
+# ipv6 = true
+
 [cache]
 # Answers from the upstreams are cached until their TTL runs out. These are
 # the defaults.

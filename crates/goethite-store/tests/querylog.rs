@@ -12,7 +12,8 @@ use std::time::{Duration, Instant};
 
 use goethite_filter::{Action, Match, Scope, Source};
 use goethite_store::{
-    LogEvent, NameBuf, Protocol, QueryEntry, QueryLogConfig, QueryOutcome, RuleHit, Search, Store,
+    LogEvent, LogUpstream, NameBuf, Protocol, QueryEntry, QueryLogConfig, QueryOutcome, RuleHit,
+    Search, Store,
 };
 use jiff::Timestamp;
 
@@ -34,7 +35,7 @@ fn event(name: &str, client: &str, outcome: QueryOutcome) -> LogEvent {
         qtype: 1,
         rcode: 0,
         outcome,
-        upstream: (outcome == QueryOutcome::Forwarded).then_some(0),
+        upstream: (outcome == QueryOutcome::Forwarded).then_some(LogUpstream::Index(0)),
         rule: (outcome == QueryOutcome::Blocked).then(|| RuleHit {
             action: Action::Block,
             matched: Match {

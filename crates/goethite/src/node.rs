@@ -6,8 +6,8 @@ use std::time::SystemTime;
 use goethite_api::catalog::{Directory, DirectoryList};
 use goethite_api::{
     ApiError, BoxFuture, BoxResult, CacheStatus, Change, ClusterRole, ClusterStatus,
-    EncryptedStatus, FilterStatus, Forwarded, ForwardedAnswer, ListStatus, QueryLogStatus, Status,
-    UpstreamStatus, Writes,
+    EncryptedStatus, FilterStatus, Forwarded, ForwardedAnswer, ListStatus, QueryLogStatus,
+    RecursionStatus, Status, UpstreamStatus, Writes,
 };
 use goethite_resolver::{Resolver, Transport};
 use goethite_server::ServerStats;
@@ -131,6 +131,19 @@ impl goethite_api::Control for Node {
             },
             lists,
             upstreams,
+            recursion: self.resolver.recursor().map(|recursor| {
+                let stats = recursor.stats();
+                RecursionStatus {
+                    qname_minimisation: recursor.config().qname_minimisation,
+                    ipv6: recursor.config().ipv6,
+                    sent: stats.sent,
+                    tcp: stats.tcp,
+                    timeouts: stats.timeouts,
+                    failures: stats.failures,
+                    zones: as_u64(stats.zones),
+                    servers: as_u64(stats.servers),
+                }
+            }),
             cache,
             query_log: QueryLogStatus {
                 enabled: self.querylog_enabled,
@@ -257,6 +270,10 @@ impl goethite_api::Control for Node {
                 .cache()
                 .map(|cache| (cache.stats(), cache.len())),
             upstreams: &upstreams,
+            recursion: self
+                .resolver
+                .recursor()
+                .map(goethite_resolver::Recursor::stats),
             filter_rules: self.control.compiled().filter.rule_count(),
             lists: (
                 config.lists.len(),

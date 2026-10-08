@@ -104,6 +104,42 @@ impl Name {
         // Not hickory's `num_labels`, which leaves out a leading `*`.
         self.0.iter().count()
     }
+
+    /// The name made of this name's last `count` labels: `example.com.` for
+    /// 2 of `www.example.com.`, the root for 0. `None` if the name has fewer
+    /// labels.
+    pub fn suffix(&self, count: usize) -> Option<Name> {
+        let skip = self.label_count().checked_sub(count)?;
+        Self::from_labels(self.labels().skip(skip)).ok()
+    }
+
+    /// This name with 0x20 randomization undone: the labels at its end that
+    /// are byte for byte those at the end of `randomized` (where a server
+    /// compressed against the question it was sent) take their case from
+    /// `original`, the name before randomizing. Other labels keep theirs.
+    #[must_use]
+    pub fn with_case_restored(&self, randomized: &Name, original: &Name) -> Name {
+        let shared = self
+            .labels()
+            .rev()
+            .zip(randomized.labels().rev())
+            .take_while(|(ours, sent)| ours == sent)
+            .count();
+        if shared == 0 || randomized.label_count() != original.label_count() {
+            return self.clone();
+        }
+        let keep = self.label_count().saturating_sub(shared);
+        let restored = original
+            .labels()
+            .skip(original.label_count().saturating_sub(shared));
+        Self::from_labels(self.labels().take(keep).chain(restored)).unwrap_or_else(|_| self.clone())
+    }
+
+    /// The name one label shorter: `example.com.` for `www.example.com.`.
+    /// `None` for the root.
+    pub fn parent(&self) -> Option<Name> {
+        self.suffix(self.label_count().checked_sub(1)?)
+    }
 }
 
 impl FromStr for Name {
@@ -262,6 +298,40 @@ mod tests {
             toggle
         });
         assert_eq!(mixed.to_string(), "GoEtHiTe.TeSt.");
+    }
+
+    #[test]
+    fn randomized_case_is_undone() {
+        let original: Name = "www.github.com.".parse().unwrap();
+        let randomized: Name = "wWw.GItHuB.com.".parse().unwrap();
+        // Compressed against the question: the shared labels come back.
+        let target: Name = "GItHuB.com.".parse().unwrap();
+        let restored = target.with_case_restored(&randomized, &original);
+        assert!(restored.eq_exact(&"github.com.".parse().unwrap()));
+        // The server's own case where it differs: kept.
+        let own: Name = "cdn.GitHub.com.".parse().unwrap();
+        assert!(
+            own.with_case_restored(&randomized, &original)
+                .eq_exact(&"cdn.GitHub.com.".parse().unwrap())
+        );
+        let other: Name = "Example.NET.".parse().unwrap();
+        assert!(
+            other
+                .with_case_restored(&randomized, &original)
+                .eq_exact(&other)
+        );
+    }
+
+    #[test]
+    fn suffixes_and_parents() {
+        let name: Name = "www.Example.com".parse().unwrap();
+        assert_eq!(name.suffix(2).unwrap().to_string(), "Example.com.");
+        assert!(name.suffix(0).unwrap().is_root());
+        assert_eq!(name.suffix(3), Some(name.clone()));
+        assert_eq!(name.suffix(4), None);
+        assert_eq!(name.parent().unwrap().to_string(), "Example.com.");
+        assert!(Name::root().parent().is_none());
+        assert!("com.".parse::<Name>().unwrap().parent().unwrap().is_root());
     }
 
     #[test]

@@ -18,9 +18,9 @@ use goethite_filter::{Action, Filter, FilterBuilder, Source, Sources};
 use goethite_proto::{Edns, Name, Query, Question, RecordClass, RecordType, ResponseCode};
 use goethite_resolver::{
     BlockResponse, Cache, CacheConfig, ClientPolicy, Forwarder, ForwarderConfig, GroupPolicy,
-    Outcome, Policy, PolicyParts, PolicyState, RebindingProtection, Resolution, Resolver,
-    ScheduledServices, ScheduledSources, ServiceFilter, ServiceMask, ServiceRules, Transport,
-    UpstreamConfig,
+    Outcome, Policy, PolicyParts, PolicyState, RebindingProtection, Recursor, RecursorConfig,
+    Resolution, Resolver, ScheduledServices, ScheduledSources, ServiceFilter, ServiceMask,
+    ServiceRules, Transport, UpstreamConfig,
 };
 use hickory_proto::op::{self, Message, MessageType, OpCode};
 use hickory_proto::rr::{self, RData, rdata};
@@ -826,4 +826,66 @@ async fn failed_forwarding_is_reported() {
     assert_eq!(status.len(), 1);
     assert_eq!(status[0].consecutive_failures, 1);
     assert!(status[0].healthy);
+}
+
+/// Recursion over real sockets, against one server playing every zone: it
+/// answers directly, truncates `big.example.` over UDP, and serves it over
+/// TCP.
+#[tokio::test]
+async fn recursion_asks_over_udp_and_tcp() {
+    let udp = script(|query| {
+        let mut reply = answer(query, Ipv4Addr::new(192, 0, 2, 80));
+        reply.metadata.authoritative = true;
+        if query.queries[0]
+            .name()
+            .to_ascii()
+            .eq_ignore_ascii_case("big.example.")
+        {
+            reply.answers.clear();
+            reply.metadata.truncation = true;
+        }
+        vec![reply]
+    });
+    let server = fake(udp, always(Ipv4Addr::new(192, 0, 2, 81))).await;
+    let recursor = Recursor::new(RecursorConfig {
+        roots: Some(vec![server.addr.ip()]),
+        port: server.addr.port(),
+        ipv6: false,
+        total_timeout: Duration::from_secs(2),
+        ..RecursorConfig::default()
+    });
+    let resolver = Resolver::new(Vec::new()).with_recursor(recursor);
+
+    let answered = resolver
+        .resolve(&query("www.example."), from("10.0.0.1"))
+        .await;
+    assert_eq!(answered.outcome, Outcome::Recursive(server.addr));
+    assert_eq!(
+        ip(&answered.response),
+        Some(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 80)))
+    );
+    assert!(answered.response.recursion_available);
+    // Recursion asks without recursion desired, and the case echoed back
+    // was checked.
+    let seen = server.seen.lock().unwrap().clone();
+    assert!(seen.iter().all(|query| !query.metadata.recursion_desired));
+
+    let big = resolver
+        .resolve(&query("big.example."), from("10.0.0.1"))
+        .await;
+    assert_eq!(
+        ip(&big.response),
+        Some(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 81))),
+        "over TCP"
+    );
+    assert!(resolver.recursor().unwrap().stats().tcp >= 1);
+
+    // Special-use names never leave the house.
+    let before = server.seen.lock().unwrap().len();
+    let private = resolver
+        .resolve(&query("1.1.168.192.in-addr.arpa."), from("10.0.0.1"))
+        .await;
+    assert_eq!(private.outcome, Outcome::Local);
+    assert_eq!(private.response.rcode, ResponseCode::NX_DOMAIN);
+    assert_eq!(server.seen.lock().unwrap().len(), before);
 }

@@ -198,8 +198,11 @@ pub struct Status {
     pub filter: FilterStatus,
     /// Each list, by ID.
     pub lists: Vec<ListStatus>,
-    /// The upstreams, in configured order.
+    /// The upstreams, in configured order; none with recursion.
     pub upstreams: Vec<UpstreamStatus>,
+    /// Recursive resolution, when it is on instead of upstreams.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recursion: Option<RecursionStatus>,
     /// The cache, if there is one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache: Option<CacheStatus>,
@@ -297,6 +300,29 @@ pub struct EncryptedStatus {
     /// `/.well-known/odohconfigs`.
     #[serde(default)]
     pub odoh: bool,
+}
+
+/// Recursive resolution: from the root servers down, instead of asking
+/// upstream resolvers.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct RecursionStatus {
+    /// Whether servers are shown only as much of a name as they need
+    /// (QNAME minimisation, RFC 9156).
+    pub qname_minimisation: bool,
+    /// Whether servers are asked over IPv6 too.
+    pub ipv6: bool,
+    /// Queries sent to authoritative servers since start.
+    pub sent: u64,
+    /// Of them, over TCP.
+    pub tcp: u64,
+    /// Queries no server answered in time.
+    pub timeouts: u64,
+    /// Client queries that could not be resolved (SERVFAIL).
+    pub failures: u64,
+    /// Zone cuts known.
+    pub zones: u64,
+    /// Authoritative servers with statistics.
+    pub servers: u64,
 }
 
 /// The query log.

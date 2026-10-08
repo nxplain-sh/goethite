@@ -31,7 +31,8 @@ use arc_swap::ArcSwapOption;
 use clap::{Parser, Subcommand};
 use goethite_api::{Api, ApiConfig, EmbeddedDocs, EmbeddedWeb, WebAssets};
 use goethite_resolver::{
-    Cache, Forwarder, ForwarderConfig, Policy, PolicyState, Resolver, health_record, test_record,
+    Cache, Forwarder, ForwarderConfig, Policy, PolicyState, Recursor, Resolver, health_record,
+    test_record,
 };
 use goethite_server::Server;
 use goethite_store::{
@@ -305,21 +306,21 @@ fn sockets_from(
 
 /// The resolver for `config`, steered by `state`.
 fn resolver(config: &Config, state: &Arc<PolicyState>) -> Result<Resolver> {
-    let upstreams: Vec<_> = config
-        .upstream
-        .iter()
-        .map(config::UpstreamSection::to_upstream)
-        .collect();
-    for upstream in &upstreams {
-        info!(address = %upstream.address, transport = ?upstream.transport, "upstream");
-    }
-    let forwarder = Forwarder::new(ForwarderConfig::new(upstreams))
-        .context("invalid [[upstream]] configuration")?;
     let cache = Cache::new(config.cache.to_cache_config());
     info!(max_entries = config.cache.max_entries, "cache");
-    let mut resolver = Resolver::new(vec![test_record()?, health_record()?])
-        .with_cache(cache)
-        .with_forwarder(forwarder)
+    let mut resolver = Resolver::new(vec![test_record()?, health_record()?]).with_cache(cache);
+    if config.recursion.enabled {
+        let recursion = config.recursion.to_recursor_config(has_ipv6_route);
+        info!(
+            qname_minimisation = recursion.qname_minimisation,
+            ipv6 = recursion.ipv6,
+            "resolving from the root servers"
+        );
+        resolver = resolver.with_recursor(Recursor::new(recursion));
+    } else {
+        resolver = resolver.with_forwarder(forwarder(config)?);
+    }
+    let mut resolver = resolver
         .with_policy(Arc::clone(state))
         .with_fail_mode(config.filter.on_failure.mode());
     if let Some(protection) = config.security.rebinding_protection()? {
@@ -328,6 +329,27 @@ fn resolver(config: &Config, state: &Arc<PolicyState>) -> Result<Resolver> {
         info!("DNS rebinding protection is turned off");
     }
     Ok(resolver)
+}
+
+/// The forwarder for `config`'s `[[upstream]]` tables.
+fn forwarder(config: &Config) -> Result<Forwarder> {
+    let upstreams: Vec<_> = config
+        .upstream
+        .iter()
+        .map(config::UpstreamSection::to_upstream)
+        .collect();
+    for upstream in &upstreams {
+        info!(address = %upstream.address, transport = ?upstream.transport, "upstream");
+    }
+    Forwarder::new(ForwarderConfig::new(upstreams)).context("invalid [[upstream]] configuration")
+}
+
+/// Whether this host has a route to the IPv6 internet: a UDP socket can be
+/// connected to a root server's IPv6 address. Nothing is sent.
+fn has_ipv6_route() -> bool {
+    std::net::UdpSocket::bind("[::]:0")
+        .and_then(|socket| socket.connect("[2001:503:ba3e::2:30]:53"))
+        .is_ok()
 }
 
 /// Runs the DNS server (the data plane) and the control plane until a
@@ -657,13 +679,9 @@ fn check_config(config_path: &Path) -> Result<()> {
     if let Some(user) = &config.server.user {
         privileges::lookup(user)?;
     }
-    let upstreams = config
-        .upstream
-        .iter()
-        .map(config::UpstreamSection::to_upstream)
-        .collect();
-    Forwarder::new(ForwarderConfig::new(upstreams))
-        .context("invalid [[upstream]] configuration")?;
+    if !config.recursion.enabled {
+        forwarder(&config)?;
+    }
     filters::check(&config.filter, &ListStore::new(config.lists_dir()))?;
     if let Some(services::ServicesFrom::File(path)) = config.filter.services_from() {
         match services::read(&path, None)? {

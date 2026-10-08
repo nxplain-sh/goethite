@@ -64,7 +64,7 @@ and `doq`. Encrypted connections, QUIC ones included, count against `max_tcp_con
 ## `[[upstream]]`
 
 The resolvers goethite forwards to, tried in the order they appear, with failover. At least one
-is required, and at most 16 are allowed. An upstream that fails three times in a row is skipped
+is required, unless [`[recursion]`](#recursion) is enabled instead, and at most 16 are allowed. An upstream that fails three times in a row is skipped
 for 30 seconds.
 
 | Key | Default | Meaning |
@@ -77,6 +77,17 @@ for 30 seconds.
 
 Certificates are checked against the Mozilla root certificates built into goethite, not the
 operating system's store. Each query has 2 seconds per upstream and 4 seconds in total.
+
+## `[recursion]`
+
+Resolve every name from the root servers down instead of asking `[[upstream]]` resolvers; see
+[Recursion](../recursion/). A config file has one or the other.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | `false` | Resolve recursively. With it, there must be no `[[upstream]]` tables. |
+| `qname_minimisation` | `true` | Show each server only as much of a name as it needs (RFC 9156). |
+| `ipv6` | unset | Ask servers over IPv6 too. Unset: when this host has an IPv6 route. |
 
 ## `[cache]`
 

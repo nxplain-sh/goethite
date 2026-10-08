@@ -3604,6 +3604,66 @@
           }
         }
       },
+      "RecursionStatus": {
+        "type": "object",
+        "description": "Recursive resolution: from the root servers down, instead of asking\nupstream resolvers.",
+        "required": [
+          "qname_minimisation",
+          "ipv6",
+          "sent",
+          "tcp",
+          "timeouts",
+          "failures",
+          "zones",
+          "servers"
+        ],
+        "properties": {
+          "failures": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Client queries that could not be resolved (SERVFAIL).",
+            "minimum": 0
+          },
+          "ipv6": {
+            "type": "boolean",
+            "description": "Whether servers are asked over IPv6 too."
+          },
+          "qname_minimisation": {
+            "type": "boolean",
+            "description": "Whether servers are shown only as much of a name as they need\n(QNAME minimisation, RFC 9156)."
+          },
+          "sent": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Queries sent to authoritative servers since start.",
+            "minimum": 0
+          },
+          "servers": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Authoritative servers with statistics.",
+            "minimum": 0
+          },
+          "tcp": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Of them, over TCP.",
+            "minimum": 0
+          },
+          "timeouts": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Queries no server answered in time.",
+            "minimum": 0
+          },
+          "zones": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Zone cuts known.",
+            "minimum": 0
+          }
+        }
+      },
       "RoleChange": {
         "type": "object",
         "description": "How to change a node's role.",
@@ -4025,6 +4085,17 @@
             "$ref": "#/components/schemas/QueryLogStatus",
             "description": "The query log."
           },
+          "recursion": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RecursionStatus",
+                "description": "Recursive resolution, when it is on instead of upstreams."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "started_at": {
             "type": "string",
             "format": "date-time",
@@ -4035,7 +4106,7 @@
             "items": {
               "$ref": "#/components/schemas/UpstreamStatus"
             },
-            "description": "The upstreams, in configured order."
+            "description": "The upstreams, in configured order; none with recursion."
           },
           "version": {
             "type": "string",

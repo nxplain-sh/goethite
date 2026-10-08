@@ -26,6 +26,7 @@ export default defineConfig({
 				{ label: 'Filtering', slug: 'filtering' },
 				{ label: 'Clients and groups', slug: 'groups' },
 				{ label: 'Encrypted DNS', slug: 'encrypted-dns' },
+				{ label: 'Recursion', slug: 'recursion' },
 				{ label: 'High availability', slug: 'ha' },
 				{ label: 'REST API', slug: 'api' },
 				{ label: 'Web UI', slug: 'web-ui' },

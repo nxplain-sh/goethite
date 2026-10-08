@@ -120,6 +120,30 @@ fn missing_upstreams_are_an_error() {
         "{stderr}"
     );
     assert!(stderr.contains("[[upstream]]"), "{stderr}");
+    assert!(stderr.contains("[recursion]"), "{stderr}");
+}
+
+/// Recursion instead of upstreams: one or the other.
+#[test]
+fn recursion_or_upstreams() {
+    let recursive = config_file(
+        "recursive",
+        "[server]\nlisten = \"127.0.0.1:0\"\n\n[recursion]\nenabled = true\nipv6 = false\n",
+    );
+    let output = goethite(&["check-config", "--config", recursive.to_str().unwrap()]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let both = config_file(
+        "recursive_and_upstreams",
+        "[[upstream]]\naddress = \"9.9.9.9\"\n\n[recursion]\nenabled = true\n",
+    );
+    let output = goethite(&["check-config", "--config", both.to_str().unwrap()]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(stderr.contains("choose one"), "{stderr}");
 }
 
 #[test]

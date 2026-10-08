@@ -25,6 +25,13 @@ libfuzzer-sys = "0.4.13"
 members = ["."]
 
 [[bin]]
+name = "classify_response"
+path = "fuzz_targets/classify_response.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "decode_query"
 path = "fuzz_targets/decode_query.rs"
 test = false

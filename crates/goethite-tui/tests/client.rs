@@ -34,6 +34,7 @@ impl Control for Idle {
             },
             lists: Vec::new(),
             upstreams: Vec::new(),
+            recursion: None,
             cache: None,
             query_log: QueryLogStatus {
                 enabled: true,

@@ -11,10 +11,12 @@
 mod blocking;
 mod cache;
 mod cidr;
+mod exchange;
 mod forward;
 mod guard;
 mod policy;
 mod rebinding;
+pub mod recurse;
 mod safe_search;
 mod services;
 mod tls;
@@ -43,6 +45,7 @@ pub use policy::{
     PolicyState, ScheduledServices, ScheduledSources, is_client_id,
 };
 pub use rebinding::{DEFAULT_PRIVATE_DOMAINS, RebindingProtection, is_private};
+pub use recurse::{Recursor, RecursorConfig, RecursorStats};
 pub use services::{
     MAX_SERVICE_ID_LEN, MAX_SERVICES, ServiceError, ServiceFilter, ServiceMask, ServiceRules,
     is_service_id,
@@ -119,6 +122,8 @@ pub enum Outcome {
     Cached,
     /// From the upstream with this index.
     Upstream(usize),
+    /// Resolved from the authoritative servers; this one answered last.
+    Recursive(std::net::SocketAddr),
     /// No upstream answered in time: SERVFAIL.
     Failed,
 }
@@ -177,6 +182,7 @@ pub struct Resolver {
     rebinding: Option<RebindingProtection>,
     cache: Option<Cache>,
     forwarder: Option<Forwarder>,
+    recursor: Option<Recursor>,
     fail_mode: FailMode,
     filter_failures: AtomicU64,
 }
@@ -191,6 +197,7 @@ impl Resolver {
             rebinding: None,
             cache: None,
             forwarder: None,
+            recursor: None,
             fail_mode: FailMode::Open,
             filter_failures: AtomicU64::new(0),
         }
@@ -278,6 +285,24 @@ impl Resolver {
         self.forwarder.as_ref()
     }
 
+    /// Resolves everything that is not a local name from the root servers
+    /// down with `recursor`, instead of forwarding.
+    #[must_use]
+    pub fn with_recursor(mut self, recursor: Recursor) -> Self {
+        self.recursor = Some(recursor);
+        self
+    }
+
+    /// The recursor, if recursion is on.
+    pub fn recursor(&self) -> Option<&Recursor> {
+        self.recursor.as_ref()
+    }
+
+    /// Whether queries are resolved at all: forwarded or recursively.
+    fn resolves(&self) -> bool {
+        self.forwarder.is_some() || self.recursor.is_some()
+    }
+
     /// Answers `query` from `client`.
     ///
     /// - zone transfers (`AXFR`, `IXFR`): `REFUSED`, since none are offered
@@ -294,9 +319,11 @@ impl Resolver {
     /// - a search host, when the group has safe search on: a CNAME to the
     ///   engine's safe endpoint and that endpoint's records;
     /// - a fresh cached answer, with TTLs counted down;
-    /// - anything else: forwarded upstream, with private addresses removed
-    ///   for public names if rebinding protection is on, and cached if
-    ///   cacheable; or `REFUSED` without a forwarder.
+    /// - anything else: forwarded upstream or resolved recursively, with
+    ///   private addresses removed for public names if rebinding protection
+    ///   is on, and cached if cacheable; or `REFUSED` with neither. With
+    ///   recursion, special-use names (`localhost`, `invalid`, private
+    ///   reverse zones…) are answered without asking anyone.
     ///
     /// An answer whose CNAME chain leads to a name the filter blocks is
     /// blocked too (CNAME uncloaking), unless an exception matched the name
@@ -316,7 +343,7 @@ impl Resolver {
     ) -> Resolution {
         let asker = self.asker(client, client_id);
         let (mut response, outcome, filter) = self.answer(query, &asker).await;
-        response.recursion_available = self.forwarder.is_some();
+        response.recursion_available = self.resolves();
         Resolution {
             response,
             outcome,
@@ -412,7 +439,7 @@ impl Resolver {
                 }
             }
         }
-        if self.forwarder.is_none() {
+        if !self.resolves() {
             return rejected(ResponseCode::REFUSED);
         }
         if asker.safe_search
@@ -445,19 +472,33 @@ impl Resolver {
         (response, outcome, exception)
     }
 
-    /// The answer from the cache, or else from the upstreams (with rebinding
-    /// protection applied, then cached).
+    /// The answer from the cache, or else from the upstreams or the
+    /// authoritative servers (with rebinding protection applied, then
+    /// cached).
     async fn cached_or_forwarded(&self, query: &Query) -> (Response, Outcome) {
+        if self.recursor.is_some()
+            && let Some(response) = Recursor::special(query)
+        {
+            return (response, Outcome::Local);
+        }
         if let Some(response) = self.cache.as_ref().and_then(|cache| cache.get(query)) {
             return (response, Outcome::Cached);
         }
-        let Some(forwarder) = &self.forwarder else {
+        let (mut response, outcome) = if let Some(recursor) = &self.recursor {
+            let (response, server) = recursor.resolve(query).await;
+            (response, server.map_or(Outcome::Failed, Outcome::Recursive))
+        } else if let Some(forwarder) = &self.forwarder {
+            let (response, upstream) = forwarder.forward_from(query).await;
+            (
+                response,
+                upstream.map_or(Outcome::Failed, Outcome::Upstream),
+            )
+        } else {
             return (
                 Response::for_query(query, ResponseCode::REFUSED),
                 Outcome::Rejected,
             );
         };
-        let (mut response, upstream) = forwarder.forward_from(query).await;
         if let Some(protection) = &self.rebinding {
             let removed = protection.apply(&query.question.name, &mut response);
             if removed > 0 {
@@ -471,10 +512,7 @@ impl Resolver {
         if let Some(cache) = &self.cache {
             cache.insert(query, &response);
         }
-        (
-            response,
-            upstream.map_or(Outcome::Failed, Outcome::Upstream),
-        )
+        (response, outcome)
     }
 
     /// A CNAME from the asked name to `target`, followed by `target`'s own
@@ -515,7 +553,7 @@ impl Resolver {
             };
             let response = if let Some(response) = self.local_answer(&query) {
                 response
-            } else if self.forwarder.is_some() || self.cache.is_some() {
+            } else if self.resolves() || self.cache.is_some() {
                 self.cached_or_forwarded(&query).await.0
             } else {
                 continue;

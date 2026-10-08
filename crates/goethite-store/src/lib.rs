@@ -18,8 +18,8 @@ pub use model::{
     Settings, SettingsSpec, ValidationError, Weekday, Window,
 };
 pub use querylog::{
-    LogEvent, NameBuf, Protocol, QueryEntry, QueryLog, QueryLogConfig, QueryOutcome, QueryPage,
-    RuleHit, Search, StoredQuery,
+    LogEvent, LogUpstream, NameBuf, Protocol, QueryEntry, QueryLog, QueryLogConfig, QueryOutcome,
+    QueryPage, RuleHit, Search, StoredQuery,
 };
 pub use stats::{Counters, HourPoint, StatsReport, TopEntry};
 pub use store::{

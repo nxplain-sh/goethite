@@ -20,7 +20,7 @@ use goethite_filter::{LineKind, parse_line};
 use goethite_proto::Name;
 use goethite_resolver::{
     CacheConfig, DEFAULT_PRIVATE_DOMAINS, MAX_ENTRIES, MAX_UPSTREAMS, RebindingProtection,
-    Transport, UpstreamConfig,
+    RecursorConfig, Transport, UpstreamConfig,
 };
 use goethite_server::{
     MAX_LISTEN_ADDRESSES, MAX_RATE_LIMITED_CLIENTS, MAX_UDP_SOCKETS, RateLimitConfig, ServerConfig,
@@ -45,6 +45,10 @@ pub struct Config {
     /// The `[[upstream]]` tables, in order of preference.
     #[serde(default)]
     pub upstream: Vec<UpstreamSection>,
+    /// The `[recursion]` table: resolving from the root servers down
+    /// instead of forwarding.
+    #[serde(default)]
+    pub recursion: RecursionSection,
     /// The `[cache]` table.
     #[serde(default)]
     pub cache: CacheSection,
@@ -735,6 +739,42 @@ const MAX_TTL_LIMIT: u32 = 7 * 86_400;
 /// The longest `max_negative_ttl` accepted: one day.
 const MAX_NEGATIVE_TTL_LIMIT: u32 = 86_400;
 
+/// The `[recursion]` table.
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, default)]
+pub struct RecursionSection {
+    /// Resolve from the root servers down instead of asking `[[upstream]]`
+    /// resolvers.
+    pub enabled: bool,
+    /// QNAME minimisation (RFC 9156): show each server only as much of a
+    /// name as it needs to see.
+    pub qname_minimisation: bool,
+    /// Ask servers over IPv6 too. Unset: if this host has an IPv6 route.
+    pub ipv6: Option<bool>,
+}
+
+impl Default for RecursionSection {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            qname_minimisation: true,
+            ipv6: None,
+        }
+    }
+}
+
+impl RecursionSection {
+    /// The resolver's view of this table; `has_ipv6` decides when `ipv6` is
+    /// unset.
+    pub fn to_recursor_config(&self, has_ipv6: impl FnOnce() -> bool) -> RecursorConfig {
+        RecursorConfig {
+            qname_minimisation: self.qname_minimisation,
+            ipv6: self.ipv6.unwrap_or_else(has_ipv6),
+            ..RecursorConfig::default()
+        }
+    }
+}
+
 /// The `[cache]` table.
 #[derive(Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, default)]
@@ -1245,12 +1285,18 @@ impl Config {
         }
         let config = Self::parse(&text)
             .with_context(|| format!("invalid config file {}", path.display()))?;
-        if config.upstream.is_empty() {
-            bail!(
+        match (config.upstream.is_empty(), config.recursion.enabled) {
+            (true, false) => bail!(
                 "no upstream resolvers configured in {}: add at least one [[upstream]] table, \
-                 for example\n\n[[upstream]]\naddress = \"9.9.9.9\"",
+                 for example\n\n[[upstream]]\naddress = \"9.9.9.9\"\n\nor resolve from the \
+                 root servers yourself:\n\n[recursion]\nenabled = true",
                 path.display()
-            );
+            ),
+            (false, true) => bail!(
+                "{} has [[upstream]] resolvers and [recursion] enabled: choose one",
+                path.display()
+            ),
+            _ => {}
         }
         config
             .server

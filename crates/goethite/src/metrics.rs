@@ -7,7 +7,7 @@ use std::fmt::Write as _;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use goethite_resolver::{CacheStats, Transport, UpstreamStatus};
+use goethite_resolver::{CacheStats, RecursorStats, Transport, UpstreamStatus};
 use goethite_server::ServerStats;
 use goethite_store::{Protocol, QueryOutcome};
 
@@ -76,6 +76,8 @@ pub struct Sources<'a> {
     pub cache: Option<(CacheStats, usize)>,
     /// The upstreams and how they are doing.
     pub upstreams: &'a [UpstreamStatus],
+    /// Recursion's counters, when it is on.
+    pub recursion: Option<RecursorStats>,
     /// Rules in the compiled filter.
     pub filter_rules: usize,
     /// Lists in the store, and how many are enabled.
@@ -161,8 +163,44 @@ pub fn render(sources: &Sources<'_>) -> String {
             upstream.consecutive_failures,
         );
     }
+    if let Some(recursion) = &sources.recursion {
+        recursion_metrics(&mut out, recursion);
+    }
     state(&mut out, sources);
     out.0
+}
+
+fn recursion_metrics(out: &mut Out, stats: &RecursorStats) {
+    out.family(
+        "goethite_recursion_queries_total",
+        "counter",
+        "Queries sent to authoritative servers, by protocol.",
+    );
+    let udp = stats.sent.saturating_sub(stats.tcp);
+    out.sample("goethite_recursion_queries_total", "protocol=\"udp\"", udp);
+    out.sample(
+        "goethite_recursion_queries_total",
+        "protocol=\"tcp\"",
+        stats.tcp,
+    );
+    out.single(
+        "goethite_recursion_timeouts_total",
+        "counter",
+        "Queries to authoritative servers that got no answer in time.",
+        stats.timeouts,
+    );
+    out.single(
+        "goethite_recursion_failures_total",
+        "counter",
+        "Client queries recursion could not resolve (SERVFAIL).",
+        stats.failures,
+    );
+    out.single(
+        "goethite_recursion_zones",
+        "gauge",
+        "Zone cuts recursion knows.",
+        stats.zones,
+    );
 }
 
 fn queries(out: &mut Out, m: &Metrics) {
@@ -393,6 +431,11 @@ mod tests {
             server: &server,
             cache: Some((CacheStats { hits: 5, misses: 2 }, 7)),
             upstreams: &upstreams,
+            recursion: Some(RecursorStats {
+                sent: 10,
+                tcp: 1,
+                ..RecursorStats::default()
+            }),
             filter_rules: 1234,
             lists: (3, 2),
             protection: (true, false),
@@ -415,6 +458,8 @@ mod tests {
             "goethite_tls_handshake_failures_total 2",
             "goethite_cache_lookups_total{result=\"hit\"} 5",
             "goethite_upstream_up{upstream=\"9.9.9.9:53\",protocol=\"udp\"} 0",
+            "goethite_recursion_queries_total{protocol=\"udp\"} 9",
+            "goethite_recursion_queries_total{protocol=\"tcp\"} 1",
             "goethite_filter_rules 1234",
             "goethite_filter_lists{state=\"disabled\"} 1",
             "# TYPE goethite_query_duration_seconds histogram",

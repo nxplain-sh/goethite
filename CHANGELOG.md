@@ -22,6 +22,13 @@ configuration format.
   the server name. A client's address is checked with a QUIC Retry before its connection counts
   against the connection limits, which it shares with TCP, DoT and DoH; 0-RTT is refused. DoQ
   sockets are handed over on upgrades too.
+- **Recursive resolution**: `[recursion] enabled = true` resolves every name from the root
+  servers down instead of asking `[[upstream]]` resolvers, so no upstream sees your network's
+  names. QNAME minimisation (RFC 9156) is on; servers are believed only about their own zones;
+  every query gets a random port, ID and 0x20 case; everything is bounded per client query.
+  Special-use names and private reverse zones are answered without asking anyone. The query log
+  shows the server that answered, and the status API, metrics, web UI and TUI show recursion's
+  counters.
 - **Oblivious DNS over HTTPS** (RFC 9230), as a target: `odoh = true` in `[server.tls]` answers
   encrypted queries a proxy forwards at `/dns-query`, and serves the public key at
   `/.well-known/odohconfigs`. Keys are kept in memory only and rotated daily; the previous key is

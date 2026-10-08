@@ -8,7 +8,7 @@
 //! writes the log in batches of up to a second, encoding each record in a
 //! compact binary form. It also enforces the retention limits.
 
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, TryRecvError, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -305,8 +305,8 @@ pub struct LogEvent {
     pub rcode: u16,
     /// How the answer came about.
     pub outcome: QueryOutcome,
-    /// For a forwarded answer, the upstream's index.
-    pub upstream: Option<usize>,
+    /// For a forwarded or recursively resolved answer, who gave it.
+    pub upstream: Option<LogUpstream>,
     /// The filter rule that applied.
     pub rule: Option<RuleHit>,
     /// The known client's ID.
@@ -728,6 +728,16 @@ fn next_key(last: &mut u64, time: Timestamp) -> u64 {
     key
 }
 
+/// Who gave an answer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LogUpstream {
+    /// The configured upstream with this index.
+    Index(usize),
+    /// The authoritative server at this address, for a recursively
+    /// resolved answer.
+    Address(SocketAddr),
+}
+
 /// What gets stored for an event.
 fn stored(event: LogEvent, upstreams: &[String]) -> StoredQuery {
     let name = event.name.name();
@@ -745,9 +755,10 @@ fn stored(event: LogEvent, upstreams: &[String]) -> StoredQuery {
         qtype: event.qtype,
         rcode: event.rcode,
         outcome: event.outcome,
-        upstream: event
-            .upstream
-            .and_then(|index| upstreams.get(index).cloned()),
+        upstream: event.upstream.and_then(|upstream| match upstream {
+            LogUpstream::Index(index) => upstreams.get(index).cloned(),
+            LogUpstream::Address(address) => Some(address.to_string()),
+        }),
         rule,
         list: event
             .rule
@@ -1072,7 +1083,7 @@ mod tests {
             qtype: 1,
             rcode: 0,
             outcome: QueryOutcome::Forwarded,
-            upstream: Some(0),
+            upstream: Some(LogUpstream::Index(0)),
             rule: Some(RuleHit {
                 action: Action::Allow,
                 matched: Match {

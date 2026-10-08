@@ -8,32 +8,24 @@
 //! transport, a response is only accepted if its ID, opcode and question (in
 //! exactly the sent case) match.
 
-use std::io;
-use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::SocketAddr;
 use std::sync::Mutex;
 use std::time::Duration;
 
 use goethite_proto::{
-    DnsCodec, Edns, EncodeError, HickoryCodec, MAX_UDP_PAYLOAD, Opcode, Query, Question, Response,
-    ResponseCode, ResponseError,
+    DnsCodec, Edns, HickoryCodec, MAX_UDP_PAYLOAD, Query, Question, Response, ResponseCode,
 };
 use hyper::Uri;
 use rustls::pki_types::ServerName;
-use tokio::net::{TcpStream, UdpSocket};
 use tokio::time::{Instant, timeout};
 use tracing::{debug, warn};
 
+use crate::exchange::{self, ExchangeError, OnCaseMismatch};
 use crate::restore_question_case;
-use crate::tls::{
-    DohClient, DohError, DotClient, TlsError, TlsRoots, client_config, exchange_framed,
-};
+use crate::tls::{DohClient, DotClient, TlsError, TlsRoots, client_config};
 
 /// The most upstream resolvers one forwarder accepts.
 pub const MAX_UPSTREAMS: usize = 16;
-
-/// UDP responses larger than this are dropped. goethite advertises
-/// [`MAX_UDP_PAYLOAD`], so honest upstreams stay well below it.
-const MAX_UDP_RESPONSE_LEN: usize = 4096;
 
 /// Failed exchanges in a row before an upstream is tried last for a while.
 const FAILURES_BEFORE_DOWN: u32 = 3;
@@ -151,21 +143,6 @@ pub enum ForwarderError {
     /// TLS could not be set up.
     #[error(transparent)]
     Tls(#[from] TlsError),
-}
-
-/// Why one exchange with one upstream failed.
-#[derive(Debug, thiserror::Error)]
-enum ExchangeError {
-    #[error(transparent)]
-    Io(#[from] io::Error),
-    #[error(transparent)]
-    Encode(#[from] EncodeError),
-    #[error(transparent)]
-    Decode(#[from] ResponseError),
-    #[error(transparent)]
-    Doh(#[from] DohError),
-    #[error("response does not match the query")]
-    Mismatch,
 }
 
 /// Sends queries to upstream resolvers with failover.
@@ -393,80 +370,24 @@ impl Forwarder {
         match (&upstream.connection, &upstream.config.transport) {
             (Connection::Tls(client), _) => {
                 let reply = client.exchange(address, &wire).await?;
-                self.accept(&reply, &outgoing)
+                exchange::accept(&reply, &outgoing)
             }
             (Connection::Https(client), _) => {
                 let reply = client.exchange(address, &wire).await?;
-                self.accept(&reply, &outgoing)
+                exchange::accept(&reply, &outgoing)
             }
             (Connection::Plain, Transport::Udp) => {
-                let response = self.exchange_udp(address, &wire, &outgoing).await?;
+                let response =
+                    exchange::udp(address, &wire, &outgoing, OnCaseMismatch::Ignore).await?;
                 if response.truncated {
                     debug!(%address, "truncated answer, retrying over TCP");
-                    self.exchange_tcp(address, &wire, &outgoing).await
+                    exchange::tcp(address, &wire, &outgoing).await
                 } else {
                     Ok(response)
                 }
             }
-            (Connection::Plain, _) => self.exchange_tcp(address, &wire, &outgoing).await,
+            (Connection::Plain, _) => exchange::tcp(address, &wire, &outgoing).await,
         }
-    }
-
-    /// Decodes a reply received over a connection-oriented transport and
-    /// checks that it answers `sent`.
-    fn accept(&self, reply: &[u8], sent: &Query) -> Result<Response, ExchangeError> {
-        let response = self.codec.decode_response(reply)?;
-        if answers(&response, sent) {
-            Ok(response)
-        } else {
-            Err(ExchangeError::Mismatch)
-        }
-    }
-
-    async fn exchange_udp(
-        &self,
-        address: SocketAddr,
-        wire: &[u8],
-        sent: &Query,
-    ) -> Result<Response, ExchangeError> {
-        let local = if address.is_ipv4() {
-            SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0))
-        } else {
-            SocketAddr::from((Ipv6Addr::UNSPECIFIED, 0))
-        };
-        // Port 0: the OS picks a random ephemeral port for every exchange.
-        let socket = UdpSocket::bind(local).await?;
-        // Connected: datagrams from any other address are never delivered.
-        socket.connect(address).await?;
-        socket.send(wire).await?;
-
-        // One spare byte tells an oversized datagram from one that fits exactly.
-        let mut buf = vec![0_u8; MAX_UDP_RESPONSE_LEN + 1];
-        loop {
-            // The caller's timeout bounds this loop.
-            let len = socket.recv(&mut buf).await?;
-            let Some(packet) = buf.get(..len).filter(|_| len <= MAX_UDP_RESPONSE_LEN) else {
-                debug!(%address, "ignoring an oversized response");
-                continue;
-            };
-            match self.codec.decode_response(packet) {
-                Ok(response) if answers(&response, sent) => return Ok(response),
-                Ok(_) => debug!(%address, "ignoring a response that does not match the query"),
-                Err(err) => debug!(%address, %err, "ignoring a malformed response"),
-            }
-        }
-    }
-
-    async fn exchange_tcp(
-        &self,
-        address: SocketAddr,
-        wire: &[u8],
-        sent: &Query,
-    ) -> Result<Response, ExchangeError> {
-        let mut stream = TcpStream::connect(address).await?;
-        stream.set_nodelay(true)?;
-        let reply = exchange_framed(&mut stream, wire).await?;
-        self.accept(&reply, sent)
     }
 }
 
@@ -494,17 +415,6 @@ fn upstream_query(query: &Query, randomize_case: bool) -> Query {
             dnssec_ok: query.edns.is_some_and(|edns| edns.dnssec_ok),
         }),
     }
-}
-
-/// Whether `response` answers `sent`: same ID, a standard query, and the same
-/// question in exactly the same case.
-fn answers(response: &Response, sent: &Query) -> bool {
-    response.id == sent.id
-        && response.opcode == Opcode::QUERY
-        && response
-            .question
-            .as_ref()
-            .is_some_and(|question| question.matches_exactly(&sent.question))
 }
 
 /// Rewrites an upstream response for the client: the client's ID, question

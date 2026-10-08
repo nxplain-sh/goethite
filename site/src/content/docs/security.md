@@ -152,7 +152,9 @@ DNS server's, with netlink and packet sockets allowed and nothing writable;
 
 goethite opens connections only to:
 
-- the **upstream resolvers** in `[[upstream]]`, for the queries it forwards;
+- the **upstream resolvers** in `[[upstream]]`, for the queries it forwards; or, with
+  [recursion](../recursion/), the **root servers and the authoritative servers** of the names
+  looked up, each shown only as much of a name as it needs;
 - the hosts of **downloaded filter lists**, over HTTPS, when lists are refreshed (by default
   every 24 hours), including the [default list](../filtering/#recommended-and-default-lists) of a
   new node;

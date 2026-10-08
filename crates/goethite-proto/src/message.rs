@@ -123,6 +123,11 @@ impl Record {
         Self::new(name, ttl, RData::CNAME(rdata::CNAME(target.0)))
     }
 
+    /// An `IN NS` record naming `server`.
+    pub fn ns(name: Name, ttl: u32, server: Name) -> Self {
+        Self::new(name, ttl, RData::NS(rdata::NS(server.0)))
+    }
+
     /// An `IN SOA` record; only the fields negative caching needs are taken.
     pub fn soa(zone: Name, ttl: u32, primary: Name, minimum: u32) -> Self {
         let mailbox = hickory_proto::rr::Name::root();
@@ -187,6 +192,37 @@ impl Record {
     pub fn cname_target(&self) -> Option<Name> {
         match &self.data {
             RData::CNAME(target) => Some(Name(target.0.clone())),
+            _ => None,
+        }
+    }
+
+    /// Undoes 0x20 randomization in the owner name and the names in the
+    /// record data (see [`Name::with_case_restored`]).
+    pub fn restore_case(&mut self, randomized: &Name, original: &Name) {
+        let restore = |name: &mut hickory_proto::rr::Name| {
+            let restored = Name(name.clone()).with_case_restored(randomized, original);
+            *name = restored.0;
+        };
+        self.name = self.name.with_case_restored(randomized, original);
+        match &mut self.data {
+            RData::CNAME(rdata::CNAME(name))
+            | RData::NS(rdata::NS(name))
+            | RData::PTR(rdata::PTR(name)) => restore(name),
+            RData::MX(mx) => restore(&mut mx.exchange),
+            RData::SRV(srv) => restore(&mut srv.target),
+            RData::SOA(soa) => {
+                restore(&mut soa.mname);
+                restore(&mut soa.rname);
+            }
+            RData::SVCB(svcb) | RData::HTTPS(rdata::HTTPS(svcb)) => restore(&mut svcb.target_name),
+            _ => {}
+        }
+    }
+
+    /// The name server of an `NS` record.
+    pub fn ns_target(&self) -> Option<Name> {
+        match &self.data {
+            RData::NS(server) => Some(Name(server.0.clone())),
             _ => None,
         }
     }

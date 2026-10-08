@@ -1136,6 +1136,49 @@ export interface components {
             /** @description Where goethite downloads it. */
             url: string;
         };
+        /**
+         * @description Recursive resolution: from the root servers down, instead of asking
+         *     upstream resolvers.
+         */
+        RecursionStatus: {
+            /**
+             * Format: int64
+             * @description Client queries that could not be resolved (SERVFAIL).
+             */
+            failures: number;
+            /** @description Whether servers are asked over IPv6 too. */
+            ipv6: boolean;
+            /**
+             * @description Whether servers are shown only as much of a name as they need
+             *     (QNAME minimisation, RFC 9156).
+             */
+            qname_minimisation: boolean;
+            /**
+             * Format: int64
+             * @description Queries sent to authoritative servers since start.
+             */
+            sent: number;
+            /**
+             * Format: int64
+             * @description Authoritative servers with statistics.
+             */
+            servers: number;
+            /**
+             * Format: int64
+             * @description Of them, over TCP.
+             */
+            tcp: number;
+            /**
+             * Format: int64
+             * @description Queries no server answered in time.
+             */
+            timeouts: number;
+            /**
+             * Format: int64
+             * @description Zone cuts known.
+             */
+            zones: number;
+        };
         /** @description How to change a node's role. */
         RoleChange: {
             /**
@@ -1330,12 +1373,13 @@ export interface components {
             protection: boolean;
             /** @description The query log. */
             query_log: components["schemas"]["QueryLogStatus"];
+            recursion?: components["schemas"]["RecursionStatus"] | null;
             /**
              * Format: date-time
              * @description When goethite started.
              */
             started_at: string;
-            /** @description The upstreams, in configured order. */
+            /** @description The upstreams, in configured order; none with recursion. */
             upstreams: components["schemas"]["UpstreamStatus"][];
             /** @description The running version. */
             version: string;

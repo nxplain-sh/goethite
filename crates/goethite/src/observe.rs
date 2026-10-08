@@ -7,7 +7,7 @@ use arc_swap::ArcSwapOption;
 use goethite_proto::Name;
 use goethite_resolver::{HEALTH_NAME, Outcome};
 use goethite_server::{QueryEvent, QueryObserver, Transport};
-use goethite_store::{LogEvent, NameBuf, Protocol, QueryLog, QueryOutcome, RuleHit};
+use goethite_store::{LogEvent, LogUpstream, NameBuf, Protocol, QueryLog, QueryOutcome, RuleHit};
 use jiff::Timestamp;
 
 use crate::metrics::Metrics;
@@ -51,7 +51,10 @@ impl QueryObserver for Observer {
             Outcome::Blocked => (QueryOutcome::Blocked, None),
             Outcome::SafeSearch => (QueryOutcome::SafeSearch, None),
             Outcome::Cached => (QueryOutcome::Cached, None),
-            Outcome::Upstream(index) => (QueryOutcome::Forwarded, Some(index)),
+            Outcome::Upstream(index) => (QueryOutcome::Forwarded, Some(LogUpstream::Index(index))),
+            Outcome::Recursive(server) => {
+                (QueryOutcome::Forwarded, Some(LogUpstream::Address(server)))
+            }
             Outcome::Failed => (QueryOutcome::Failed, None),
             _ => (QueryOutcome::Rejected, None),
         };

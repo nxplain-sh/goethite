@@ -251,35 +251,62 @@ fn render_dashboard(frame: &mut Frame<'_>, area: Rect, app: &App) {
         totals_area,
     );
 
-    let rows = app
+    if let Some(recursion) = app
         .data
         .status
-        .iter()
-        .flat_map(|status| &status.upstreams)
-        .map(|upstream| {
-            let state = if upstream.healthy {
-                Cell::from("UP").fg(TEAL).bold()
-            } else {
-                Cell::from("DOWN").fg(RUST).bold()
-            };
-            Row::new(vec![
-                Cell::from(upstream.address.clone()),
-                Cell::from(upstream.protocol.clone()),
-                state,
-            ])
-        });
-    frame.render_widget(
-        Table::new(
-            rows,
-            [
-                Constraint::Fill(1),
-                Constraint::Length(6),
-                Constraint::Length(5),
-            ],
-        )
-        .block(block("Upstreams")),
-        upstreams_area,
-    );
+        .as_ref()
+        .and_then(|status| status.recursion.as_ref())
+    {
+        let lines = vec![
+            Line::from("From the root servers down"),
+            Line::from(format!(
+                "{} queries sent, {} over TCP",
+                recursion.sent, recursion.tcp
+            )),
+            Line::from(format!(
+                "{} timed out, {} unresolved",
+                recursion.timeouts, recursion.failures
+            )),
+            Line::from(format!(
+                "{} zones and {} servers known",
+                recursion.zones, recursion.servers
+            )),
+        ];
+        frame.render_widget(
+            Paragraph::new(lines).block(block("Recursion")),
+            upstreams_area,
+        );
+    } else {
+        let rows = app
+            .data
+            .status
+            .iter()
+            .flat_map(|status| &status.upstreams)
+            .map(|upstream| {
+                let state = if upstream.healthy {
+                    Cell::from("UP").fg(TEAL).bold()
+                } else {
+                    Cell::from("DOWN").fg(RUST).bold()
+                };
+                Row::new(vec![
+                    Cell::from(upstream.address.clone()),
+                    Cell::from(upstream.protocol.clone()),
+                    state,
+                ])
+            });
+        frame.render_widget(
+            Table::new(
+                rows,
+                [
+                    Constraint::Fill(1),
+                    Constraint::Length(6),
+                    Constraint::Length(5),
+                ],
+            )
+            .block(block("Upstreams")),
+            upstreams_area,
+        );
+    }
 
     let [names, blocked, clients] = Layout::vertical([
         Constraint::Ratio(1, 3),
@@ -617,6 +644,7 @@ mod tests {
                     consecutive_failures: 3,
                 },
             ],
+            recursion: None,
             cache: None,
             query_log: QueryLogStatus {
                 enabled: true,
@@ -807,6 +835,31 @@ mod tests {
             groups.contains("Kids") && groups.contains("ON") && groups.contains("SERVICES"),
             "{groups}"
         );
+    }
+
+    #[test]
+    fn recursion_replaces_the_upstreams() {
+        let mut app = app();
+        let mut status = status();
+        status.upstreams.clear();
+        status.recursion = Some(goethite_api::RecursionStatus {
+            qname_minimisation: true,
+            ipv6: false,
+            sent: 1234,
+            tcp: 5,
+            timeouts: 7,
+            failures: 1,
+            zones: 300,
+            servers: 80,
+        });
+        app.data.status = Some(status);
+        let dashboard = screen(&app);
+        assert!(dashboard.contains("Recursion"), "{dashboard}");
+        assert!(
+            dashboard.contains("1234 queries sent, 5 over TCP"),
+            "{dashboard}"
+        );
+        assert!(!dashboard.contains("Upstreams"), "{dashboard}");
     }
 
     #[test]
