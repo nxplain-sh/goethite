@@ -1,5 +1,6 @@
 //! The goethite binary: command-line interface, configuration and wiring.
 
+mod certs;
 mod cluster;
 mod config;
 mod control;
@@ -349,7 +350,7 @@ async fn serve(
     let resolver = Arc::new(resolver(config, &state)?);
     let metrics = Arc::new(metrics::Metrics::default());
     let observer_log = Arc::new(ArcSwapOption::empty());
-    let server = Server::new(
+    let mut server = Server::new(
         sockets.take_dns().context("the DNS sockets are missing")?,
         config.server_config(),
         Arc::clone(&resolver),
@@ -358,12 +359,24 @@ async fn serve(
         Arc::clone(&observer_log),
         Arc::clone(&metrics),
     )?));
+    let dns_cert = match (&config.server.tls, &secrets.dns_tls) {
+        (Some(tls), Some(pem)) => {
+            let files = Some((tls.cert.clone(), tls.key.clone()));
+            let cert = certs::Served::new("DNS certificate", pem, files)?;
+            // Each listener offers its own ALPN protocols.
+            server = server.with_tls(cert.server_config(&[])?);
+            Some(cert)
+        }
+        (Some(_), None) => anyhow::bail!("the DNS certificate is missing"),
+        (None, _) => None,
+    };
     let data = plane::DataPlane {
         resolver,
         state,
         metrics,
         server: server.stats(),
         log: observer_log,
+        dns_cert,
         started: Timestamp::now(),
     };
     let mut plane = Some(
@@ -583,25 +596,6 @@ fn api(
     })
 }
 
-/// The TLS settings for the API from PEM text.
-fn load_tls(cert: &str, key: &str) -> Result<Arc<rustls::ServerConfig>> {
-    use rustls::pki_types::pem::PemObject;
-    use rustls::pki_types::{CertificateDer, PrivateKeyDer};
-
-    let chain = CertificateDer::pem_slice_iter(cert.as_bytes())
-        .collect::<Result<Vec<_>, _>>()
-        .context("cannot read the API certificate")?;
-    let key = PrivateKeyDer::from_pem_slice(key.as_bytes()).context("cannot read the API key")?;
-    let provider = Arc::new(rustls::crypto::ring::default_provider());
-    let mut tls = rustls::ServerConfig::builder_with_provider(provider)
-        .with_safe_default_protocol_versions()?
-        .with_no_client_auth()
-        .with_single_cert(chain, key)
-        .context("the API certificate and key do not fit together")?;
-    tls.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
-    Ok(Arc::new(tls))
-}
-
 fn tui(api: Option<String>, token_file: Option<&Path>, ca_file: Option<&Path>) -> Result<()> {
     let url = api
         .or_else(|| std::env::var("GOETHITE_API").ok())
@@ -667,6 +661,13 @@ fn check_config(config_path: &Path) -> Result<()> {
     Forwarder::new(ForwarderConfig::new(upstreams))
         .context("invalid [[upstream]] configuration")?;
     filters::check(&config.filter, &ListStore::new(config.lists_dir()))?;
+    let secrets = Secrets::read(&config)?;
+    if let Some(pem) = &secrets.api_tls {
+        certs::Served::new("API certificate", pem, None)?;
+    }
+    if let Some(pem) = &secrets.dns_tls {
+        certs::Served::new("DNS certificate", pem, None)?;
+    }
     info!(config = %config_path.display(), "configuration is valid");
     Ok(())
 }
@@ -779,6 +780,7 @@ fn import(config_path: &Path) -> Result<()> {
 #[cfg(unix)]
 fn reload_on_hangup(
     control: Arc<Control>,
+    certs: Vec<Arc<certs::Served>>,
     tasks: &mut tokio::task::JoinSet<()>,
     stopped: watch::Receiver<bool>,
 ) -> Result<()> {
@@ -792,7 +794,10 @@ fn reload_on_hangup(
                     if received.is_none() {
                         return;
                     }
-                    info!("received SIGHUP, reloading filter lists");
+                    info!("received SIGHUP, reloading filter lists and certificates");
+                    for cert in &certs {
+                        cert.reload_and_log();
+                    }
                     control.rebuild_filter().await;
                 }
                 () = until(stopped.clone()) => return,
@@ -810,6 +815,7 @@ fn reload_on_hangup(
 )]
 fn reload_on_hangup(
     _control: Arc<Control>,
+    _certs: Vec<Arc<certs::Served>>,
     _tasks: &mut tokio::task::JoinSet<()>,
     _stopped: watch::Receiver<bool>,
 ) -> Result<()> {

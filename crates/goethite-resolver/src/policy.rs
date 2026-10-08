@@ -7,9 +7,10 @@
 //! that change without a recompile: which schedules are active right now,
 //! and whether filtering is paused.
 //!
-//! A client is identified by the longest network among all clients'
-//! addresses that contains the query's source address. Unknown addresses
-//! belong to the default group.
+//! A client is identified by its client ID, when the query came over an
+//! encrypted transport that carries one and the ID is known; otherwise by
+//! the longest network among all clients' addresses that contains the
+//! query's source address. Unknown clients belong to the default group.
 
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -25,6 +26,23 @@ use crate::cidr::{Cidr, canonical, mask};
 
 /// The most schedules a policy tells apart.
 pub const MAX_SCHEDULES: usize = 64;
+
+/// The longest client ID: one DNS label, so it fits in a TLS server name.
+pub const MAX_CLIENT_ID_LEN: usize = 63;
+
+/// Whether `text` is a valid client ID: 1 to [`MAX_CLIENT_ID_LEN`]
+/// lowercase letters, digits and hyphens, not starting or ending with a
+/// hyphen. Such an ID is a DNS label and a URL path segment as it is.
+pub fn is_client_id(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    !bytes.is_empty()
+        && bytes.len() <= MAX_CLIENT_ID_LEN
+        && bytes
+            .iter()
+            .all(|&byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        && bytes.first() != Some(&b'-')
+        && bytes.last() != Some(&b'-')
+}
 
 /// Sources a group uses while a schedule is active.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -82,6 +100,9 @@ pub struct ClientPolicy {
     pub id: Arc<str>,
     /// The networks or addresses it uses.
     pub addresses: Vec<Cidr>,
+    /// The client IDs it uses over encrypted transports (see
+    /// [`is_client_id`]).
+    pub ids: Vec<Arc<str>>,
     /// Its group: an index into [`PolicyParts::groups`].
     pub group: usize,
 }
@@ -131,29 +152,63 @@ pub enum PolicyError {
         /// The other.
         second: String,
     },
+    /// Two clients claim the same client ID.
+    #[error("clients {first} and {second} both use the client ID {id}")]
+    DuplicateId {
+        /// The client ID.
+        id: String,
+        /// One client.
+        first: String,
+        /// The other.
+        second: String,
+    },
+    /// A client ID is not valid (see [`is_client_id`]).
+    #[error("client {client} has the invalid client ID {id:?}")]
+    InvalidId {
+        /// The client.
+        client: String,
+        /// The ID.
+        id: String,
+    },
     /// A group refers to a schedule index beyond [`MAX_SCHEDULES`].
     #[error("group {0} refers to a schedule beyond the {MAX_SCHEDULES} supported")]
     ScheduleOutOfRange(String),
 }
 
-/// Exact-network lookup tables, longest prefix first.
+/// Exact-network lookup tables, longest prefix first, and client IDs.
 #[derive(Debug, Default)]
 struct ClientTable {
     v4: Vec<(u8, HashMap<IpAddr, usize>)>,
     v6: Vec<(u8, HashMap<IpAddr, usize>)>,
+    ids: HashMap<Arc<str>, usize>,
 }
 
 impl ClientTable {
     fn build(clients: &[ClientPolicy]) -> Result<Self, PolicyError> {
+        let name = |i: usize| clients.get(i).map(|c| c.id.to_string()).unwrap_or_default();
         let mut by_prefix: HashMap<(bool, u8), HashMap<IpAddr, usize>> = HashMap::new();
+        let mut ids = HashMap::new();
         for (index, client) in clients.iter().enumerate() {
+            for id in &client.ids {
+                if !is_client_id(id) {
+                    return Err(PolicyError::InvalidId {
+                        client: name(index),
+                        id: id.to_string(),
+                    });
+                }
+                if let Some(other) = ids.insert(Arc::clone(id), index) {
+                    return Err(PolicyError::DuplicateId {
+                        id: id.to_string(),
+                        first: name(other),
+                        second: name(index),
+                    });
+                }
+            }
             for network in &client.addresses {
                 let table = by_prefix
                     .entry((network.addr().is_ipv4(), network.prefix()))
                     .or_default();
                 if let Some(&other) = table.get(&network.addr()) {
-                    let name =
-                        |i: usize| clients.get(i).map(|c| c.id.to_string()).unwrap_or_default();
                     return Err(PolicyError::DuplicateAddress {
                         network: *network,
                         first: name(other),
@@ -163,7 +218,10 @@ impl ClientTable {
                 table.insert(network.addr(), index);
             }
         }
-        let mut table = Self::default();
+        let mut table = Self {
+            ids,
+            ..Self::default()
+        };
         for ((v4, prefix), entries) in by_prefix {
             if v4 {
                 table.v4.push((prefix, entries));
@@ -180,7 +238,10 @@ impl ClientTable {
         Ok(table)
     }
 
-    fn lookup(&self, ip: IpAddr) -> Option<usize> {
+    fn lookup(&self, ip: IpAddr, id: Option<&str>) -> Option<usize> {
+        if let Some(&index) = id.and_then(|id| self.ids.get(id)) {
+            return Some(index);
+        }
         let ip = canonical(ip);
         let tables = if ip.is_ipv4() { &self.v4 } else { &self.v6 };
         tables
@@ -287,16 +348,25 @@ impl Policy {
         self.source_ids.get(source.index())
     }
 
-    /// The client using `ip`, if it is known, and its group.
-    pub fn identify(&self, ip: IpAddr) -> (Option<&ClientPolicy>, &GroupPolicy) {
+    /// The client using the client ID `id`, if it is known, or else the one
+    /// using `ip`, if that is known; and its group.
+    pub fn identify(&self, ip: IpAddr, id: Option<&str>) -> (Option<&ClientPolicy>, &GroupPolicy) {
         let client = self
             .table
-            .lookup(ip)
+            .lookup(ip, id)
             .and_then(|index| self.clients.get(index));
         let group = client
             .and_then(|client| self.groups.get(client.group))
             .unwrap_or(&self.default_group);
         (client, group)
+    }
+
+    /// The client using the client ID `id`, if there is one.
+    pub fn client_with_id(&self, id: &str) -> Option<&ClientPolicy> {
+        self.table
+            .ids
+            .get(id)
+            .and_then(|&index| self.clients.get(index))
     }
 
     /// How blocked names are answered.
@@ -413,6 +483,7 @@ mod tests {
         ClientPolicy {
             id: id.into(),
             addresses: addresses.iter().map(|a| cidr(a)).collect(),
+            ids: Vec::new(),
             group,
         }
     }
@@ -426,7 +497,7 @@ mod tests {
         ]))
         .unwrap();
         let who = |ip: &str| {
-            let (client, group) = policy.identify(ip.parse().unwrap());
+            let (client, group) = policy.identify(ip.parse().unwrap(), None);
             (client.map(|c| c.id.to_string()), group.id.to_string())
         };
         assert_eq!(who("192.168.1.23"), (Some("tablet".into()), "kids".into()));
@@ -448,7 +519,70 @@ mod tests {
     }
 
     #[test]
+    fn identifies_clients_by_id_first() {
+        let mut phone = client("phone", &[], 1);
+        phone.ids = vec!["anna-phone".into(), "p2".into()];
+        let policy =
+            Policy::new(parts(vec![client("lan", &["192.168.1.0/24"], 0), phone])).unwrap();
+        let who = |ip: &str, id: Option<&str>| {
+            let (client, group) = policy.identify(ip.parse().unwrap(), id);
+            (client.map(|c| c.id.to_string()), group.id.to_string())
+        };
+        assert_eq!(
+            who("192.168.1.5", Some("anna-phone")),
+            (Some("phone".into()), "kids".into())
+        );
+        assert_eq!(
+            who("203.0.113.9", Some("p2")),
+            (Some("phone".into()), "kids".into())
+        );
+        // An unknown ID falls back to the address.
+        assert_eq!(
+            who("192.168.1.5", Some("unknown")),
+            (Some("lan".into()), "default".into())
+        );
+        assert_eq!(
+            who("203.0.113.9", Some("unknown")),
+            (None, "default".into())
+        );
+    }
+
+    #[test]
+    fn client_ids() {
+        for valid in ["a", "anna-phone", "0", "x1-2-3", &"a".repeat(63)] {
+            assert!(is_client_id(valid), "{valid}");
+        }
+        for invalid in [
+            "",
+            "-a",
+            "a-",
+            "Anna",
+            "a.b",
+            "a_b",
+            "ä",
+            "a b",
+            &"a".repeat(64),
+        ] {
+            assert!(!is_client_id(invalid), "{invalid}");
+        }
+    }
+
+    #[test]
     fn rejects_inconsistent_parts() {
+        let mut a = client("a", &[], 0);
+        a.ids = vec!["same".into()];
+        let mut b = client("b", &[], 1);
+        b.ids = vec!["same".into()];
+        assert!(matches!(
+            Policy::new(parts(vec![a, b])),
+            Err(PolicyError::DuplicateId { .. })
+        ));
+        let mut c = client("c", &[], 0);
+        c.ids = vec!["Not valid".into()];
+        assert!(matches!(
+            Policy::new(parts(vec![c])),
+            Err(PolicyError::InvalidId { .. })
+        ));
         let duplicate = Policy::new(parts(vec![
             client("a", &["10.0.0.0/8"], 0),
             client("b", &["10.0.0.0/8"], 1),
@@ -476,7 +610,7 @@ mod tests {
     #[test]
     fn scheduled_sources_apply_while_active() {
         let policy = Policy::new(parts(vec![client("tablet", &["10.0.0.2"], 1)])).unwrap();
-        let (_, kids) = policy.identify("10.0.0.2".parse().unwrap());
+        let (_, kids) = policy.identify("10.0.0.2".parse().unwrap(), None);
         assert_eq!(kids.sources_now(0), Sources::NONE.with(source(0)));
         assert_eq!(kids.sources_now(1 << 2), Sources::NONE.with(source(0)));
         assert_eq!(

@@ -471,6 +471,7 @@ fn render_clients(frame: &mut Frame<'_>, area: Rect, app: &App) {
         Row::new(vec![
             Cell::from(client.spec.name.clone()),
             Cell::from(client.spec.addresses.join(", ")),
+            Cell::from(client.spec.ids.join(", ")),
             Cell::from(group_name(app, &client.spec.group)),
             managed(client.spec.managed_by),
         ])
@@ -481,10 +482,11 @@ fn render_clients(frame: &mut Frame<'_>, area: Rect, app: &App) {
             Constraint::Fill(1),
             Constraint::Fill(2),
             Constraint::Fill(1),
+            Constraint::Fill(1),
             Constraint::Length(21),
         ],
     )
-    .header(Row::new(["NAME", "ADDRESSES", "GROUP", "MANAGED BY"]).bold())
+    .header(Row::new(["NAME", "ADDRESSES", "CLIENT IDS", "GROUP", "MANAGED BY"]).bold())
     .row_highlight_style(highlight())
     .block(block("Clients"));
     frame.render_stateful_widget(table, area, &mut table_state(app));
@@ -610,6 +612,7 @@ mod tests {
                 dropped: 0,
             },
             cluster: None,
+            encrypted: None,
             problems: Vec::new(),
         }
     }
@@ -772,6 +775,7 @@ mod tests {
             spec: ClientSpec {
                 name: "Tablet".into(),
                 addresses: vec!["192.168.1.23".into(), "fd00::23".into()],
+                ids: vec!["tablet".into()],
                 group: "gr_kids".into(),
                 comment: String::new(),
                 managed_by: ManagedBy::Api,
@@ -779,7 +783,9 @@ mod tests {
         }]));
         let clients = screen(&app);
         assert!(
-            clients.contains("192.168.1.23, fd00::23") && clients.contains("Kids"),
+            clients.contains("192.168.1.23, fd00::23")
+                && clients.contains("tablet")
+                && clients.contains("Kids"),
             "{clients}"
         );
         app.tab = Tab::Groups;

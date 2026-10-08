@@ -2385,7 +2385,7 @@
       },
       "ClientSpec": {
         "type": "object",
-        "description": "A device or network, identified by its addresses.",
+        "description": "A device or network, identified by its addresses or its client IDs.",
         "required": [
           "name",
           "addresses"
@@ -2396,7 +2396,7 @@
             "items": {
               "type": "string"
             },
-            "description": "IP addresses or networks in CIDR notation, such as `192.168.1.23`\nor `192.168.1.0/24`. The longest network containing a query's source\naddress decides which client asked."
+            "description": "IP addresses or networks in CIDR notation, such as `192.168.1.23`\nor `192.168.1.0/24`. The longest network containing a query's source\naddress decides which client asked. May be empty for a client known\nby its client IDs only."
           },
           "comment": {
             "type": "string",
@@ -2405,6 +2405,13 @@
           "group": {
             "type": "string",
             "description": "The group's ID."
+          },
+          "ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Client IDs, such as `anna-phone`: over DNS over TLS or HTTPS a\ndevice can name itself, in the server name (`anna-phone.dns.example`)\nor the DNS over HTTPS path (`/dns-query/anna-phone`), wherever it is.\nA known ID decides which client asked before the address does. 1 to\n63 lowercase letters, digits and hyphens, not at either end."
           },
           "managed_by": {
             "$ref": "#/components/schemas/ManagedBy",
@@ -2567,6 +2574,37 @@
             "format": "int64",
             "description": "Sent to a safe search endpoint.",
             "minimum": 0
+          }
+        }
+      },
+      "EncryptedStatus": {
+        "type": "object",
+        "description": "How clients reach this node over DNS over TLS and HTTPS.",
+        "required": [
+          "dot",
+          "doh"
+        ],
+        "properties": {
+          "doh": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The addresses DNS over HTTPS is served on, at the path `/dns-query`\n(or `/dns-query/<client ID>`)."
+          },
+          "dot": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The addresses DNS over TLS is served on."
+          },
+          "server_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The name clients reach it by, such as `dns.example`, if configured:\na client ID goes in front of it, as in `anna-phone.dns.example`."
           }
         }
       },
@@ -3008,7 +3046,9 @@
         "description": "How a query reached goethite.",
         "enum": [
           "udp",
-          "tcp"
+          "tcp",
+          "dot",
+          "doh"
         ]
       },
       "QueryEntry": {
@@ -3474,6 +3514,17 @@
               {
                 "$ref": "#/components/schemas/ClusterStatus",
                 "description": "This node's cluster, if it is in one."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "encrypted": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/EncryptedStatus",
+                "description": "DNS over TLS and HTTPS, if this node serves them."
               },
               {
                 "type": "null"

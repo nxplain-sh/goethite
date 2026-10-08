@@ -73,13 +73,16 @@ local stub resolver (systemd-resolved, dnsmasq) may forward every query of the h
 client networks are active than `max_clients`, the networks that are not tracked share one limit.
 
 Rate limiting is a safety net, not a firewall: do not expose goethite to the internet unless you
-mean to run a public resolver.
+mean to run a public resolver. To reach it from outside, serve
+[DNS over TLS or HTTPS](../encrypted-dns/#reaching-goethite-from-the-internet) with
+`require_client_id = true` instead of port 53.
 
 ## Connection limits
 
 goethite serves at most 256 TCP connections at once, and at most 16 from one client (an IPv4
-address or an IPv6 /64), so a single host cannot take every connection. A connection that sends
-nothing for 10 seconds is closed.
+address or an IPv6 /64), so a single host cannot take every connection. DNS over TLS and HTTPS
+connections count against the same limits. A TCP connection that sends nothing for 10 seconds is
+closed; an encrypted one after 30 seconds, and its TLS handshake must finish within 10.
 
 ```toml
 [server]

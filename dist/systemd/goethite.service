@@ -9,7 +9,10 @@
 #   [filter]
 #   cache_dir = "/var/lib/goethite/lists"
 #
-# `systemctl reload goethite` re-reads the filter lists (SIGHUP).
+# `systemctl reload goethite` re-reads the filter lists and the TLS
+# certificates (SIGHUP). goethite reads TLS keys as its dynamic user: give it
+# a group that may read them (SupplementaryGroups=, in a drop-in); see the
+# site's "Encrypted DNS" page.
 # After installing a new binary, upgrade without dropping a query:
 #
 #   systemctl kill --signal=SIGUSR2 --kill-whom=main goethite

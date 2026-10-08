@@ -2,7 +2,7 @@
 
 import { type APIRequestContext, expect, type Page, test } from '@playwright/test'
 
-import { TOKEN } from './settings.mjs'
+import { DOH_PORT, DOT_PORT, TOKEN } from './settings.mjs'
 
 const auth = { Authorization: `Bearer ${TOKEN}` }
 
@@ -128,10 +128,19 @@ test('puts a client in a group that uses a list during a schedule', async ({ pag
 	await page.getByRole('link', { name: 'New client' }).click()
 	await page.getByLabel('Name').fill('E2E tablet')
 	await page.getByLabel('Addresses').fill('192.168.77.23\nfd00::77')
+	// A client ID: checked as typed, and shown as the device would use it.
+	await page.getByLabel('Client IDs').fill('bad_id')
+	await expect(page.getByText('Not a client ID: bad_id')).toBeVisible()
+	await expect(page.getByRole('button', { name: 'Create' })).toBeDisabled()
+	await page.getByLabel('Client IDs').fill('E2E-Tablet')
+	const use = page.getByRole('note', { name: 'Using the client ID' })
+	await expect(use).toContainText(`https://dns.example:${DOH_PORT}/dns-query/e2e-tablet`)
+	await expect(use).toContainText(`e2e-tablet.dns.example (port ${DOT_PORT})`)
 	await page.getByLabel('Group').selectOption({ label: 'E2E kids' })
 	await page.getByRole('button', { name: 'Create' }).click()
 	const client = page.getByRole('row').filter({ hasText: 'E2E tablet' })
 	await expect(client).toContainText('192.168.77.23, fd00::77')
+	await expect(client).toContainText('e2e-tablet')
 	await expect(client).toContainText('E2E kids')
 
 	const groups = await apiCall(request, 'GET', '/api/v1/groups')

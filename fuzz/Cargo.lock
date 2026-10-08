@@ -478,6 +478,7 @@ dependencies = [
  "goethite-filter",
  "goethite-proto",
  "goethite-resolver",
+ "goethite-server",
  "goethite-store",
  "libfuzzer-sys",
 ]
@@ -507,6 +508,23 @@ dependencies = [
  "tokio-rustls",
  "tracing",
  "webpki-roots",
+]
+
+[[package]]
+name = "goethite-server"
+version = "0.3.0"
+dependencies = [
+ "goethite-proto",
+ "goethite-resolver",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "rustls",
+ "socket2",
+ "thiserror",
+ "tokio",
+ "tokio-rustls",
+ "tracing",
 ]
 
 [[package]]

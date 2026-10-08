@@ -8,7 +8,7 @@
 use std::collections::HashSet;
 
 use goethite_filter::{LineKind, parse_line};
-use goethite_resolver::{Cidr, MAX_SCHEDULES};
+use goethite_resolver::{Cidr, MAX_SCHEDULES, is_client_id};
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use serde::{Deserialize, Serialize};
@@ -28,6 +28,8 @@ pub const MAX_GROUPS: usize = 256;
 pub const MAX_CLIENTS: usize = 10_000;
 /// The most addresses one client has.
 pub const MAX_CLIENT_ADDRESSES: usize = 64;
+/// The most client IDs one client has.
+pub const MAX_CLIENT_IDS: usize = 16;
 /// The most schedules.
 pub const MAX_SCHEDULE_COUNT: usize = MAX_SCHEDULES;
 /// The most time windows in one schedule.
@@ -183,7 +185,7 @@ pub struct GroupSpec {
     pub managed_by: ManagedBy,
 }
 
-/// A device or network, identified by its addresses.
+/// A device or network, identified by its addresses or its client IDs.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ClientSpec {
@@ -191,8 +193,16 @@ pub struct ClientSpec {
     pub name: String,
     /// IP addresses or networks in CIDR notation, such as `192.168.1.23`
     /// or `192.168.1.0/24`. The longest network containing a query's source
-    /// address decides which client asked.
+    /// address decides which client asked. May be empty for a client known
+    /// by its client IDs only.
     pub addresses: Vec<String>,
+    /// Client IDs, such as `anna-phone`: over DNS over TLS or HTTPS a
+    /// device can name itself, in the server name (`anna-phone.dns.example`)
+    /// or the DNS over HTTPS path (`/dns-query/anna-phone`), wherever it is.
+    /// A known ID decides which client asked before the address does. 1 to
+    /// 63 lowercase letters, digits and hyphens, not at either end.
+    #[serde(default)]
+    pub ids: Vec<String>,
     /// The group's ID.
     #[serde(default = "default_group")]
     pub group: String,
@@ -721,6 +731,7 @@ impl ConfigSnapshot {
     fn validate_clients(&self) -> Result<(), ValidationError> {
         let groups: HashSet<&str> = self.groups.iter().map(|g| g.id.as_str()).collect();
         let mut networks = HashSet::new();
+        let mut ids = HashSet::new();
         for client in &self.clients {
             let field = format!("clients[{}]", client.id);
             check_name(&format!("{field}.name"), &client.spec.name)?;
@@ -731,13 +742,35 @@ impl ConfigSnapshot {
                     format!("there is no group {:?}", client.spec.group),
                 ));
             }
-            if client.spec.addresses.is_empty()
-                || client.spec.addresses.len() > MAX_CLIENT_ADDRESSES
-            {
+            if client.spec.addresses.len() > MAX_CLIENT_ADDRESSES {
                 return Err(invalid(
                     format!("{field}.addresses"),
-                    format!("needs 1 to {MAX_CLIENT_ADDRESSES} addresses"),
+                    format!("has more than {MAX_CLIENT_ADDRESSES} addresses"),
                 ));
+            }
+            if client.spec.ids.len() > MAX_CLIENT_IDS {
+                return Err(invalid(
+                    format!("{field}.ids"),
+                    format!("has more than {MAX_CLIENT_IDS} client IDs"),
+                ));
+            }
+            if client.spec.addresses.is_empty() && client.spec.ids.is_empty() {
+                return Err(invalid(
+                    format!("{field}.addresses"),
+                    "needs an address or a client ID",
+                ));
+            }
+            for (index, id) in client.spec.ids.iter().enumerate() {
+                let at = format!("{field}.ids[{index}]");
+                if !is_client_id(id) {
+                    return Err(invalid(
+                        at,
+                        "needs 1 to 63 lowercase letters, digits and hyphens, not at either end",
+                    ));
+                }
+                if !ids.insert(id.as_str()) {
+                    return Err(invalid(at, format!("{id} is used by another client")));
+                }
             }
             for (index, address) in client.spec.addresses.iter().enumerate() {
                 let at = format!("{field}.addresses[{index}]");
@@ -869,6 +902,7 @@ mod tests {
             spec: ClientSpec {
                 name: "Tablet".into(),
                 addresses: vec!["192.168.1.23".into()],
+                ids: vec!["tablet".into()],
                 group: DEFAULT_GROUP.into(),
                 comment: String::new(),
                 managed_by: ManagedBy::Api,
@@ -921,6 +955,26 @@ mod tests {
                 .message
                 .contains("another client")
         );
+
+        let mut bad = good.clone();
+        let mut twin = bad.clients[0].clone();
+        twin.id = "cl_2".into();
+        twin.spec.addresses.clear();
+        bad.clients.push(twin);
+        let err = bad.validate().unwrap_err();
+        assert_eq!(err.field, "clients[cl_2].ids[0]");
+        assert!(err.message.contains("another client"));
+
+        let mut bad = good.clone();
+        bad.clients[0].spec.ids = vec!["Tablet".into()];
+        assert!(bad.validate().unwrap_err().field.ends_with("ids[0]"));
+
+        // An ID alone is enough; neither is not.
+        let mut fine = good.clone();
+        fine.clients[0].spec.addresses.clear();
+        assert_eq!(fine.validate(), Ok(()));
+        fine.clients[0].spec.ids.clear();
+        assert!(fine.validate().unwrap_err().message.contains("client ID"));
 
         let mut bad = good;
         bad.settings.spec.list_update_hours = 0;

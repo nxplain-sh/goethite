@@ -45,7 +45,9 @@ the network; otherwise the token crosses it in clear text.
   off in place. goethite explains a rule it cannot use.
 - **Groups**: which lists filter a group's clients, each always or during a schedule, and safe
   search.
-- **Clients**: devices and networks by address, and their group.
+- **Clients**: devices and networks by address or [client ID](../encrypted-dns/#client-ids), and
+  their group. With an ID, the editor shows the DNS over HTTPS URL and DNS over TLS name to set
+  the device up with.
 - **Schedules**: weekly windows in a time zone; a window can run past midnight.
 - **Settings**: filtering on or off, how blocked names are answered, and how often lists are
   downloaded.

@@ -38,8 +38,8 @@ pub use forward::{
 };
 pub use guard::FailMode;
 pub use policy::{
-    ClientPolicy, GroupPolicy, MAX_SCHEDULES, Policy, PolicyError, PolicyParts, PolicyState,
-    ScheduledSources,
+    ClientPolicy, GroupPolicy, MAX_CLIENT_ID_LEN, MAX_SCHEDULES, Policy, PolicyError, PolicyParts,
+    PolicyState, ScheduledSources, is_client_id,
 };
 pub use rebinding::{DEFAULT_PRIVATE_DOMAINS, RebindingProtection, is_private};
 pub use tls::{TlsError, TlsRoots, tls_client_config};
@@ -296,7 +296,19 @@ impl Resolver {
     /// blocked too (CNAME uncloaking), unless an exception matched the name
     /// asked for.
     pub async fn resolve(&self, query: &Query, client: IpAddr) -> Resolution {
-        let asker = self.asker(client);
+        self.resolve_with_id(query, client, None).await
+    }
+
+    /// Answers `query` from `client`, as [`Resolver::resolve`] does, for a
+    /// client that also gave a client ID (over an encrypted transport). A
+    /// known ID identifies the client before its address does.
+    pub async fn resolve_with_id(
+        &self,
+        query: &Query,
+        client: IpAddr,
+        client_id: Option<&str>,
+    ) -> Resolution {
+        let asker = self.asker(client, client_id);
         let (mut response, outcome, filter) = self.answer(query, &asker).await;
         response.recursion_available = self.forwarder.is_some();
         Resolution {
@@ -308,7 +320,14 @@ impl Resolver {
         }
     }
 
-    fn asker(&self, client: IpAddr) -> Asker {
+    /// Whether a known client uses the client ID `id`.
+    pub fn knows_client_id(&self, id: &str) -> bool {
+        self.policy
+            .as_ref()
+            .is_some_and(|state| state.policy().client_with_id(id).is_some())
+    }
+
+    fn asker(&self, client: IpAddr, client_id: Option<&str>) -> Asker {
         let Some(state) = &self.policy else {
             return Asker {
                 policy: None,
@@ -320,7 +339,7 @@ impl Resolver {
             };
         };
         let policy = state.policy();
-        let (known, group) = policy.identify(client);
+        let (known, group) = policy.identify(client, client_id);
         let on = policy.protection() && !state.is_paused();
         let asker = Asker {
             client: known.map(|known| Arc::clone(&known.id)),

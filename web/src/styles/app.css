@@ -559,6 +559,37 @@ textarea.input {
 	padding-right: var(--space-2);
 }
 
+.subform p {
+	margin: 0;
+}
+
+.setup {
+	display: grid;
+	grid-template-columns: max-content minmax(0, 1fr);
+	gap: var(--space-2) var(--space-3);
+	margin: 0;
+}
+
+.setup dt {
+	font-weight: 700;
+}
+
+.setup dd {
+	margin: 0;
+	overflow-wrap: anywhere;
+}
+
+@media (max-width: 520px) {
+	.setup {
+		grid-template-columns: minmax(0, 1fr);
+		row-gap: var(--space-1);
+	}
+
+	.setup dd + dt {
+		margin-top: var(--space-2);
+	}
+}
+
 .row {
 	display: flex;
 	flex-wrap: wrap;

@@ -1,6 +1,6 @@
 [package]
 name = "goethite-server"
-description = "DNS listeners for goethite: UDP and TCP today; DoT, DoH and DoQ later."
+description = "DNS listeners for goethite: UDP, TCP, DNS over TLS and DNS over HTTPS."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -13,13 +13,22 @@ publish.workspace = true
 [dependencies]
 goethite-proto.workspace = true
 goethite-resolver.workspace = true
+http-body-util.workspace = true
+hyper = { workspace = true, features = ["server"] }
+hyper-util = { workspace = true, features = ["server", "server-auto", "tokio"] }
+rustls.workspace = true
 socket2.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "sync", "time"] }
+tokio-rustls.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+goethite-filter.workspace = true
 hickory-proto.workspace = true
+hyper = { workspace = true, features = ["client", "http1", "http2"] }
+hyper-util = { workspace = true, features = ["client", "http1", "http2", "tokio"] }
+rcgen.workspace = true
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
 
 [lints]

@@ -15,17 +15,17 @@ Resolution pipeline: client identification → policy/group lookup → local rew
 (including CNAME uncloaking) → cache → upstream (forward or recursive) → DNSSEC validation →
 response.
 
-Today (v0.1, the end of Phase 1) goethite has UDP/TCP listeners on one or more addresses with
-per-client rate and connection limits, a built-in `goethite.test.` record, forwarding to
-configured upstreams over DNS over TLS, DNS over HTTPS or plain DNS with failover, DNS rebinding
-protection, a cache, and filtering from local and downloaded lists that are refreshed on a
-schedule.
+Today (Phase 4 in progress) goethite has UDP and TCP listeners with per-client rate and
+connection limits, DNS over TLS and HTTPS listeners with client IDs, forwarding over plain DNS,
+DoT or DoH with failover, DNS rebinding protection, a cache, filtering per client group from local
+and downloaded lists, a query log, a REST API with a web UI and a TUI, a two-node cluster with
+replicated configuration and a floating IP, and zero-downtime upgrades.
 
 ### Trust boundaries
 
 | #  | Boundary                                      | Direction          | Notes                                                       |
 | -- | --------------------------------------------- | ------------------ | ----------------------------------------------------------- |
-| B1 | LAN clients → DNS listeners (UDP/TCP 53, later DoT/DoH/DoQ) | untrusted → node | Highest-volume, fully attacker-controlled input             |
+| B1 | Clients → DNS listeners (UDP/TCP 53, DoT, DoH; DoQ later) | untrusted → node | Highest-volume, fully attacker-controlled input; DoT and DoH may face the internet |
 | B2 | Resolver → upstream resolvers / authoritative servers | node → untrusted | Responses are untrusted; off-path spoofing is possible over plain DNS |
 | B3 | Filter list downloads                          | untrusted → node   | Large, third-party-controlled content, parsed on the node    |
 | B4 | Admins → REST API / web UI / TUI / Terraform   | semi-trusted → node | Authenticated (Phase 2), can change all behaviour           |
@@ -98,7 +98,7 @@ for that phase and not implemented yet. Phases follow the roadmap in
 | Browser attacks on the API (B4)             | No CORS headers, so other sites' pages cannot read responses; the token travels in a header, not a cookie, so cross-site requests carry no credentials. Requests with an `Origin` from another site are refused, so even requests needing no preflight do nothing. Without a token, only loopback `Host` names are answered, so DNS rebinding a hostile name to 127.0.0.1 reaches nothing; with one, a rebinding page has no token. Every response sets a strict CSP, `X-Frame-Options: DENY`, `nosniff` and `no-referrer`; API answers are `no-store`. The checks are fuzzed (`request_checks`) ([ADR 0009](adr/0009-web-ui-serving.md)) | 2 | done |
 | Unaccountable config changes                | Every change to the store is written in the same transaction as an audit entry (who, from where, before and after); the newest 100,000 entries are kept. The store file is created with mode 0600 and locked against a second process | 2 | done |
 | XSS / injection in the web UI               | The UI is served under the API's strict CSP: no inline scripts or styles, no `eval`, no third-party origins, no data: fonts. The build inlines nothing and self-hosts its fonts; React escapes everything rendered and the UI never sets raw HTML. Its files hold no data; the API behind them needs the token. The token lives in the tab's `sessionStorage`, cleared on a 401 and on sign-out. The sign-in page only returns to paths on its own origin. `[api] web_ui = false` turns the UI off | 2 | done |
-| XSS through `/api/docs`                     | `/api/docs` (Scalar) off by default and loopback-only, bundled assets, never a CDN | 4 | planned |
+| XSS through `/api/docs`                     | `/api/docs` (Scalar) is off by default and answers loopback only; every file is built into the binary, never a CDN; scripts are `'self'` only, styles need a per-page nonce or a known hash (style attributes are allowed, see the web UI docs) | 4 | done |
 | Query privacy in logs (B6)                  | The query log keeps 7 days and at most 1,000,000 entries by default, can anonymize clients to /24 and /56 or be turned off; statistics keep only hourly top-100 lists for 30 days; the store file is readable by goethite's user only. Logging is queued and drops (and counts) entries rather than blocking queries, and stored records are decoded with bounds checks (fuzzed: `decode_query_record`) | 2 | done |
 | Malicious cluster peer (B5)                 | Config sync over TLS 1.3 with certificates from a private cluster CA in both directions; each node accepts only the configured peer's node name, so a certificate for another node or from another cluster is refused. Copies are validated as a whole, versioned (never older), schema-checked, audit-logged and applied off the DNS path; a replica that cannot reach the primary keeps its configuration ([ADR 0010](adr/0010-cluster-config-sync.md)) | 3 | done |
 | Forged changes through the cluster channel (B5) | Only the primary runs forwarded changes, only configuration writes under `/api/v1/`, through the same validation and audit as any caller; the forwarding identity is an in-process extension that HTTP clients cannot set, and the replica's own API authentication decides who may forward. A compromised replica can make the changes an admin could, and is recorded as the node they came through | 3 | done |
@@ -107,7 +107,9 @@ for that phase and not implemented yet. Phases follow the roadmap in
 | Unsafe code adopting systemd's sockets (B6)  | One `unsafe` block, in the binary, takes the descriptors systemd passes: only when `LISTEN_PID` is this process, before any file is opened, each number exactly once, each checked to be a socket of the expected kind and address before use; every library crate forbids `unsafe` | 3 | done |
 | Filtering failure taking the network down   | Fail open by default: a store that cannot be opened is replaced by one in memory seeded from the config file (the file is left alone), an unbuildable filter leaves the previous one (or none at startup), and a failed check answers that query unfiltered; every case is reported in status, UIs and metrics. `[filter] on_failure = "closed"` refuses to start or answers SERVFAIL instead ([ADR 0011](adr/0011-fail-open.md)) | 3 | done |
 | Forged answers from upstream (B2)           | Recursion with full DNSSEC validation                                                              | 4     | planned |
-| LAN snooping of client queries (B1)         | DoH / DoT / DoQ server listeners                                                                   | 4     | planned |
+| Snooping of client queries on the network (B1) | DoT and DoH listeners with rustls (ring, TLS 1.2 and 1.3, no 0-RTT) and the operator's certificate, reloadable on SIGHUP; DoQ next ([ADR 0015](adr/0015-encrypted-dns-serving.md)) | 4 | partial |
+| Resource exhaustion through TLS and HTTP (B1) | DoT and DoH share the TCP connection limits (256 in total, 16 per client); 10 s for the handshake, 30 s idle; DoH heads of at most 64 KiB sent within 10 s, bodies of at most 65,535 bytes within the idle time, 64 HTTP/2 streams per connection; the request parsers are fuzzed (`parse_doh`). DoT and DoH queries are not rate limited per client yet (backlog) | 4 | partial |
+| Open resolver on the internet through DoT/DoH (B1) | `require_client_id` refuses encrypted queries without a known client ID. Client IDs are names, not secrets: DoT carries them in the clear in the TLS server name; the DoH path keeps them encrypted. Off by default, documented for internet-facing setups | 4 | done |
 | Upstream learning client identity           | ODoH (Oblivious DoH)                                                                               | 4     | planned |
 | Tampered releases (B7)                      | Reproducible, signed builds. SBOM.                                                                  | 5     | planned |
 | Residual design and implementation flaws    | External security review                                                                           | 5     | planned |

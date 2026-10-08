@@ -15,6 +15,7 @@ goethite-cluster = { path = "../crates/goethite-cluster" }
 goethite-filter = { path = "../crates/goethite-filter" }
 goethite-proto = { path = "../crates/goethite-proto" }
 goethite-resolver = { path = "../crates/goethite-resolver" }
+goethite-server = { path = "../crates/goethite-server" }
 goethite-store = { path = "../crates/goethite-store" }
 libfuzzer-sys = "0.4.13"
 
@@ -54,6 +55,13 @@ bench = false
 [[bin]]
 name = "parse_cidr"
 path = "fuzz_targets/parse_cidr.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_doh"
+path = "fuzz_targets/parse_doh.rs"
 test = false
 doc = false
 bench = false

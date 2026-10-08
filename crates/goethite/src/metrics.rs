@@ -17,7 +17,7 @@ const BUCKETS_US: [u64; 14] = [
     1_000_000, 2_500_000,
 ];
 
-const PROTOCOLS: [Protocol; 2] = [Protocol::Udp, Protocol::Tcp];
+const PROTOCOLS: [Protocol; Protocol::ALL.len()] = Protocol::ALL;
 
 /// Per-query counters.
 #[derive(Debug)]
@@ -173,10 +173,7 @@ fn queries(out: &mut Out, m: &Metrics) {
     );
     for (outcome, row) in QueryOutcome::ALL.iter().zip(&m.queries) {
         for (protocol, counter) in PROTOCOLS.iter().zip(row) {
-            let protocol = match protocol {
-                Protocol::Udp => "udp",
-                Protocol::Tcp => "tcp",
-            };
+            let protocol = protocol.as_str();
             out.sample(
                 "goethite_queries_total",
                 &format!("outcome=\"{}\",protocol=\"{protocol}\"", outcome.as_str()),
@@ -225,6 +222,16 @@ fn turned_away(out: &mut Out, server: &ServerStats) {
             "goethite_udp_oversized_total",
             "UDP datagrams too large to be a query.",
             &server.udp_oversized,
+        ),
+        (
+            "goethite_tls_handshake_failures_total",
+            "DNS over TLS and HTTPS connections whose TLS handshake failed or took too long.",
+            &server.tls_handshake_failures,
+        ),
+        (
+            "goethite_https_rejected_total",
+            "DNS over HTTPS requests answered with an HTTP error.",
+            &server.https_rejected,
         ),
     ] {
         out.single(name, "counter", help, counter.load(Ordering::Relaxed));
@@ -368,8 +375,14 @@ mod tests {
             Protocol::Tcp,
             Duration::from_secs(9),
         );
+        metrics.observe(
+            QueryOutcome::Cached,
+            Protocol::Doh,
+            Duration::from_micros(80),
+        );
         let server = ServerStats::default();
         server.rate_limited.store(4, Ordering::Relaxed);
+        server.tls_handshake_failures.store(2, Ordering::Relaxed);
         let upstreams = [UpstreamStatus {
             config: UpstreamConfig::udp("9.9.9.9:53".parse().unwrap()),
             healthy: false,
@@ -390,13 +403,16 @@ mod tests {
         for line in [
             "goethite_queries_total{outcome=\"blocked\",protocol=\"udp\"} 1",
             "goethite_queries_total{outcome=\"forwarded\",protocol=\"tcp\"} 2",
-            "goethite_query_duration_seconds_bucket{le=\"0.0001\"} 1",
-            "goethite_query_duration_seconds_bucket{le=\"0.05\"} 2",
-            "goethite_query_duration_seconds_bucket{le=\"2.5\"} 2",
-            "goethite_query_duration_seconds_bucket{le=\"+Inf\"} 3",
-            "goethite_query_duration_seconds_count 3",
-            "goethite_query_duration_seconds_sum 9.03008",
+            "goethite_queries_total{outcome=\"cached\",protocol=\"doh\"} 1",
+            "goethite_queries_total{outcome=\"cached\",protocol=\"dot\"} 0",
+            "goethite_query_duration_seconds_bucket{le=\"0.0001\"} 2",
+            "goethite_query_duration_seconds_bucket{le=\"0.05\"} 3",
+            "goethite_query_duration_seconds_bucket{le=\"2.5\"} 3",
+            "goethite_query_duration_seconds_bucket{le=\"+Inf\"} 4",
+            "goethite_query_duration_seconds_count 4",
+            "goethite_query_duration_seconds_sum 9.03016",
             "goethite_rate_limited_total 4",
+            "goethite_tls_handshake_failures_total 2",
             "goethite_cache_lookups_total{result=\"hit\"} 5",
             "goethite_upstream_up{upstream=\"9.9.9.9:53\",protocol=\"udp\"} 0",
             "goethite_filter_rules 1234",

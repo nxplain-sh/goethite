@@ -58,6 +58,8 @@ impl QueryObserver for Observer {
         let protocol = match event.transport {
             Transport::Udp => Protocol::Udp,
             Transport::Tcp => Protocol::Tcp,
+            Transport::Tls => Protocol::Dot,
+            Transport::Https => Protocol::Doh,
         };
         self.metrics.observe(outcome, protocol, event.elapsed);
         if outcome == QueryOutcome::Local && event.query.question.name == self.health {

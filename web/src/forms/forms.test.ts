@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest'
 import {
 	clientForm,
 	clientSpec,
+	isClientId,
+	parseClientIds,
 	describeDays,
 	describeWindows,
 	groupForm,
@@ -93,10 +95,21 @@ describe('clients', () => {
 		expect(parseAddresses('   ')).toEqual([])
 	})
 
+	it('reads client IDs lowercase and knows valid ones', () => {
+		expect(parseClientIds('Anna-Phone\nkid-1, kid-1')).toEqual(['anna-phone', 'kid-1'])
+		for (const valid of ['a', 'anna-phone', '0', 'x'.repeat(63)]) {
+			expect(isClientId(valid)).toBe(true)
+		}
+		for (const invalid of ['', '-a', 'a-', 'a.b', 'a_b', 'Anna', 'x'.repeat(64)]) {
+			expect(isClientId(invalid)).toBe(false)
+		}
+	})
+
 	it('round-trips', () => {
 		const spec = {
 			name: 'Tablet',
 			addresses: ['192.168.1.23', 'fd00::23'],
+			ids: ['tablet'],
 			group: 'gr_kids',
 			comment: '',
 			managed_by: 'api' as const,

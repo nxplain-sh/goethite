@@ -172,6 +172,9 @@ pub struct Status {
     /// This node's cluster, if it is in one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cluster: Option<ClusterStatus>,
+    /// DNS over TLS and HTTPS, if this node serves them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encrypted: Option<EncryptedStatus>,
     /// What is wrong with this node, in words, such as filtering running
     /// without its store. Empty when all is well.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -237,6 +240,20 @@ pub struct CacheStatus {
     pub hits: u64,
     /// Lookups that were not.
     pub misses: u64,
+}
+
+/// How clients reach this node over DNS over TLS and HTTPS.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct EncryptedStatus {
+    /// The name clients reach it by, such as `dns.example`, if configured:
+    /// a client ID goes in front of it, as in `anna-phone.dns.example`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_name: Option<String>,
+    /// The addresses DNS over TLS is served on.
+    pub dot: Vec<String>,
+    /// The addresses DNS over HTTPS is served on, at the path `/dns-query`
+    /// (or `/dns-query/<client ID>`).
+    pub doh: Vec<String>,
 }
 
 /// The query log.

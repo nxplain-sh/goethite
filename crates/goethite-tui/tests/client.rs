@@ -41,6 +41,7 @@ impl Control for Idle {
                 dropped: 0,
             },
             cluster: None,
+            encrypted: None,
             problems: Vec::new(),
         }
     }

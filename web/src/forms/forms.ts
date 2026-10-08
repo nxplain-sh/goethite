@@ -135,6 +135,7 @@ export function groupSpec(form: GroupForm, managedBy?: ManagedBy): GroupSpec {
 export interface ClientForm {
 	name: string
 	addresses: string
+	ids: string
 	group: string
 	comment: string
 }
@@ -146,6 +147,7 @@ export function clientForm(spec?: ClientSpec): ClientForm {
 	return {
 		name: spec?.name ?? '',
 		addresses: (spec?.addresses ?? []).join('\n'),
+		ids: (spec?.ids ?? []).join('\n'),
 		group: spec?.group ?? DEFAULT_GROUP,
 		comment: spec?.comment ?? '',
 	}
@@ -156,10 +158,21 @@ export function parseAddresses(text: string): string[] {
 	return [...new Set(text.split(/[\s,]+/).filter((part) => part !== ''))]
 }
 
+/** Client IDs typed like addresses; lowercase, as goethite wants them. */
+export function parseClientIds(text: string): string[] {
+	return parseAddresses(text.toLowerCase())
+}
+
+/** 1 to 63 lowercase letters, digits and hyphens, not at either end. */
+export function isClientId(id: string): boolean {
+	return /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/.test(id)
+}
+
 export function clientSpec(form: ClientForm, managedBy?: ManagedBy): ClientSpec {
 	return {
 		name: form.name.trim(),
 		addresses: parseAddresses(form.addresses),
+		ids: parseClientIds(form.ids),
 		group: form.group,
 		comment: form.comment.trim(),
 		managed_by: managed(managedBy),

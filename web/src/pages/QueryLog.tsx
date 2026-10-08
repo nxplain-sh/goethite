@@ -26,17 +26,33 @@ const columns = column.columns([
 const RIGHT_ALIGNED = new Set(['elapsed_us'])
 const NO_ROWS: QueryEntry[] = []
 
-/** A known client's name over its address; just the address otherwise. */
+/** How a query arrived, as people call it. */
+const PROTOCOL_LABEL: Record<QueryEntry['protocol'], string> = {
+	udp: 'UDP',
+	tcp: 'TCP',
+	dot: 'DoT',
+	doh: 'DoH',
+}
+
+/** A known client's name over its address; just the address otherwise. Encrypted queries say so. */
 function ClientName({ entry }: { entry: QueryEntry }) {
 	const names = useQuery(clientsQuery).data
 	const name = entry.client_id == null ? undefined : names?.get(entry.client_id)
+	const via =
+		entry.protocol === 'udp' || entry.protocol === 'tcp' ? null : (
+			<span className="muted">{` · ${PROTOCOL_LABEL[entry.protocol]}`}</span>
+		)
 	return name === undefined ? (
-		entry.client
+		<>
+			{entry.client}
+			{via}
+		</>
 	) : (
 		<>
 			<span className="client-name">{name}</span>
 			<br />
 			<span className="muted">{entry.client}</span>
+			{via}
 		</>
 	)
 }

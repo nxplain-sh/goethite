@@ -32,12 +32,13 @@ which join the default group.
 
 ## Clients
 
-A client is a device or a network, identified by its addresses:
+A client is a device or a network, identified by its addresses or its client IDs:
 
 ```sh
 api -X POST http://127.0.0.1:8053/api/v1/clients -d '{
   "name": "Tablet",
   "addresses": ["192.168.1.23", "fd00::23"],
+  "ids": ["tablet"],
   "group": "gr_cce7…"
 }'
 ```
@@ -46,6 +47,11 @@ Addresses are single addresses or networks in CIDR notation (`192.168.1.0/24`), 
 set. If several clients' networks contain an address, the longest one wins, so a device can be its
 own client inside a network that is another client. Clients goethite does not know are in the
 default group. The query log and the statistics show clients by ID.
+
+Client IDs name a device over [DNS over TLS and HTTPS](../encrypted-dns/#client-ids), wherever it
+is: a query that carries a known ID belongs to that client before its address is looked at. IDs
+are 1 to 63 lowercase letters, digits and hyphens, at most 16 per client, and unique. A client
+needs an address or an ID, or both.
 
 ## Schedules
 

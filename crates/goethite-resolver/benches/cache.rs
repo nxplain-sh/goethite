@@ -108,6 +108,7 @@ fn policy() -> Policy {
         .map(|i| ClientPolicy {
             id: format!("client{i}").into(),
             addresses: vec![IpAddr::from(Ipv4Addr::new(192, 168, 1, i)).into_cidr()],
+            ids: Vec::new(),
             group: usize::from(i % 2),
         })
         .collect();

@@ -816,6 +816,7 @@ dependencies = [
  "jiff",
  "proptest",
  "rand 0.10.3",
+ "rcgen",
  "rustix",
  "rustls",
  "serde",
@@ -922,12 +923,19 @@ dependencies = [
 name = "goethite-server"
 version = "0.3.0"
 dependencies = [
+ "goethite-filter",
  "goethite-proto",
  "goethite-resolver",
  "hickory-proto",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "rcgen",
+ "rustls",
  "socket2",
  "thiserror",
  "tokio",
+ "tokio-rustls",
  "tracing",
 ]
 
@@ -1129,12 +1137,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ddc03d96684f9226b8a787cdb71488417b53ab5ea8fdb1dac946cb9431cc8bff"
 dependencies = [
  "bytes",
+ "futures-channel",
  "http",
  "http-body",
  "hyper",
  "pin-project-lite",
  "tokio",
  "tower-service",
+ "tracing",
 ]
 
 [[package]]

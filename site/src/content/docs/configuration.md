@@ -9,8 +9,9 @@ to a default. Run `goethite check-config --config <path>` to check a file. The c
 [example config](https://github.com/nxplain-sh/goethite/blob/main/config/goethite.example.toml)
 is a good starting point.
 
-The file is read at startup. `SIGHUP` (`systemctl reload goethite`) re-reads the filter lists but
-not the file itself; restart goethite after changing it. Files over 1 MiB are refused.
+The file is read at startup. `SIGHUP` (`systemctl reload goethite`) re-reads the filter lists and
+the TLS certificates but not the file itself; restart goethite after changing it. Files over 1 MiB
+are refused.
 
 ## `[server]`
 
@@ -39,6 +40,23 @@ UDP queries per client network; see [rate limiting](../security/#rate-limiting).
 | `max_clients` | `65536` | Client networks tracked at once, 16 to 1,000,000. Beyond that, untracked networks share one limit. |
 
 Loopback clients are never limited.
+
+### `[server.tls]`
+
+DNS over TLS and DNS over HTTPS for clients; see [Encrypted DNS](../encrypted-dns/). Without this
+table, neither is served.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `cert`, `key` | required | PEM files: the certificate chain and its private key. Read before goethite drops its privileges, and again on `SIGHUP`. Relative paths are relative to the config file. |
+| `dot` | none | Addresses for DNS over TLS, usually port 853: one or a list, at most 16. |
+| `doh` | none | Addresses for DNS over HTTPS, usually port 443: one or a list, at most 16. Queries go to `/dns-query`. |
+| `server_name` | unset | The name devices use, such as `"dns.example"`. With it, a TLS server name one label below it (`anna-phone.dns.example`) carries a client ID; the certificate should then cover `*.dns.example` too. |
+| `require_client_id` | `false` | Answer only DoT and DoH queries that carry a known client ID; others get `REFUSED`. Turn it on when the listeners are reachable from the internet. |
+
+At least one of `dot` and `doh` is required. No TCP address may be used twice across `[server]`,
+`[server.tls]`, `[api]` and `[cluster]`. Encrypted connections count against
+`max_tcp_connections` and `max_tcp_connections_per_client`.
 
 ## `[[upstream]]`
 

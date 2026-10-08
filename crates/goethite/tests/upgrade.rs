@@ -285,6 +285,60 @@ fn an_upgrade_loses_no_query() {
     }
 }
 
+/// DNS over TLS and HTTPS listeners are handed over like the others: the new
+/// process listens on the very ports the old one had (with port 0 in the
+/// config, binding afresh would pick others).
+#[test]
+fn encrypted_listeners_are_handed_over() {
+    let (dir, config) = setup("upgrade_tls");
+    let rcgen::CertifiedKey { cert, signing_key } =
+        rcgen::generate_simple_self_signed(vec!["dns.example".into()]).unwrap();
+    std::fs::write(dir.join("dns.crt"), cert.pem()).unwrap();
+    std::fs::write(dir.join("dns.key"), signing_key.serialize_pem()).unwrap();
+    let text = std::fs::read_to_string(&config).unwrap();
+    std::fs::write(
+        &config,
+        text.replace(
+            "[[upstream]]",
+            "[server.tls]\ncert = \"dns.crt\"\nkey = \"dns.key\"\n\
+             dot = \"127.0.0.1:0\"\ndoh = \"127.0.0.1:0\"\n\n[[upstream]]",
+        ),
+    )
+    .unwrap();
+    let mut old = Running::start(&config);
+    let [dot, doh, _, _] = old.wait_for_logs([
+        "DNS over TLS listening",
+        "DNS over HTTPS listening",
+        "listening udp=",
+        "API listening",
+    ]);
+    let (dot, doh) = (field(&dot, "address"), field(&doh, "address"));
+
+    signal("USR2", old.child.id());
+    let started = old.wait_for_log("started the new goethite");
+    let new_pid: u32 = field(&started, "pid").parse().unwrap();
+    let _stray = Stray(new_pid);
+    // The new process logs these, and the old one says it handed over, in
+    // no fixed order.
+    let [_, tls_after, https_after, _] = old.wait_for_logs([
+        "took over the previous goethite's sockets",
+        "DNS over TLS listening",
+        "DNS over HTTPS listening",
+        "answering in place of the previous goethite",
+    ]);
+    assert_eq!(field(&tls_after, "address"), dot);
+    assert_eq!(field(&https_after, "address"), doh);
+    for addr in [&dot, &doh] {
+        TcpStream::connect(addr.parse::<SocketAddr>().unwrap()).unwrap();
+    }
+    signal("TERM", new_pid);
+    let stopping = Instant::now();
+    while process_exists(new_pid) {
+        assert!(stopping.elapsed() < WAIT, "the new goethite did not stop");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 #[test]
 fn a_failed_upgrade_changes_nothing() {
     let (_dir, config) = setup("upgrade_fails");

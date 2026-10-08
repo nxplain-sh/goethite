@@ -343,6 +343,12 @@ pub fn build_policy(config: &ConfigSnapshot, compiled: &Compiled) -> Result<Poli
             ClientPolicy {
                 id: client.id.as_str().into(),
                 addresses,
+                ids: client
+                    .spec
+                    .ids
+                    .iter()
+                    .map(|id| id.as_str().into())
+                    .collect(),
                 group,
             }
         })
@@ -445,6 +451,7 @@ mod tests {
             spec: ClientSpec {
                 name: "Tablet".into(),
                 addresses: vec!["192.168.1.23".into()],
+                ids: vec!["tablet".into()],
                 group: "gr_kids".into(),
                 comment: String::new(),
                 managed_by: ManagedBy::Api,
@@ -460,7 +467,7 @@ mod tests {
         let compiled = compiled();
         let policy = build_policy(&config, &compiled).unwrap();
         let blocked = |ip: &str, name: &str, active: u64| {
-            let (_, group) = policy.identify(ip.parse::<IpAddr>().unwrap());
+            let (_, group) = policy.identify(ip.parse::<IpAddr>().unwrap(), None);
             policy
                 .filter()
                 .check(&name.parse().unwrap(), group.sources_now(active))
@@ -478,9 +485,12 @@ mod tests {
         assert!(blocked("192.168.1.23", "social.example", active));
         let evening = "2026-10-07T18:00:00Z".parse().unwrap();
         assert_eq!(active_schedules(&config, evening), 0);
-        let (client, group) = policy.identify("192.168.1.23".parse().unwrap());
+        let (client, group) = policy.identify("192.168.1.23".parse().unwrap(), None);
         assert_eq!(client.unwrap().id.as_ref(), "cl_tablet");
         assert!(group.safe_search);
+        // The tablet's client ID finds it on any network.
+        let (client, _) = policy.identify("203.0.113.5".parse().unwrap(), Some("tablet"));
+        assert_eq!(client.unwrap().id.as_ref(), "cl_tablet");
     }
 
     #[test]

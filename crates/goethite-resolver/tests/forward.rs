@@ -546,11 +546,13 @@ fn grouped() -> Policy {
             ClientPolicy {
                 id: "tablet".into(),
                 addresses: vec!["10.0.0.2".parse().unwrap(), "10.0.1.0/24".parse().unwrap()],
+                ids: Vec::new(),
                 group: 1,
             },
             ClientPolicy {
                 id: "laptop".into(),
                 addresses: vec!["10.0.0.3".parse().unwrap()],
+                ids: vec!["laptop".into()],
                 group: 2,
             },
         ],
@@ -602,6 +604,13 @@ async fn groups_schedules_and_pausing() {
     assert_eq!(resolution.client.as_deref(), Some("tablet"));
     assert_eq!(resolution.group.as_deref(), Some("kids"));
     assert_eq!(resolution.filter.unwrap().source.as_deref(), Some("social"));
+
+    // A client ID identifies the laptop wherever it is.
+    let resolution = resolver
+        .resolve_with_id(&query("ads.example."), from("10.9.9.9"), Some("laptop"))
+        .await;
+    assert_eq!(resolution.client.as_deref(), Some("laptop"));
+    assert_eq!(resolution.outcome, Outcome::Upstream(0));
 
     // Pausing turns filtering off for everyone, until the pause ends.
     state.pause(Some(SystemTime::now() + Duration::from_secs(60)));

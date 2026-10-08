@@ -525,18 +525,27 @@ export interface components {
              */
             updated_at: string;
         };
-        /** @description A device or network, identified by its addresses. */
+        /** @description A device or network, identified by its addresses or its client IDs. */
         ClientSpec: {
             /**
              * @description IP addresses or networks in CIDR notation, such as `192.168.1.23`
              *     or `192.168.1.0/24`. The longest network containing a query's source
-             *     address decides which client asked.
+             *     address decides which client asked. May be empty for a client known
+             *     by its client IDs only.
              */
             addresses: string[];
             /** @description Free text. */
             comment?: string;
             /** @description The group's ID. */
             group?: string;
+            /**
+             * @description Client IDs, such as `anna-phone`: over DNS over TLS or HTTPS a
+             *     device can name itself, in the server name (`anna-phone.dns.example`)
+             *     or the DNS over HTTPS path (`/dns-query/anna-phone`), wherever it is.
+             *     A known ID decides which client asked before the address does. 1 to
+             *     63 lowercase letters, digits and hyphens, not at either end.
+             */
+            ids?: string[];
             /** @description Who manages the client. */
             managed_by?: components["schemas"]["ManagedBy"];
             /** @description A name for people. */
@@ -638,6 +647,21 @@ export interface components {
              * @description Sent to a safe search endpoint.
              */
             safe_search: number;
+        };
+        /** @description How clients reach this node over DNS over TLS and HTTPS. */
+        EncryptedStatus: {
+            /**
+             * @description The addresses DNS over HTTPS is served on, at the path `/dns-query`
+             *     (or `/dns-query/<client ID>`).
+             */
+            doh: string[];
+            /** @description The addresses DNS over TLS is served on. */
+            dot: string[];
+            /**
+             * @description The name clients reach it by, such as `dns.example`, if configured:
+             *     a client ID goes in front of it, as in `anna-phone.dns.example`.
+             */
+            server_name?: string | null;
         };
         /** @description The body of every error response. */
         ErrorBody: {
@@ -853,7 +877,7 @@ export interface components {
          * @description How a query reached goethite.
          * @enum {string}
          */
-        Protocol: "udp" | "tcp";
+        Protocol: "udp" | "tcp" | "dot" | "doh";
         /** @description One logged query, as the API shows it. */
         QueryEntry: {
             /** @description The client's address (shortened if the log anonymizes clients). */
@@ -1069,6 +1093,7 @@ export interface components {
         Status: {
             cache?: components["schemas"]["CacheStatus"] | null;
             cluster?: components["schemas"]["ClusterStatus"] | null;
+            encrypted?: components["schemas"]["EncryptedStatus"] | null;
             /** @description The compiled filter. */
             filter: components["schemas"]["FilterStatus"];
             /** @description Each list, by ID. */

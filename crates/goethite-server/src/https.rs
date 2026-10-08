@@ -1,0 +1,286 @@
+//! Serving DNS over HTTPS (RFC 8484) on one TLS connection, over HTTP/1.1
+//! or HTTP/2.
+//!
+//! Only `/dns-query` (and `/dns-query/<client ID>`) answers, to `GET` with
+//! the `dns` parameter and to `POST` with an `application/dns-message`
+//! body. Everything is bounded: header size and the time to send them, the
+//! body's size and the time to send it, concurrent HTTP/2 streams, and how
+//! long a connection may go without a request.
+
+use std::convert::Infallible;
+use std::net::SocketAddr;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
+
+use http_body_util::{BodyExt, Full, LengthLimitError, Limited};
+use hyper::body::{Bytes, Incoming};
+use hyper::header::{ALLOW, CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE, HeaderValue};
+use hyper::service::service_fn;
+use hyper::{Method, Request, Response, StatusCode};
+use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
+use hyper_util::server::conn::auto::Builder;
+use tokio::net::TcpStream;
+use tokio::sync::watch;
+use tokio::time::timeout;
+use tokio_rustls::server::TlsStream;
+use tracing::{debug, trace};
+
+use crate::doh::{self, DohError};
+use crate::stream::TLS_HANDSHAKE_TIMEOUT;
+use crate::{Engine, ServerStats, Shared, Transport, stopped};
+
+/// The media type of DNS messages over HTTPS.
+const DNS_MESSAGE: &str = "application/dns-message";
+
+/// Concurrent requests on one HTTP/2 connection.
+const MAX_STREAMS: u32 = 64;
+
+/// The largest request head: request line and headers. A `GET` of the
+/// largest DNS message does not fit; such messages are sent with `POST`.
+const MAX_HEAD: usize = 64 * 1024;
+
+/// How long the connection's last requests may take once it is closing.
+const CLOSE_GRACE: Duration = Duration::from_secs(5);
+
+/// Serves DNS over HTTPS on `stream` until the client hangs up, the
+/// connection goes [`crate::ServerConfig::tls_idle_timeout`] without a
+/// request, or shutdown.
+pub(crate) async fn serve_connection(
+    stream: TlsStream<TcpStream>,
+    peer: SocketAddr,
+    sni_id: Option<String>,
+    shared: &Arc<Shared>,
+    mut stop: watch::Receiver<bool>,
+) {
+    let idle = shared.config.tls_idle_timeout;
+    let activity = Arc::new(Activity::new());
+    let context = Arc::new(Context {
+        engine: Arc::clone(&shared.engine),
+        stats: Arc::clone(&shared.stats),
+        peer,
+        sni_id,
+        body_timeout: idle,
+        activity: Arc::clone(&activity),
+    });
+    let service = service_fn(move |request| {
+        let context = Arc::clone(&context);
+        async move { Ok::<_, Infallible>(context.handle(request).await) }
+    });
+    let mut builder = Builder::new(TokioExecutor::new());
+    builder
+        .http1()
+        .timer(TokioTimer::new())
+        .header_read_timeout(TLS_HANDSHAKE_TIMEOUT)
+        .max_buf_size(MAX_HEAD);
+    builder
+        .http2()
+        .timer(TokioTimer::new())
+        .max_concurrent_streams(MAX_STREAMS)
+        .max_header_list_size(u32::try_from(MAX_HEAD).unwrap_or(u32::MAX));
+    let connection = builder.serve_connection(TokioIo::new(stream), service);
+    tokio::pin!(connection);
+    loop {
+        let quiet_until = activity.quiet_until(idle);
+        tokio::select! {
+            served = connection.as_mut() => {
+                if let Err(err) = served {
+                    debug!(%peer, %err, "DNS over HTTPS connection ended");
+                }
+                return;
+            }
+            () = stopped(&mut stop) => break,
+            () = tokio::time::sleep_until(quiet_until.into()) => {
+                if activity.is_idle(idle) {
+                    trace!(%peer, "closing idle DNS over HTTPS connection");
+                    break;
+                }
+            }
+        }
+    }
+    // HTTP/2 says GOAWAY, HTTP/1.1 closes after the request in progress.
+    connection.as_mut().graceful_shutdown();
+    let _ = timeout(CLOSE_GRACE, connection).await;
+}
+
+/// When a connection last had a request, and how many it has now.
+struct Activity {
+    started: Instant,
+    open: AtomicUsize,
+    /// Milliseconds from `started` to the end of the last request.
+    last: AtomicU64,
+}
+
+impl Activity {
+    fn new() -> Self {
+        Self {
+            started: Instant::now(),
+            open: AtomicUsize::new(0),
+            last: AtomicU64::new(0),
+        }
+    }
+
+    /// Marks a request as in progress until the guard is dropped.
+    fn begin(self: &Arc<Self>) -> Busy {
+        self.open.fetch_add(1, Ordering::Relaxed);
+        Busy(Arc::clone(self))
+    }
+
+    /// When the connection has gone `idle` without a request, if none
+    /// starts meanwhile.
+    fn quiet_until(&self, idle: Duration) -> Instant {
+        let last = Duration::from_millis(self.last.load(Ordering::Relaxed));
+        self.started
+            .checked_add(last)
+            .and_then(|last| last.checked_add(idle))
+            .unwrap_or_else(Instant::now)
+    }
+
+    fn is_idle(&self, idle: Duration) -> bool {
+        self.open.load(Ordering::Relaxed) == 0 && Instant::now() >= self.quiet_until(idle)
+    }
+}
+
+/// A request in progress.
+struct Busy(Arc<Activity>);
+
+impl Drop for Busy {
+    fn drop(&mut self) {
+        let elapsed = u64::try_from(self.0.started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        self.0.last.store(elapsed, Ordering::Relaxed);
+        self.0.open.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+/// What every request on a connection shares.
+struct Context {
+    engine: Arc<Engine>,
+    stats: Arc<ServerStats>,
+    peer: SocketAddr,
+    /// The client ID in the TLS server name, if any.
+    sni_id: Option<String>,
+    body_timeout: Duration,
+    activity: Arc<Activity>,
+}
+
+impl Context {
+    async fn handle(&self, request: Request<Incoming>) -> Response<Full<Bytes>> {
+        let _busy = self.activity.begin();
+        let response = self.answer(request).await;
+        if !response.status().is_success() {
+            ServerStats::count(&self.stats.https_rejected);
+        }
+        response
+    }
+
+    async fn answer(&self, request: Request<Incoming>) -> Response<Full<Bytes>> {
+        let path_id = match doh::client_id_from_path(request.uri().path()) {
+            Ok(id) => id.map(str::to_owned),
+            Err(err) => {
+                let status = if err == DohError::NotFound {
+                    StatusCode::NOT_FOUND
+                } else {
+                    StatusCode::BAD_REQUEST
+                };
+                return plain(status, &err.to_string());
+            }
+        };
+        let mut message = Vec::new();
+        match *request.method() {
+            Method::GET => {
+                if let Err(err) = doh::decode_get(request.uri().query(), &mut message) {
+                    return plain(StatusCode::BAD_REQUEST, &err.to_string());
+                }
+            }
+            Method::POST => match self.read_body(request).await {
+                Ok(body) => message = body,
+                Err((status, text)) => return plain(status, text),
+            },
+            _ => {
+                let mut response = plain(StatusCode::METHOD_NOT_ALLOWED, "use GET or POST");
+                response
+                    .headers_mut()
+                    .insert(ALLOW, HeaderValue::from_static("GET, POST"));
+                return response;
+            }
+        }
+        // The path's client ID wins over the server name's.
+        let client_id = path_id.as_deref().or(self.sni_id.as_deref());
+        let mut out = Vec::new();
+        match self
+            .engine
+            .answer(&message, Transport::Https, self.peer, client_id, &mut out)
+            .await
+        {
+            Some(answered) => dns_message(out, answered.min_ttl),
+            None => plain(StatusCode::BAD_REQUEST, "not a DNS query"),
+        }
+    }
+
+    /// The body of a `POST`: a DNS message of at most
+    /// [`doh::MAX_MESSAGE_LEN`] bytes, sent in time.
+    async fn read_body(
+        &self,
+        request: Request<Incoming>,
+    ) -> Result<Vec<u8>, (StatusCode, &'static str)> {
+        let headers = request.headers();
+        let is_dns_message = headers
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.split(';').next())
+            .is_some_and(|media| media.trim().eq_ignore_ascii_case(DNS_MESSAGE));
+        if !is_dns_message {
+            return Err((
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "send an application/dns-message body",
+            ));
+        }
+        let too_large = (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "a DNS message is at most 65535 bytes",
+        );
+        let declared = headers
+            .get(CONTENT_LENGTH)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<u64>().ok());
+        if declared
+            .is_some_and(|len| usize::try_from(len).map_or(true, |len| len > doh::MAX_MESSAGE_LEN))
+        {
+            return Err(too_large);
+        }
+        let body = Limited::new(request.into_body(), doh::MAX_MESSAGE_LEN);
+        match timeout(self.body_timeout, body.collect()).await {
+            Ok(Ok(collected)) => Ok(collected.to_bytes().to_vec()),
+            Ok(Err(err)) if err.is::<LengthLimitError>() => Err(too_large),
+            Ok(Err(err)) => {
+                debug!(peer = %self.peer, %err, "cannot read a DNS over HTTPS body");
+                Err((StatusCode::BAD_REQUEST, "cannot read the body"))
+            }
+            Err(_) => Err((StatusCode::REQUEST_TIMEOUT, "the body took too long")),
+        }
+    }
+}
+
+/// A DNS answer, cacheable for as long as its shortest time to live (RFC
+/// 8484, section 5.1).
+fn dns_message(wire: Vec<u8>, min_ttl: Option<u32>) -> Response<Full<Bytes>> {
+    let mut response = Response::new(Full::new(Bytes::from(wire)));
+    let headers = response.headers_mut();
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static(DNS_MESSAGE));
+    let max_age = format!("max-age={}", min_ttl.unwrap_or(0));
+    if let Ok(value) = HeaderValue::from_str(&max_age) {
+        headers.insert(CACHE_CONTROL, value);
+    }
+    response
+}
+
+/// An HTTP error with a short explanation.
+fn plain(status: StatusCode, text: &str) -> Response<Full<Bytes>> {
+    let mut response = Response::new(Full::new(Bytes::from(format!("{text}\n"))));
+    *response.status_mut() = status;
+    response.headers_mut().insert(
+        CONTENT_TYPE,
+        HeaderValue::from_static("text/plain; charset=utf-8"),
+    );
+    response
+}

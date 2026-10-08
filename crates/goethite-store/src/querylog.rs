@@ -93,6 +93,44 @@ pub enum Protocol {
     Udp,
     /// DNS over TCP.
     Tcp,
+    /// DNS over TLS (RFC 7858).
+    Dot,
+    /// DNS over HTTPS (RFC 8484).
+    Doh,
+}
+
+impl Protocol {
+    /// Every protocol, for metrics.
+    pub const ALL: [Self; 4] = [Self::Udp, Self::Tcp, Self::Dot, Self::Doh];
+
+    fn code(self) -> u8 {
+        match self {
+            Self::Udp => 0,
+            Self::Tcp => 1,
+            Self::Dot => 2,
+            Self::Doh => 3,
+        }
+    }
+
+    fn from_code(code: u8) -> Option<Self> {
+        Some(match code {
+            0 => Self::Udp,
+            1 => Self::Tcp,
+            2 => Self::Dot,
+            3 => Self::Doh,
+            _ => return None,
+        })
+    }
+
+    /// The name in the API and in metrics, such as `doh`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Udp => "udp",
+            Self::Tcp => "tcp",
+            Self::Dot => "dot",
+            Self::Doh => "doh",
+        }
+    }
 }
 
 /// How an answer came about.
@@ -761,10 +799,7 @@ pub fn encode(query: &StoredQuery) -> Vec<u8> {
             out.extend_from_slice(&v6.octets());
         }
     }
-    out.push(match query.protocol {
-        Protocol::Udp => 0,
-        Protocol::Tcp => 1,
-    });
+    out.push(query.protocol.code());
     out.extend_from_slice(&query.qtype.to_le_bytes());
     out.extend_from_slice(&query.rcode.to_le_bytes());
     out.push(query.outcome.code());
@@ -846,11 +881,7 @@ pub fn decode(bytes: &[u8]) -> Option<StoredQuery> {
         6 => IpAddr::from(<[u8; 16]>::try_from(reader.take(16)?).ok()?),
         _ => return None,
     };
-    let protocol = match reader.u8()? {
-        0 => Protocol::Udp,
-        1 => Protocol::Tcp,
-        _ => return None,
-    };
+    let protocol = Protocol::from_code(reader.u8()?)?;
     let qtype = reader.u16()?;
     let rcode = reader.u16()?;
     let outcome = QueryOutcome::from_code(reader.u8()?)?;
@@ -928,6 +959,16 @@ mod tests {
         forwarded.protocol = Protocol::Udp;
         for stored in [query("ads.example."), forwarded] {
             assert_eq!(decode(&encode(&stored)), Some(stored));
+        }
+        for protocol in Protocol::ALL {
+            let mut stored = query("ads.example.");
+            stored.protocol = protocol;
+            assert_eq!(decode(&encode(&stored)), Some(stored));
+            assert_eq!(Protocol::from_code(protocol.code()), Some(protocol));
+            assert_eq!(
+                serde_json::to_value(protocol).unwrap(),
+                serde_json::Value::from(protocol.as_str())
+            );
         }
         let entry = query("ads.example.").entry(9);
         assert_eq!(

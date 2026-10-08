@@ -21,6 +21,7 @@ use tokio::sync::watch;
 use tokio::task::JoinSet;
 use tracing::{error, info, warn};
 
+use crate::certs::Served;
 use crate::cluster::{self, Cluster};
 use crate::config::{Config, OnFailure};
 use crate::control::Control;
@@ -45,6 +46,8 @@ pub struct DataPlane {
     pub server: Arc<ServerStats>,
     /// The query log the DNS server writes to, while there is one.
     pub log: Arc<ArcSwapOption<QueryLog>>,
+    /// The certificate for DNS over TLS and HTTPS, if they are served.
+    pub dns_cert: Option<Arc<Served>>,
     /// When goethite started.
     pub started: Timestamp,
 }
@@ -112,7 +115,14 @@ impl ControlPlane {
         if first && !control.store().config().settings.spec.protection {
             info!("filtering is turned off in the settings");
         }
-        crate::reload_on_hangup(Arc::clone(&control), &mut tasks, stopped.clone())?;
+        let api_cert = api_cert(config, secrets)?;
+        let reloadable = api_cert.iter().chain(&data.dns_cert).cloned().collect();
+        crate::reload_on_hangup(
+            Arc::clone(&control),
+            reloadable,
+            &mut tasks,
+            stopped.clone(),
+        )?;
         let cluster = match (&config.cluster, &secrets.cluster) {
             (Some(section), Some(pem)) => {
                 let listeners = sockets
@@ -144,11 +154,11 @@ impl ControlPlane {
             started: data.started,
             store_problem,
             cluster: cluster.clone(),
+            encrypted: encrypted_status(config),
         };
-        let api_tls = secrets
-            .api_tls
+        let api_tls = api_cert
             .as_ref()
-            .map(|pem| crate::load_tls(&pem.cert, &pem.key))
+            .map(|cert| cert.server_config(&[b"h2", b"http/1.1"]))
             .transpose()?;
         // The API exists even when it is not served: the primary runs the
         // replica's forwarded changes through it.
@@ -156,15 +166,7 @@ impl ControlPlane {
         if let Some(cluster) = &cluster {
             cluster.set_api(Arc::clone(&api));
         }
-        if let Some(listeners) = sockets.api_listeners()? {
-            let api = Arc::clone(&api);
-            let until = crate::until(stopped.clone());
-            tasks.spawn(async move {
-                if let Err(err) = goethite_api::serve(listeners, api, until).await {
-                    error!(%err, "the API failed");
-                }
-            });
-        }
+        serve_api(sockets, &api, &mut tasks, &stopped)?;
         Ok(Self {
             stop,
             tasks,
@@ -220,4 +222,49 @@ impl ControlPlane {
         }
         Ok(())
     }
+}
+
+/// The API's certificate, if it serves HTTPS.
+fn api_cert(config: &Config, secrets: &Secrets) -> Result<Option<Arc<Served>>> {
+    secrets
+        .api_tls
+        .as_ref()
+        .map(|pem| {
+            let files = config.api.tls_cert.clone().zip(config.api.tls_key.clone());
+            Served::new("API certificate", pem, files)
+        })
+        .transpose()
+}
+
+/// Serves the API on its sockets, if it has any, until `stopped`.
+fn serve_api(
+    sockets: &Sockets,
+    api: &Arc<Api>,
+    tasks: &mut JoinSet<()>,
+    stopped: &watch::Receiver<bool>,
+) -> Result<()> {
+    if let Some(listeners) = sockets.api_listeners()? {
+        let api = Arc::clone(api);
+        let until = crate::until(stopped.clone());
+        tasks.spawn(async move {
+            if let Err(err) = goethite_api::serve(listeners, api, until).await {
+                error!(%err, "the API failed");
+            }
+        });
+    }
+    Ok(())
+}
+
+/// How clients reach this node over DNS over TLS and HTTPS, for the API.
+fn encrypted_status(config: &Config) -> Option<goethite_api::EncryptedStatus> {
+    let server = config.server_config();
+    config
+        .server
+        .tls
+        .as_ref()
+        .map(|_| goethite_api::EncryptedStatus {
+            server_name: server.server_name,
+            dot: server.dot.iter().map(ToString::to_string).collect(),
+            doh: server.doh.iter().map(ToString::to_string).collect(),
+        })
 }

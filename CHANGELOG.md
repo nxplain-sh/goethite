@@ -9,6 +9,21 @@ configuration format.
 
 ### Added
 
+- **DNS over TLS and DNS over HTTPS for clients** (RFC 7858, RFC 8484), configured in
+  `[server.tls]`: GET and POST at `/dns-query`, over HTTP/1.1 and HTTP/2, with the same connection
+  limits as TCP. `SIGHUP` reloads renewed certificates, for the API too, without dropping a
+  connection; `check-config` checks them. The new listeners are handed over on upgrades and kept
+  by systemd across restarts.
+- **Client IDs**: a client can be known by up to 16 IDs as well as, or instead of, its
+  addresses. A device names itself in the DNS over HTTPS path (`/dns-query/anna-phone`) or the
+  TLS server name (`anna-phone.dns.example`), so its filtering follows it off the network. The
+  web UI shows the values to set a device up with; the TUI lists them.
+- `require_client_id` in `[server.tls]` answers only encrypted queries with a known client ID, for
+  listeners reachable from the internet.
+- The query log and metrics tell `dot` and `doh` apart from `udp` and `tcp`; the web UI's query
+  log marks encrypted queries. New metrics: `goethite_tls_handshake_failures_total` and
+  `goethite_https_rejected_total`. `/api/v1/status` reports the encrypted listeners.
+
 - **The full web UI**: lists, rules, groups, clients, schedules, settings and the audit log can
   be viewed and changed from the browser. Changes carry the revision you saw, so a change made
   meanwhile is offered instead of overwritten; what Terraform manages is read-only; a list, a

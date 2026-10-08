@@ -4,8 +4,9 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use goethite_api::{
-    BoxFuture, BoxResult, CacheStatus, Change, ClusterRole, ClusterStatus, FilterStatus, Forwarded,
-    ForwardedAnswer, ListStatus, QueryLogStatus, Status, UpstreamStatus, Writes,
+    BoxFuture, BoxResult, CacheStatus, Change, ClusterRole, ClusterStatus, EncryptedStatus,
+    FilterStatus, Forwarded, ForwardedAnswer, ListStatus, QueryLogStatus, Status, UpstreamStatus,
+    Writes,
 };
 use goethite_resolver::{Resolver, Transport};
 use goethite_server::ServerStats;
@@ -37,6 +38,8 @@ pub struct Node {
     pub cluster: Option<Arc<Cluster>>,
     /// Why the store file is not in use, if it is not.
     pub store_problem: Option<String>,
+    /// DNS over TLS and HTTPS, if they are served.
+    pub encrypted: Option<EncryptedStatus>,
 }
 
 impl Node {
@@ -131,6 +134,7 @@ impl goethite_api::Control for Node {
                 dropped: self.log.dropped(),
             },
             cluster: self.cluster.as_ref().map(|cluster| cluster.status()),
+            encrypted: self.encrypted.clone(),
             problems: self.problems(),
         }
     }

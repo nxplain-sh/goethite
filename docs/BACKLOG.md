@@ -103,6 +103,23 @@ Phase 3's scope shipped in v0.3.0. These items came up along the way.
 ## Phase 4: v0.4
 
 - **[P4] EDNS padding (RFC 7830 / RFC 8467)** for DoT, DoH and DoQ, both server and upstream.
+- **[P4] DoH behind a reverse proxy:** plain HTTP from configured trusted proxies, with the
+  client address from `X-Forwarded-For` or `Forwarded`, for setups where a web server owns port
+  443.
+- **[P4] Check the certificate against `server_name`.** goethite does not check that the DNS
+  certificate covers `server_name` and `*.<server_name>`, or warn before it expires; both need an
+  X.509 parser (a new dependency).
+- **[P4] systemd credentials for TLS keys.** `LoadCredential=` would let the unit read
+  root-only keys without a group, but systemd in the test container does not mount credentials
+  even for a bare unit, so it is untested and undocumented. Try it on a real host; it needs a
+  restart, not a reload, after renewal.
+- **[P4] Reload without `/bin/kill`.** `ExecReload=` runs `/bin/kill`, which minimal systems
+  (and the systemd test image) lack. `Type=notify-reload` (systemd 253) with `ReloadSignal=SIGHUP`
+  needs goethite to report `RELOADING=1` and `READY=1` around a reload.
+- **[P4] Client IDs in the Terraform provider:** `ids` on `goethite_client`, once 0.4.0 is out.
+- **[P5] Access control beyond client IDs:** allowed and blocked client networks for every
+  transport, and per-client query rate limits for DoT and DoH, which are not rate limited today
+  (only connection-limited).
 - **[P4] Differential fuzzing** of `HickoryCodec` against the fast-path decoder, once it exists.
 
 ## Phase 5: 1.0

@@ -2,17 +2,25 @@
 //!
 //! Serves DNS over UDP and TCP (RFC 7766 length-prefixed framing) on one or
 //! more addresses, with several `SO_REUSEPORT` UDP sockets per address on
-//! Linux (see [`Listeners`]). Every UDP query is resolved in its own task, so
-//! a slow upstream never holds up other clients. Every limit is explicit:
-//! datagram size, queries in flight, the UDP query rate per client network,
-//! concurrent TCP connections in total and per client, how long a TCP
-//! connection may sit idle, and how long shutdown waits for queries in
-//! progress. Later phases add DoT, DoH and DoQ listeners.
+//! Linux (see [`Listeners`]), and DNS over TLS (RFC 7858) and DNS over HTTPS
+//! (RFC 8484) on addresses of their own. Every UDP query is resolved in its
+//! own task, so a slow upstream never holds up other clients. Every limit is
+//! explicit: datagram size, queries in flight, the UDP query rate per client
+//! network, concurrent connections in total and per client, TLS handshake
+//! time, how long a connection may sit idle, and how long shutdown waits
+//! for queries in progress.
+//!
+//! Over TLS and HTTPS a client can name itself with a client ID, in the
+//! server name (`<id>.<server name>`) or the DNS over HTTPS path
+//! (`/dns-query/<id>`); see [`doh`]. DNS over QUIC comes later.
 
 #![forbid(unsafe_code)]
 
 mod bind;
+pub mod doh;
+mod https;
 mod limits;
+mod stream;
 
 use std::fmt;
 use std::future::Future;
@@ -25,17 +33,18 @@ use std::time::{Duration, Instant, SystemTime};
 use goethite_proto::{
     DnsCodec, HickoryCodec, MAX_UDP_PAYLOAD, MIN_UDP_PAYLOAD, Query, Response, ResponseCode,
 };
-use goethite_resolver::{Resolution, Resolver};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream, UdpSocket};
-use tokio::sync::{OwnedSemaphorePermit, Semaphore, watch};
+use goethite_resolver::{Outcome, Resolution, Resolver};
+use tokio::net::{TcpListener, UdpSocket};
+use tokio::sync::{Semaphore, watch};
 use tokio::task::JoinSet;
 use tokio::time::timeout;
+use tokio_rustls::TlsAcceptor;
 use tracing::{debug, error, info, trace, warn};
 
 pub use crate::bind::{Listeners, MAX_LISTEN_ADDRESSES, MAX_UDP_SOCKETS, default_udp_sockets};
-use crate::limits::{ClientConnections, ClientSlot, Decision, RateLimiter};
+use crate::limits::{ClientConnections, Decision, RateLimiter};
 pub use crate::limits::{MAX_RATE_LIMITED_CLIENTS, RateLimitConfig};
+use crate::stream::Kind;
 
 /// The largest UDP query accepted; larger datagrams are dropped.
 pub const MAX_UDP_QUERY_LEN: usize = 4096;
@@ -58,15 +67,32 @@ pub struct ServerConfig {
     pub max_inflight_udp_queries: usize,
     /// Rate limiting of UDP queries per client network.
     pub rate_limit: RateLimitConfig,
-    /// Most TCP connections served at once, over all listeners; more are
-    /// closed on accept. Values above tokio's semaphore limit
-    /// (`usize::MAX >> 3`) are clamped.
+    /// Most TCP connections served at once, over all listeners (TCP, DNS
+    /// over TLS and DNS over HTTPS); more are closed on accept. Values above
+    /// tokio's semaphore limit (`usize::MAX >> 3`) are clamped.
     pub max_tcp_connections: usize,
     /// Most TCP connections served at once for one client (an IPv4 address
-    /// or an IPv6 /64); more are closed on accept.
+    /// or an IPv6 /64), over all listeners; more are closed on accept.
     pub max_tcp_connections_per_client: usize,
     /// How long a TCP connection may wait for, or take to send, a query.
     pub tcp_idle_timeout: Duration,
+    /// Addresses to serve DNS over TLS on, usually port 853; at most
+    /// [`MAX_LISTEN_ADDRESSES`]. Needs [`Server::with_tls`].
+    pub dot: Vec<SocketAddr>,
+    /// Addresses to serve DNS over HTTPS on, usually port 443; at most
+    /// [`MAX_LISTEN_ADDRESSES`]. Needs [`Server::with_tls`].
+    pub doh: Vec<SocketAddr>,
+    /// The name clients reach DNS over TLS and HTTPS by, such as
+    /// `dns.example`: a server name one label below it, such as
+    /// `anna-phone.dns.example`, carries a client ID. Without it, client IDs
+    /// come from the DNS over HTTPS path only.
+    pub server_name: Option<String>,
+    /// How long a DNS over TLS or HTTPS connection may go without a query.
+    pub tls_idle_timeout: Duration,
+    /// Whether DNS over TLS and HTTPS answer only queries that carry a
+    /// known client ID; others get `REFUSED`. For serving them beyond the
+    /// local network. UDP and TCP are not affected.
+    pub require_client_id: bool,
     /// How long shutdown waits for queries in progress before abandoning them.
     pub shutdown_grace: Duration,
     /// Listen addresses that may not be on this host yet, such as a
@@ -86,6 +112,11 @@ impl ServerConfig {
             max_tcp_connections: 256,
             max_tcp_connections_per_client: 16,
             tcp_idle_timeout: Duration::from_secs(10),
+            dot: Vec::new(),
+            doh: Vec::new(),
+            server_name: None,
+            tls_idle_timeout: Duration::from_secs(30),
+            require_client_id: false,
             shutdown_grace: Duration::from_secs(5),
             freebind: Vec::new(),
         }
@@ -99,6 +130,10 @@ pub enum Transport {
     Udp,
     /// DNS over TCP.
     Tcp,
+    /// DNS over TLS (RFC 7858).
+    Tls,
+    /// DNS over HTTPS (RFC 8484).
+    Https,
 }
 
 impl fmt::Display for Transport {
@@ -106,6 +141,8 @@ impl fmt::Display for Transport {
         f.write_str(match self {
             Self::Udp => "udp",
             Self::Tcp => "tcp",
+            Self::Tls => "tls",
+            Self::Https => "https",
         })
     }
 }
@@ -137,6 +174,9 @@ pub enum ServerError {
     /// A bound socket could not be handed to the async runtime.
     #[error("cannot register a socket with the async runtime")]
     Register(#[source] io::Error),
+    /// DNS over TLS or HTTPS addresses are configured, but no certificate.
+    #[error("DNS over TLS and HTTPS need a certificate")]
+    NoCertificate,
 }
 
 /// Receives every answered query, for the query log and statistics.
@@ -179,6 +219,12 @@ pub struct ServerStats {
     pub tcp_refused: AtomicU64,
     /// TCP connections closed because their client had too many.
     pub tcp_refused_per_client: AtomicU64,
+    /// DNS over TLS and HTTPS connections whose TLS handshake failed or
+    /// took too long.
+    pub tls_handshake_failures: AtomicU64,
+    /// DNS over HTTPS requests answered with an HTTP error, such as a wrong
+    /// path or a body that is not a DNS message.
+    pub https_rejected: AtomicU64,
 }
 
 impl ServerStats {
@@ -193,9 +239,12 @@ struct Address {
     tcp: TcpListener,
 }
 
-/// Bound UDP and TCP sockets, ready to serve.
+/// Bound sockets, ready to serve.
 pub struct Server {
     addresses: Vec<Address>,
+    dot: Vec<TcpListener>,
+    doh: Vec<TcpListener>,
+    tls: Option<Arc<rustls::ServerConfig>>,
     engine: Arc<Engine>,
     config: ServerConfig,
     stats: Arc<ServerStats>,
@@ -249,17 +298,39 @@ impl Server {
             })
             .collect::<io::Result<_>>()
             .map_err(ServerError::Register)?;
+        let register = |listeners: Vec<std::net::TcpListener>| {
+            listeners
+                .into_iter()
+                .map(TcpListener::from_std)
+                .collect::<io::Result<Vec<_>>>()
+                .map_err(ServerError::Register)
+        };
+        let dot = register(listeners.dot)?;
+        let doh = register(listeners.doh)?;
         let engine = Arc::new(Engine {
             codec: Box::new(HickoryCodec),
             resolver,
             observer: None,
+            require_client_id: config.require_client_id,
         });
         Ok(Self {
             addresses,
+            dot,
+            doh,
+            tls: None,
             engine,
             config,
             stats: Arc::default(),
         })
+    }
+
+    /// Serves DNS over TLS and HTTPS with `tls`: its certificates, versions
+    /// and session settings. Each listener sets its own ALPN protocols
+    /// (`dot`; `h2` and `http/1.1`).
+    #[must_use]
+    pub fn with_tls(mut self, tls: Arc<rustls::ServerConfig>) -> Self {
+        self.tls = Some(tls);
+        self
     }
 
     /// Counts of what the listeners turned away.
@@ -301,6 +372,24 @@ impl Server {
             .collect()
     }
 
+    /// The address of each DNS over TLS listener.
+    ///
+    /// # Errors
+    ///
+    /// Returns the operating system's error if an address is unavailable.
+    pub fn dot_local_addrs(&self) -> io::Result<Vec<SocketAddr>> {
+        self.dot.iter().map(TcpListener::local_addr).collect()
+    }
+
+    /// The address of each DNS over HTTPS listener.
+    ///
+    /// # Errors
+    ///
+    /// Returns the operating system's error if an address is unavailable.
+    pub fn doh_local_addrs(&self) -> io::Result<Vec<SocketAddr>> {
+        self.doh.iter().map(TcpListener::local_addr).collect()
+    }
+
     /// Serves until `shutdown` completes, then stops accepting new work,
     /// waits up to [`ServerConfig::shutdown_grace`] for queries in progress
     /// and returns.
@@ -308,9 +397,22 @@ impl Server {
     /// # Errors
     ///
     /// Returns [`ServerError::ListenerStopped`] if a listener ended before
-    /// `shutdown` completed.
+    /// `shutdown` completed, and [`ServerError::NoCertificate`] for DNS over
+    /// TLS or HTTPS listeners without [`Server::with_tls`].
     pub async fn run(self, shutdown: impl Future<Output = ()>) -> Result<(), ServerError> {
         let config = &self.config;
+        let acceptor = |alpn: &[&[u8]]| {
+            self.tls.as_ref().map(|tls| {
+                let mut tls = rustls::ServerConfig::clone(tls);
+                tls.alpn_protocols = alpn.iter().map(|protocol| protocol.to_vec()).collect();
+                TlsAcceptor::from(Arc::new(tls))
+            })
+        };
+        let over_tls = acceptor(&[b"dot"]);
+        let over_https = acceptor(&[b"h2", b"http/1.1"]);
+        if (!self.dot.is_empty() || !self.doh.is_empty()) && self.tls.is_none() {
+            return Err(ServerError::NoCertificate);
+        }
         let shared = Arc::new(Shared {
             engine: self.engine,
             udp_slots: Arc::new(Semaphore::new(
@@ -344,7 +446,30 @@ impl Server {
             for socket in address.udp {
                 listeners.spawn(serve_udp(socket, Arc::clone(&shared), stop_rx.clone()));
             }
-            listeners.spawn(serve_tcp(address.tcp, Arc::clone(&shared), stop_rx.clone()));
+            listeners.spawn(stream::serve(
+                address.tcp,
+                Kind::Tcp,
+                Arc::clone(&shared),
+                stop_rx.clone(),
+            ));
+        }
+        let encrypted = [
+            (self.dot, over_tls.map(Kind::Tls), "DNS over TLS"),
+            (self.doh, over_https.map(Kind::Https), "DNS over HTTPS"),
+        ];
+        for (sockets, kind, name) in encrypted {
+            let Some(kind) = kind else {
+                continue;
+            };
+            for listener in sockets {
+                info!(address = %DisplayAddr(listener.local_addr()), "{name} listening");
+                listeners.spawn(stream::serve(
+                    listener,
+                    kind.clone(),
+                    Arc::clone(&shared),
+                    stop_rx.clone(),
+                ));
+            }
         }
         drop(stop_rx);
 
@@ -412,24 +537,47 @@ struct Engine {
     codec: Box<dyn DnsCodec>,
     resolver: Arc<Resolver>,
     observer: Option<Arc<dyn QueryObserver>>,
+    /// See [`ServerConfig::require_client_id`].
+    require_client_id: bool,
+}
+
+/// A response [`Engine::answer`] encoded.
+#[derive(Clone, Copy, Debug)]
+struct Answered {
+    /// The shortest time to live of its records, if it has any.
+    min_ttl: Option<u32>,
 }
 
 impl Engine {
-    /// Answers the message in `wire`, encoding the response into `out`.
+    /// Answers the message in `wire` from `peer`, which named itself
+    /// `client_id` (if it did), encoding the response into `out`.
     ///
-    /// Returns `false` if nothing must be sent (the message was dropped).
+    /// Returns `None` if nothing must be sent (the message was dropped).
     async fn answer(
         &self,
         wire: &[u8],
         transport: Transport,
         peer: SocketAddr,
+        client_id: Option<&str>,
         out: &mut Vec<u8>,
-    ) -> bool {
+    ) -> Option<Answered> {
         let (response, udp_limit) = match self.codec.decode_query(wire) {
             Ok(query) => {
                 let time = SystemTime::now();
                 let start = Instant::now();
-                let resolution = self.resolver.resolve(&query, peer.ip()).await;
+                let resolution = if self.refuses(transport, client_id) {
+                    Resolution {
+                        response: Response::for_query(&query, ResponseCode::REFUSED),
+                        outcome: Outcome::Rejected,
+                        filter: None,
+                        client: None,
+                        group: None,
+                    }
+                } else {
+                    self.resolver
+                        .resolve_with_id(&query, peer.ip(), client_id)
+                        .await
+                };
                 trace!(
                     %peer,
                     %transport,
@@ -454,7 +602,7 @@ impl Engine {
             Err(err) => {
                 let Some(response) = err.response() else {
                     debug!(%peer, %transport, len = wire.len(), %err, "dropped message");
-                    return false;
+                    return None;
                 };
                 debug!(%peer, %transport, %err, rcode = %response.rcode, "rejected query");
                 (response, usize::from(MIN_UDP_PAYLOAD))
@@ -463,15 +611,29 @@ impl Engine {
 
         let max_len = match transport {
             Transport::Udp => udp_limit,
-            Transport::Tcp => usize::from(u16::MAX),
+            Transport::Tcp | Transport::Tls | Transport::Https => usize::from(u16::MAX),
         };
+        let min_ttl = response
+            .answers
+            .iter()
+            .chain(&response.authority)
+            .map(goethite_proto::Record::ttl)
+            .min();
         match self.codec.encode_response(&response, max_len, out) {
-            Ok(()) => true,
+            Ok(()) => Some(Answered { min_ttl }),
             Err(err) => {
                 warn!(%peer, %transport, %err, "cannot encode response");
-                false
+                None
             }
         }
+    }
+
+    /// Whether a query must be refused for lack of a known client ID.
+    fn refuses(&self, transport: Transport, client_id: Option<&str>) -> bool {
+        let encrypted = matches!(transport, Transport::Tls | Transport::Https);
+        encrypted
+            && self.require_client_id
+            && !client_id.is_some_and(|id| self.resolver.knows_client_id(id))
     }
 
     /// Encodes an empty, truncated response to the query in `wire` into
@@ -545,7 +707,10 @@ async fn serve_udp(socket: UdpSocket, shared: Arc<Shared>, mut stop: watch::Rece
         inflight.spawn(async move {
             let _permit = permit;
             let mut out = Vec::with_capacity(usize::from(MAX_UDP_PAYLOAD));
-            if engine.answer(&wire, Transport::Udp, peer, &mut out).await
+            if engine
+                .answer(&wire, Transport::Udp, peer, None, &mut out)
+                .await
+                .is_some()
                 && let Err(err) = socket.send_to(&out, peer).await
             {
                 debug!(%peer, %err, "udp send failed");
@@ -564,129 +729,5 @@ async fn drain(what: &str, mut tasks: JoinSet<()>, grace: Duration) {
             "abandoning {what} after the grace period"
         );
         tasks.shutdown().await;
-    }
-}
-
-async fn serve_tcp(listener: TcpListener, shared: Arc<Shared>, mut stop: watch::Receiver<bool>) {
-    let mut connections = JoinSet::new();
-    let connection_stop = stop.clone();
-    loop {
-        tokio::select! {
-            biased;
-            () = stopped(&mut stop) => break,
-            Some(joined) = connections.join_next(), if !connections.is_empty() => {
-                if let Err(err) = joined {
-                    error!(%err, "tcp connection task failed");
-                }
-            }
-            accepted = listener.accept() => {
-                let (stream, peer) = match accepted {
-                    Ok(accepted) => accepted,
-                    Err(err) => {
-                        debug!(%err, "tcp accept failed");
-                        tokio::time::sleep(ACCEPT_ERROR_BACKOFF).await;
-                        continue;
-                    }
-                };
-                let Ok(permit) = Arc::clone(&shared.tcp_slots).try_acquire_owned() else {
-                    debug!(%peer, "tcp connection limit reached, closing connection");
-                    ServerStats::count(&shared.stats.tcp_refused);
-                    continue;
-                };
-                let Some(client) = shared.tcp_clients.try_acquire(peer.ip()) else {
-                    debug!(%peer, "per-client tcp connection limit reached, closing connection");
-                    ServerStats::count(&shared.stats.tcp_refused_per_client);
-                    continue;
-                };
-                connections.spawn(serve_tcp_connection(
-                    stream,
-                    peer,
-                    Arc::clone(&shared.engine),
-                    shared.config.tcp_idle_timeout,
-                    connection_stop.clone(),
-                    (permit, client),
-                ));
-            }
-        }
-    }
-
-    drop(listener);
-    drain("tcp connections", connections, shared.config.shutdown_grace).await;
-}
-
-async fn serve_tcp_connection(
-    mut stream: TcpStream,
-    peer: SocketAddr,
-    engine: Arc<Engine>,
-    idle_timeout: Duration,
-    mut stop: watch::Receiver<bool>,
-    _slots: (OwnedSemaphorePermit, ClientSlot),
-) {
-    if let Err(err) = stream.set_nodelay(true) {
-        debug!(%peer, %err, "cannot disable Nagle's algorithm");
-    }
-    let mut prefix = [0_u8; 2];
-    let mut query = Vec::new();
-    let mut response = Vec::new();
-    let mut frame = Vec::new();
-    loop {
-        // Between queries: stop on shutdown, idle timeout or end of stream.
-        let read = tokio::select! {
-            biased;
-            () = stopped(&mut stop) => break,
-            read = timeout(idle_timeout, stream.read_exact(&mut prefix)) => read,
-        };
-        match read {
-            Ok(Ok(_)) => {}
-            Ok(Err(err)) => {
-                if err.kind() != io::ErrorKind::UnexpectedEof {
-                    debug!(%peer, %err, "tcp read failed");
-                }
-                break;
-            }
-            Err(_) => {
-                trace!(%peer, "closing idle tcp connection");
-                break;
-            }
-        }
-
-        // The length prefix bounds the message to 65,535 bytes.
-        query.resize(usize::from(u16::from_be_bytes(prefix)), 0);
-        match timeout(idle_timeout, stream.read_exact(&mut query)).await {
-            Ok(Ok(_)) => {}
-            Ok(Err(err)) => {
-                debug!(%peer, %err, "tcp read failed");
-                break;
-            }
-            Err(_) => {
-                debug!(%peer, "tcp query not received in time");
-                break;
-            }
-        }
-
-        // A dropped message means the peer is not speaking DNS: hang up.
-        if !engine
-            .answer(&query, Transport::Tcp, peer, &mut response)
-            .await
-        {
-            break;
-        }
-        let Ok(len) = u16::try_from(response.len()) else {
-            break;
-        };
-        frame.clear();
-        frame.extend_from_slice(&len.to_be_bytes());
-        frame.extend_from_slice(&response);
-        match timeout(idle_timeout, stream.write_all(&frame)).await {
-            Ok(Ok(())) => {}
-            Ok(Err(err)) => {
-                debug!(%peer, %err, "tcp write failed");
-                break;
-            }
-            Err(_) => {
-                debug!(%peer, "tcp response not sent in time");
-                break;
-            }
-        }
     }
 }
