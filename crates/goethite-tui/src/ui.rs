@@ -4,8 +4,9 @@
 //! accent for focus, rust for blocked and teal for good. Outcomes always
 //! carry a text label, so nothing depends on color alone.
 
+use goethite_api::leak::{LeakLookup, LeakTest};
 use goethite_api::{ClusterRole, ClusterStatus};
-use goethite_store::{ManagedBy, QueryOutcome};
+use goethite_store::{ManagedBy, Protocol, QueryOutcome};
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use ratatui::Frame;
@@ -59,6 +60,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
         Tab::Lists => render_lists(frame, main, app),
         Tab::Clients => render_clients(frame, main, app),
         Tab::Groups => render_groups(frame, main, app),
+        Tab::LeakTests => render_leak_tests(frame, main, app),
     }
     render_footer(frame, footer, app);
 }
@@ -158,7 +160,11 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &App) {
             "space turn on/off · r download now · ↑↓ select · p pause · P resume · q quit"
                 .to_owned()
         }
-        _ => "tab/1-5 screens · ↑↓ select · p pause 10 min · P resume · R refresh · q quit"
+        (Tab::LeakTests, None) => {
+            "t test this machine's DNS · ↑↓ select · R refresh · tab/1-6 screens · q quit"
+                .to_owned()
+        }
+        _ => "tab/1-6 screens · ↑↓ select · p pause 10 min · P resume · R refresh · q quit"
             .to_owned(),
     };
     let message = app.message.as_ref().map_or_else(
@@ -548,6 +554,164 @@ fn render_clients(frame: &mut Frame<'_>, area: Rect, app: &App) {
     }
 }
 
+fn client_name(app: &App, id: &str) -> String {
+    app.data
+        .clients
+        .iter()
+        .find(|client| client.id == id)
+        .map_or_else(|| id.to_owned(), |client| client.spec.name.clone())
+}
+
+/// A test's verdict, in words: color only repeats it.
+fn leak_verdict(test: &LeakTest) -> Cell<'static> {
+    let total = test.names.len();
+    match usize::try_from(test.reached).unwrap_or(usize::MAX) {
+        0 => Cell::from("LEAK").fg(RUST).bold(),
+        n if n >= total => Cell::from("NO LEAK").fg(TEAL).bold(),
+        _ => Cell::from("PARTIAL LEAK").fg(RUST).bold(),
+    }
+}
+
+/// The distinct values of `pick` over a test's lookups, in order.
+fn distinct(test: &LeakTest, pick: impl Fn(&LeakLookup) -> Option<String>) -> Vec<String> {
+    let mut seen: Vec<String> = Vec::new();
+    for value in test.lookups.iter().filter_map(pick) {
+        if !seen.contains(&value) {
+            seen.push(value);
+        }
+    }
+    seen
+}
+
+fn protocol(protocol: Protocol) -> &'static str {
+    match protocol {
+        Protocol::Udp => "UDP",
+        Protocol::Tcp => "TCP",
+        Protocol::Dot => "DoT",
+        Protocol::Doh => "DoH",
+        Protocol::Doq => "DoQ",
+        Protocol::Odoh => "ODoH",
+    }
+}
+
+/// What the Leak tests screen says about the selected test.
+fn leak_detail(app: &App, test: Option<&LeakTest>) -> Vec<Line<'static>> {
+    match test {
+        None => vec![
+            Line::from(
+                "No tests yet. Press t to test this machine's DNS, or open the web UI's Leak test \
+                 page on a device to test its browser.",
+            ),
+            Line::from(
+                "A test has the device look up names only goethite answers: those that never \
+                 arrive went to another resolver.",
+            )
+            .dim(),
+        ],
+        Some(test) if test.lookups.is_empty() => vec![Line::from(
+            "None of the names reached goethite: the device asks another resolver (secure DNS \
+             in the browser, a VPN, or DNS servers set on the device).",
+        )],
+        Some(test) => {
+            let clients = distinct(test, |l| l.client.as_deref().map(|id| client_name(app, id)));
+            let groups = distinct(test, |l| l.group.as_deref().map(|id| group_name(app, id)));
+            let filtering = distinct(test, |l| Some(l.filtering.to_string()));
+            let mut lines = vec![Line::from(format!(
+                "As {}, in {}; filtering {}",
+                if clients.is_empty() {
+                    "no known client".to_owned()
+                } else {
+                    clients.join(", ")
+                },
+                if groups.is_empty() {
+                    "no group".to_owned()
+                } else {
+                    format!("the group {}", groups.join(", "))
+                },
+                match filtering.as_slice() {
+                    [only] if only == "true" => "on",
+                    [only] if only == "false" => "off",
+                    _ => "on for some",
+                }
+            ))];
+            let elsewhere: Vec<String> = distinct(test, |l| Some(l.address.clone()))
+                .into_iter()
+                .filter(|address| Some(address) != test.requested_by.as_ref())
+                .collect();
+            if !elsewhere.is_empty() && test.requested_by.is_some() {
+                lines.push(
+                    Line::from(format!(
+                        "Lookups came from {}, not the test's own address: if that is a router \
+                         forwarding them, goethite sees its devices as one client.",
+                        elsewhere.join(", ")
+                    ))
+                    .fg(OCHRE),
+                );
+            }
+            lines.extend(test.lookups.iter().rev().take(5).map(|lookup| {
+                Line::from(format!(
+                    "{}  name {} of {}  {:<5} {:<4} from {}",
+                    clock(lookup.time),
+                    lookup.probe,
+                    test.names.len(),
+                    lookup.qtype,
+                    protocol(lookup.protocol),
+                    lookup.address
+                ))
+                .dim()
+            }));
+            lines
+        }
+    }
+}
+
+fn render_leak_tests(frame: &mut Frame<'_>, area: Rect, app: &App) {
+    let [list_area, detail_area] =
+        Layout::vertical([Constraint::Fill(1), Constraint::Length(9)]).areas(area);
+    let rows = app.data.leak_tests.iter().map(|test| {
+        Row::new(vec![
+            Cell::from(clock(test.created_at)),
+            Cell::from(test.requested_by.clone().unwrap_or_default()),
+            leak_verdict(test),
+            Cell::from(format!("{} of {}", test.reached, test.names.len())),
+            Cell::from(distinct(test, |l| Some(protocol(l.protocol).to_owned())).join(", ")),
+            Cell::from(distinct(test, |l| Some(l.address.clone())).join(", ")),
+        ])
+    });
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Length(10),
+            Constraint::Fill(1),
+            Constraint::Length(13),
+            Constraint::Length(8),
+            Constraint::Length(12),
+            Constraint::Fill(2),
+        ],
+    )
+    .header(
+        Row::new([
+            "STARTED",
+            "FROM",
+            "VERDICT",
+            "REACHED",
+            "OVER",
+            "LOOKUPS FROM",
+        ])
+        .bold(),
+    )
+    .row_highlight_style(highlight())
+    .block(block("Leak tests (last hour)"));
+    frame.render_stateful_widget(table, list_area, &mut table_state(app));
+    let detail = leak_detail(app, app.data.leak_tests.get(app.selected));
+    frame.render_widget(
+        Paragraph::new(detail)
+            .wrap(Wrap { trim: true })
+            .block(block("Selected test")),
+        detail_area,
+    );
+}
+
 fn render_groups(frame: &mut Frame<'_>, area: Rect, app: &App) {
     let rows = app.data.groups.iter().map(|group| {
         let clients = app
@@ -921,5 +1085,57 @@ mod tests {
         let text = screen(&app);
         assert!(text.contains("ERROR") && text.contains("cannot reach the API"));
         assert!(text.contains("PAUSED until"));
+    }
+
+    fn leak_test(reached: u32, from: &str, lookups: &[(u8, &str)]) -> LeakTest {
+        LeakTest {
+            id: "ab".into(),
+            names: (1..=8)
+                .map(|n| format!("ab-{n}.leak.goethite.test."))
+                .collect(),
+            created_at: Timestamp::UNIX_EPOCH,
+            expires_at: Timestamp::UNIX_EPOCH,
+            requested_by: Some(from.into()),
+            reached,
+            lookups: lookups
+                .iter()
+                .map(|&(probe, address)| LeakLookup {
+                    probe,
+                    time: Timestamp::UNIX_EPOCH,
+                    address: address.into(),
+                    protocol: Protocol::Doh,
+                    qtype: "AAAA".into(),
+                    client: None,
+                    group: Some("default".into()),
+                    filtering: true,
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn leak_tests_say_their_verdict_in_words() {
+        let mut app = app();
+        app.tab = Tab::LeakTests;
+        assert!(screen(&app).contains("Press t to test this machine's DNS"));
+        app.apply(Update::LeakTests(vec![
+            leak_test(2, "192.0.2.10", &[(1, "192.0.2.1"), (2, "192.0.2.1")]),
+            leak_test(0, "192.0.2.11", &[]),
+        ]));
+        let shown = screen(&app);
+        for text in [
+            "PARTIAL LEAK",
+            "2 of 8",
+            "DoH",
+            "LEAK ",
+            "0 of 8",
+            "in the group default; filtering on",
+            "Lookups came from 192.0.2.1, not the test's own address",
+            "t test this machine's DNS",
+        ] {
+            assert!(shown.contains(text), "{text:?} in\n{shown}");
+        }
+        app.selected = 1;
+        assert!(screen(&app).contains("None of the names reached goethite"));
     }
 }

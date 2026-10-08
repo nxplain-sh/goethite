@@ -18,6 +18,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use goethite_api::Status;
+use goethite_api::leak::{LeakTest, LeakTestList};
 use goethite_store::{Client as ClientResource, Group, List, QueryPage, StatsReport};
 use hyper::Method;
 use ratatui::crossterm::event::{self, Event};
@@ -169,14 +170,56 @@ async fn fetch(
             let lists: Vec<List> = client.get("/api/v1/lists").await?;
             let _ = updates.send(Update::Lists(lists)).await;
         }
-        Tab::Clients | Tab::Groups => {
+        Tab::Clients | Tab::Groups | Tab::LeakTests => {
             let groups: Vec<Group> = client.get("/api/v1/groups").await?;
             let _ = updates.send(Update::Groups(groups)).await;
             let clients: Vec<ClientResource> = client.get("/api/v1/clients").await?;
             let _ = updates.send(Update::Clients(clients)).await;
+            if tab == Tab::LeakTests {
+                let list: LeakTestList = client.get("/api/v1/leak-tests").await?;
+                let _ = updates.send(Update::LeakTests(list.tests)).await;
+            }
         }
     }
     Ok(())
+}
+
+/// How long one lookup of a leak test name may take.
+const LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Runs a DNS leak test from this machine: looks the test's names up through
+/// the system's resolver, as any program here would, and says how many
+/// reached goethite.
+async fn test_this_machine(
+    client: &Client,
+    updates: &mpsc::Sender<Update>,
+) -> Result<String, ClientError> {
+    let test: LeakTest = client
+        .send::<(), _>(Method::POST, "/api/v1/leak-tests", None, None)
+        .await?;
+    let mut lookups = tokio::task::JoinSet::new();
+    for name in &test.names {
+        let host = name.trim_end_matches('.').to_owned();
+        // Most fail (no one answers the name): only reaching goethite counts.
+        lookups.spawn(tokio::time::timeout(
+            LOOKUP_TIMEOUT,
+            tokio::net::lookup_host((host, 80)),
+        ));
+    }
+    while lookups.join_next().await.is_some() {}
+    let seen: LeakTest = client
+        .get(&format!("/api/v1/leak-tests/{}", test.id))
+        .await?;
+    let list: LeakTestList = client.get("/api/v1/leak-tests").await?;
+    let _ = updates.send(Update::LeakTests(list.tests)).await;
+    let total = seen.names.len();
+    Ok(match seen.reached {
+        0 => format!("this machine: none of {total} lookups reached goethite: a leak"),
+        n if usize::try_from(n).is_ok_and(|n| n >= total) => {
+            format!("this machine: all {total} lookups reached goethite")
+        }
+        n => format!("this machine: {n} of {total} lookups reached goethite: a partial leak"),
+    })
 }
 
 /// Carries out an action in the background and reports how it went.
@@ -212,6 +255,7 @@ fn perform(client: &Client, action: Action, updates: &mpsc::Sender<Update>) {
                 .send::<(), serde_json::Value>(Method::DELETE, "/api/v1/pause", None, None)
                 .await
                 .map(|_| "filtering resumed".to_owned()),
+            Action::RunLeakTest => test_this_machine(&client, &updates).await,
             Action::None | Action::Quit | Action::Refresh => return,
         };
         let message = match done {

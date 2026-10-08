@@ -109,6 +109,14 @@ Phase 3's scope shipped in v0.3.0. These items came up along the way.
   names before they expire, serving stale answers when servers are unreachable (RFC 8767),
   NXDOMAIN cuts (RFC 8020) and aggressive use of NSEC and NSEC3 (RFC 8198), now that proofs are
   validated.
+- **[later] Leak tests for the whole cluster:** a test only sees lookups that reach the node that
+  made it; nodes could share test names over the cluster channel, so a pair counts lookups at
+  either node.
+- **[later] An open leak test page** for devices whose users have no admin token (family
+  devices): a page that runs one test and shows only its own result, with its own rate limit.
+- **[later] Stopping bypasses, not just seeing them:** answering the canary domain
+  `use-application-dns.net` with NXDOMAIN (Firefox then keeps its DoH off), blocking known DoH
+  resolvers' names by a preset, and a guide for redirecting port 53 at the router.
 - **[later] Extended DNS Errors (RFC 8914):** say why an answer is SERVFAIL (DNSSEC bogus,
   signature expired, no reachable authority) or blocked (filtered), for clients and the query
   log.

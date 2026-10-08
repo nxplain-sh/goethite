@@ -59,6 +59,8 @@ the network; otherwise the token crosses it in clear text.
   names to set the device up with.
 - **Schedules**: weekly windows in a time zone; a window can run past midnight.
 - **Audit log**: who changed what, from where, with the resource before and after.
+- **Leak test**: whether this device's lookups reach goethite, over which protocol and as which
+  client, or go to another resolver past its filtering; see [DNS leak test](../leak-test/).
 - **Settings**, in the header beside Pause and Sign out: filtering on or off, how blocked names
   are answered, and how often lists are downloaded.
 
@@ -74,7 +76,8 @@ depends on color alone. The UI has one theme, light.
 ## Security
 
 The UI runs under a strict Content Security Policy: no inline code, nothing from other sites, not
-even fonts. Its files need no token, but everything they show comes from the API, which does.
+even fonts. The one exception: images from `*.leak.goethite.test`, names only goethite answers,
+which the [leak test](../leak-test/) has the browser look up. Its files need no token, but everything they show comes from the API, which does.
 The API refuses requests from other web sites and, without a token, requests that do not name
 this machine, so pages you visit cannot use your browser against it. See
 [ADR 0009](https://github.com/nxplain-sh/goethite/blob/main/docs/adr/0009-web-ui-serving.md).

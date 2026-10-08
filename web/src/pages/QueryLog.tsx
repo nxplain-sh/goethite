@@ -7,7 +7,7 @@ import { type FormEvent, useRef, useState } from 'react'
 import { OUTCOMES, type QueryEntry, type QueryOutcome } from '../api/client'
 import { LOG_PAGE, type LogSearch, clientsQuery, isLive, queryLogQuery, servicesQuery } from '../api/queries'
 import { ErrorNotice, OutcomeBadge, outcomeLabel } from '../components/ui'
-import { count, dateTime, millis, moment } from '../format'
+import { PROTOCOL_LABEL, count, dateTime, millis, moment } from '../format'
 
 const features = tableFeatures({})
 const column = createColumnHelper<typeof features, QueryEntry>()
@@ -25,16 +25,6 @@ const columns = column.columns([
 ])
 const RIGHT_ALIGNED = new Set(['elapsed_us'])
 const NO_ROWS: QueryEntry[] = []
-
-/** How a query arrived, as people call it. */
-const PROTOCOL_LABEL: Record<QueryEntry['protocol'], string> = {
-	udp: 'UDP',
-	tcp: 'TCP',
-	dot: 'DoT',
-	doh: 'DoH',
-	doq: 'DoQ',
-	odoh: 'ODoH',
-}
 
 /** A known client's name over its address; just the address otherwise. Encrypted queries say so. */
 function ClientName({ entry }: { entry: QueryEntry }) {

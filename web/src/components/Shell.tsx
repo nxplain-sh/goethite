@@ -85,6 +85,7 @@ export function Shell() {
 				<Link to="/clients">Clients</Link>
 				<Link to="/schedules">Schedules</Link>
 				<Link to="/audit">Audit log</Link>
+				<Link to="/leak-test">Leak test</Link>
 			</nav>
 			<ErrorNotice error={status.error ?? pause.error ?? resume.error} />
 			{(status.data?.problems ?? []).map((problem) => (

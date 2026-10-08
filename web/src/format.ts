@@ -1,3 +1,5 @@
+import type { QueryEntry } from './api/client'
+
 const integer = new Intl.NumberFormat()
 
 /** 12,345 */
@@ -53,4 +55,14 @@ export function dateTime(iso: string): string {
 		minute: '2-digit',
 		hour12: false,
 	})
+}
+
+/** How a query arrived, as people call it. */
+export const PROTOCOL_LABEL: Record<QueryEntry['protocol'], string> = {
+	udp: 'UDP',
+	tcp: 'TCP',
+	dot: 'DoT',
+	doh: 'DoH',
+	doq: 'DoQ',
+	odoh: 'ODoH',
 }

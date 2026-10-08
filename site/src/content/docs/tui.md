@@ -33,7 +33,7 @@ roots.
 
 ## Screens
 
-Switch screens with <kbd>Tab</kbd>, the arrow keys, or <kbd>1</kbd>–<kbd>5</kbd>.
+Switch screens with <kbd>Tab</kbd>, the arrow keys, or <kbd>1</kbd>–<kbd>6</kbd>.
 
 1. **Dashboard**: the last 24 hours (queries, blocked, cached, forwarded, failed, average answer
    time), the top names, blocked names and clients, the filter's rule count, and whether each
@@ -44,6 +44,9 @@ Switch screens with <kbd>Tab</kbd>, the arrow keys, or <kbd>1</kbd>–<kbd>5</kb
    and any download or parse problem.
 4. **Clients**: the clients, their addresses and their groups.
 5. **Groups**: each group's filtering, safe search, lists, blocked services and clients.
+6. **Leak tests**: the [DNS leak tests](../leak-test/) of the last hour, from any device: how many
+   of their lookups reached goethite, over which protocols and from where. <kbd>t</kbd> tests this
+   machine's own DNS.
 
 Every answer carries a text label (`BLOCKED`, `ALLOWED`, `CACHED` and so on), so nothing depends on
 color alone.
@@ -52,7 +55,7 @@ color alone.
 
 | Key                                                        | Where      | Does                                                             |
 | ---------------------------------------------------------- | ---------- | ---------------------------------------------------------------- |
-| <kbd>Tab</kbd>, <kbd>1</kbd>–<kbd>5</kbd>                  | everywhere | Switch screens                                                   |
+| <kbd>Tab</kbd>, <kbd>1</kbd>–<kbd>6</kbd>                  | everywhere | Switch screens                                                   |
 | <kbd>↑</kbd> <kbd>↓</kbd>, <kbd>k</kbd> <kbd>j</kbd>       | tables     | Move the selection                                               |
 | <kbd>p</kbd>                                               | everywhere | Pause filtering for 10 minutes                                   |
 | <kbd>P</kbd>                                               | everywhere | Resume filtering                                                 |
@@ -61,6 +64,7 @@ color alone.
 | <kbd>b</kbd>                                               | query log  | Show blocked queries only, or everything                         |
 | <kbd>Space</kbd>                                           | lists      | Turn the selected list on or off                                 |
 | <kbd>r</kbd>                                               | lists      | Download the lists now                                           |
+| <kbd>t</kbd>                                               | leak tests | Test this machine's DNS                                          |
 | <kbd>q</kbd>, <kbd>Esc</kbd>, <kbd>Ctrl</kbd>+<kbd>C</kbd> | everywhere | Quit                                                             |
 
 Lists managed by Terraform cannot be changed from the TUI; change them in Terraform instead. Every

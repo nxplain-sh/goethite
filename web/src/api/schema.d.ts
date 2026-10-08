@@ -174,6 +174,52 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/leak-tests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The DNS leak tests this node keeps, newest first, with the lookups
+         *     that reached it.
+         */
+        get: operations["list_leak_tests"];
+        put?: never;
+        /**
+         * Starts a DNS leak test: names under `leak.goethite.test` that only
+         *     goethite answers, for the device being tested to look up. The lookups
+         *     that reach this node are recorded for an hour; names that never arrive
+         *     were asked of another resolver. Tests live in memory, on this node.
+         */
+        post: operations["create_leak_test"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/leak-tests/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A DNS leak test: which of its names reached this node, from where, how
+         *     and as which client.
+         */
+        get: operations["get_leak_test"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/lists": {
         parameters: {
             query?: never;
@@ -946,6 +992,68 @@ export interface components {
              * @description When the hour starts.
              */
             start: string;
+        };
+        /** @description A lookup of a test name that reached goethite. */
+        LeakLookup: {
+            /** @description The address it came from. */
+            address: string;
+            /** @description The known client it was identified as. */
+            client?: string | null;
+            /**
+             * @description Whether that client's queries are filtered: its group filters and
+             *     protection is on and not paused.
+             */
+            filtering: boolean;
+            /** @description The group whose filtering applies to it. */
+            group?: string | null;
+            /**
+             * Format: int32
+             * @description Which of the test's names, from 1.
+             */
+            probe: number;
+            /** @description How it arrived. */
+            protocol: components["schemas"]["Protocol"];
+            /** @description The type asked for, such as `A` or `AAAA`. */
+            qtype: string;
+            /**
+             * Format: date-time
+             * @description When it arrived.
+             */
+            time: string;
+        };
+        /** @description A test: the names to look up, and the lookups that reached goethite. */
+        LeakTest: {
+            /**
+             * Format: date-time
+             * @description When the test was made.
+             */
+            created_at: string;
+            /**
+             * Format: date-time
+             * @description Until when the test is kept and lookups for it are recorded.
+             */
+            expires_at: string;
+            /** @description The test's ID. */
+            id: string;
+            /** @description The lookups that reached goethite, oldest first; at most 64. */
+            lookups: components["schemas"]["LeakLookup"][];
+            /** @description The names to look up, in order. */
+            names: string[];
+            /**
+             * Format: int32
+             * @description How many of the names reached goethite.
+             */
+            reached: number;
+            /**
+             * @description The address the test was made from, as the API saw it: the device
+             *     being tested, when the web UI runs the test in its browser.
+             */
+            requested_by?: string | null;
+        };
+        /** @description The tests this node has, newest first. */
+        LeakTestList: {
+            /** @description The tests. */
+            tests: components["schemas"]["LeakTest"][];
         };
         /** @description A stored filter list. */
         List: {
@@ -2140,6 +2248,105 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Health"];
+                };
+            };
+        };
+    };
+    list_leak_tests: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The tests */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LeakTestList"];
+                };
+            };
+            /** @description Not run on this node */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    create_leak_test: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The test, with the names to look up */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LeakTest"];
+                };
+            };
+            /** @description Not run on this node */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    get_leak_test: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The test's ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The test */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LeakTest"];
+                };
+            };
+            /** @description No such test, or it expired */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not run on this node */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
                 };
             };
         };

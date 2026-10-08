@@ -16,11 +16,14 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
+use goethite_api::leak::{Arrival, LeakTests};
 use goethite_api::{
-    Api, ApiConfig, ApiListeners, BoxFuture, BoxResult, Change, ClusterRole, ClusterStatus,
-    Control, DOCS_SCALAR, FilterStatus, Forwarded, ForwardedAnswer, PeerStatus, QueryLogStatus,
-    Status, WebAssets, Writes, generate_token,
+    Api, ApiConfig, ApiError, ApiListeners, BoxFuture, BoxResult, Change, ClusterRole,
+    ClusterStatus, Control, DOCS_SCALAR, FilterStatus, Forwarded, ForwardedAnswer, PeerStatus,
+    QueryLogStatus, Status, WebAssets, Writes, generate_token,
 };
+use goethite_proto::{Name, RecordType};
+use goethite_store::Protocol;
 use goethite_store::{
     Actor, ActorKind, ConfigVersion, QueryLogConfig, StatsReport, Store, TopEntry,
 };
@@ -50,9 +53,15 @@ struct FakeControl {
     cluster: Mutex<Option<ClusterStatus>>,
     /// The other node's statistics; unreachable when unset.
     peer_stats: Mutex<Option<StatsReport>>,
+    /// DNS leak tests.
+    leak: LeakTests,
 }
 
 impl Control for FakeControl {
+    fn leak_tests(&self) -> Result<&LeakTests, ApiError> {
+        Ok(&self.leak)
+    }
+
     fn status(&self) -> Status {
         Status {
             version: "test".into(),
@@ -105,9 +114,7 @@ impl Control for FakeControl {
 
     fn peer_stats(&self, _hours: u32) -> BoxResult<'_, StatsReport> {
         let stats = self.peer_stats.lock().unwrap().clone();
-        Box::pin(async move {
-            stats.ok_or_else(|| goethite_api::ApiError::unavailable("dns2 is unreachable"))
-        })
+        Box::pin(async move { stats.ok_or_else(|| ApiError::unavailable("dns2 is unreachable")) })
     }
 
     fn writes(&self) -> Writes {
@@ -1083,4 +1090,50 @@ async fn api_reference_is_off_unless_turned_on() {
             .unwrap()
             .contains("nonce")
     );
+}
+
+#[tokio::test]
+async fn leak_tests_record_their_names_only() {
+    let server = start(true);
+    let created = server
+        .send(Method::POST, "/api/v1/leak-tests", None, &[])
+        .await;
+    assert_eq!(created.status, StatusCode::CREATED, "{}", created.text);
+    let id = created.body["id"].as_str().unwrap().to_owned();
+    let names = created.body["names"].as_array().unwrap();
+    assert_eq!(names.len(), 8);
+    assert_eq!(created.body["requested_by"], "127.0.0.1");
+    assert_eq!(created.body["reached"], 0);
+
+    // A lookup of the second name, as the DNS server would report it.
+    let name: Name = names[1].as_str().unwrap().parse().unwrap();
+    server.control.leak.observe(&name, || Arrival {
+        address: "192.0.2.1".parse().unwrap(),
+        protocol: Protocol::Udp,
+        qtype: RecordType::A,
+        client: None,
+        group: Some("default".into()),
+        filtering: true,
+    });
+    let seen = server.get(&format!("/api/v1/leak-tests/{id}")).await;
+    assert_eq!(seen.status, StatusCode::OK);
+    assert_eq!(seen.body["reached"], 1);
+    let lookup = &seen.body["lookups"][0];
+    assert_eq!(lookup["probe"], 2);
+    assert_eq!(lookup["protocol"], "udp");
+    assert_eq!(lookup["address"], "192.0.2.1");
+    assert_eq!(lookup["group"], "default");
+    assert_eq!(lookup["filtering"], true);
+
+    let list = server.get("/api/v1/leak-tests").await;
+    assert_eq!(list.body["tests"][0]["id"], id.as_str());
+    let missing = server.get("/api/v1/leak-tests/0123").await;
+    assert_eq!(missing.status, StatusCode::NOT_FOUND);
+
+    // The page may load images from the test names, and nothing else new.
+    let csp = seen.headers["content-security-policy"].to_str().unwrap();
+    assert!(csp.contains(
+        "img-src 'self' data: http://*.leak.goethite.test https://*.leak.goethite.test;"
+    ));
+    assert!(csp.contains("connect-src 'self';"));
 }

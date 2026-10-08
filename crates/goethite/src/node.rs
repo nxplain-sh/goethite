@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use goethite_api::catalog::{Directory, DirectoryList};
+use goethite_api::leak::LeakTests;
 use goethite_api::recommended::RecommendedSizes;
 use goethite_api::{
     ApiError, BoxFuture, BoxResult, CacheStatus, Change, ClusterRole, ClusterStatus,
@@ -48,6 +49,8 @@ pub struct Node {
     pub filterlists: Option<Arc<FilterLists>>,
     /// The recommended lists' sizes, unless looking lists up is turned off.
     pub sizes: Option<Arc<ListSizes>>,
+    /// DNS leak tests.
+    pub leak: Arc<LeakTests>,
 }
 
 impl Node {
@@ -188,6 +191,10 @@ impl goethite_api::Control for Node {
                 .await
                 .map_err(|err| ApiError::unavailable(format!("FilterLists: {err:#}")))
         })
+    }
+
+    fn leak_tests(&self) -> Result<&LeakTests, ApiError> {
+        Ok(&self.leak)
     }
 
     fn services(&self) -> Result<goethite_api::services::Services, ApiError> {

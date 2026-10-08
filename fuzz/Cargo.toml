@@ -109,6 +109,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "parse_leak_probe"
+path = "fuzz_targets/parse_leak_probe.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "parse_list"
 path = "fuzz_targets/parse_list.rs"
 test = false

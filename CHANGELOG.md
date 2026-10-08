@@ -29,6 +29,12 @@ configuration format.
   Special-use names and private reverse zones are answered without asking anyone. The query log
   shows the server that answered, and the status API, metrics, web UI and TUI show recursion's
   counters.
+- **DNS leak test**: the web UI's Leak test page has the browser look up names only goethite
+  answers, and says whether this device's lookups reach goethite (all, some or none), over which
+  protocol, from which address, as which client and group, and whether filtering applies. A
+  router forwarding lookups shows up as another address. The TUI lists tests and tests its own
+  machine (`t`); the API has `/api/v1/leak-tests`. Everything under `goethite.test` is now
+  answered by goethite itself, never forwarded.
 - **DNSSEC validation** of recursive answers, on by default (`[recursion] dnssec`): signed
   answers get the AD flag, bogus ones are refused with SERVFAIL, and clients that set DO get the
   signatures and NSEC/NSEC3 proofs. Built-in root trust anchors (KSK-2017 and KSK-2024); RSA,

@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use arc_swap::ArcSwapOption;
 use goethite_api::Api;
+use goethite_api::leak::LeakTests;
 use goethite_resolver::{PolicyState, Resolver, TlsRoots, tls_client_config};
 use goethite_server::ServerStats;
 use goethite_store::{QueryLog, Store};
@@ -52,6 +53,8 @@ pub struct DataPlane {
     pub dns_cert: Option<Arc<Served>>,
     /// When goethite started.
     pub started: Timestamp,
+    /// DNS leak tests, which the DNS server feeds.
+    pub leak: Arc<LeakTests>,
 }
 
 /// The running control plane.
@@ -161,6 +164,7 @@ impl ControlPlane {
             encrypted: encrypted_status(config),
             filterlists,
             sizes,
+            leak: Arc::clone(&data.leak),
         };
         let api_tls = api_cert
             .as_ref()

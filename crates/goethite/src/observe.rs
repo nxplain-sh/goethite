@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use arc_swap::ArcSwapOption;
 
+use goethite_api::leak::{Arrival, LeakTests};
 use goethite_proto::Name;
 use goethite_resolver::{HEALTH_NAME, Outcome};
 use goethite_server::{QueryEvent, QueryObserver, Transport};
@@ -23,10 +24,12 @@ pub struct Observer {
     /// [`HEALTH_NAME`]: health checks are counted in the metrics, but kept
     /// out of the query log, which they would fill.
     health: Name,
+    /// DNS leak tests, which record lookups of their names.
+    leak: Arc<LeakTests>,
 }
 
 impl Observer {
-    /// Reports to `log` and `metrics`.
+    /// Reports to `log`, `metrics` and `leak`.
     ///
     /// # Errors
     ///
@@ -34,11 +37,13 @@ impl Observer {
     pub fn new(
         log: Arc<ArcSwapOption<QueryLog>>,
         metrics: Arc<Metrics>,
+        leak: Arc<LeakTests>,
     ) -> Result<Self, goethite_proto::NameError> {
         Ok(Self {
             log,
             metrics,
             health: HEALTH_NAME.parse()?,
+            leak,
         })
     }
 }
@@ -67,6 +72,14 @@ impl QueryObserver for Observer {
             Transport::Oblivious => Protocol::Odoh,
         };
         self.metrics.observe(outcome, protocol, event.elapsed);
+        self.leak.observe(&event.query.question.name, || Arrival {
+            address: event.peer.ip(),
+            protocol,
+            qtype: event.query.question.qtype,
+            client: resolution.client.clone(),
+            group: resolution.group.clone(),
+            filtering: resolution.filtering,
+        });
         if outcome == QueryOutcome::Local && event.query.question.name == self.health {
             return;
         }

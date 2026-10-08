@@ -552,6 +552,7 @@ name = "goethite-api"
 version = "0.3.0"
 dependencies = [
  "axum",
+ "goethite-proto",
  "goethite-resolver",
  "goethite-store",
  "http-body-util",

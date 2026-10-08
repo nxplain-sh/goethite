@@ -397,6 +397,25 @@ async fn cached_answers_are_served_without_asking_upstream() {
 }
 
 #[tokio::test]
+async fn goethites_own_names_never_leave() {
+    let upstream = fake(always(Ipv4Addr::new(192, 0, 2, 90)), silent()).await;
+    let resolver = Resolver::new(vec![goethite_resolver::test_record().unwrap()])
+        .with_forwarder(forwarder(vec![UpstreamConfig::udp(upstream.addr)]));
+    for name in [
+        "0123456789abcdef0123456789abcdef-1.leak.goethite.test.",
+        "anything.goethite.test.",
+    ] {
+        let resolution = resolver.resolve(&query(name), CLIENT).await;
+        assert_eq!(resolution.response.rcode, ResponseCode::NX_DOMAIN, "{name}");
+        assert!(resolution.response.authoritative);
+        assert_eq!(resolution.outcome, Outcome::Local);
+    }
+    let own = resolver.resolve(&query("goethite.test."), CLIENT).await;
+    assert_eq!(ip(&own.response), Some(Ipv4Addr::new(127, 0, 0, 53).into()));
+    assert!(upstream.seen.lock().unwrap().is_empty(), "never forwarded");
+}
+
+#[tokio::test]
 async fn failures_are_not_cached() {
     let dead = fake(silent(), silent()).await;
     let resolver = Resolver::new(Vec::new())

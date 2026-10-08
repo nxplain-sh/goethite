@@ -20,6 +20,9 @@ use crate::{cluster, handlers};
     paths(
         handlers::health,
         handlers::get_status,
+        handlers::create_leak_test,
+        handlers::list_leak_tests,
+        handlers::get_leak_test,
         handlers::get_metrics,
         handlers::get_openapi,
         handlers::get_settings,

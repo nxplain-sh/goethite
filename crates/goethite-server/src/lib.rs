@@ -687,6 +687,7 @@ impl Engine {
                         filter: None,
                         client: None,
                         group: None,
+                        filtering: false,
                     }
                 } else {
                     self.resolver

@@ -30,6 +30,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use arc_swap::ArcSwapOption;
 use clap::{Parser, Subcommand};
+use goethite_api::leak::LeakTests;
 use goethite_api::{Api, ApiConfig, EmbeddedDocs, EmbeddedWeb, WebAssets};
 use goethite_resolver::{
     Cache, Forwarder, ForwarderConfig, Policy, PolicyState, Recursor, Resolver, health_record,
@@ -378,6 +379,7 @@ async fn serve(
     let resolver = Arc::new(resolver(config, &state)?);
     let metrics = Arc::new(metrics::Metrics::default());
     let observer_log = Arc::new(ArcSwapOption::empty());
+    let leak = Arc::new(LeakTests::new());
     let mut server = Server::new(
         sockets.take_dns().context("the DNS sockets are missing")?,
         config.server_config(),
@@ -386,6 +388,7 @@ async fn serve(
     .with_observer(Arc::new(observe::Observer::new(
         Arc::clone(&observer_log),
         Arc::clone(&metrics),
+        Arc::clone(&leak),
     )?));
     let dns_cert = match (&config.server.tls, &secrets.dns_tls) {
         (Some(tls), Some(pem)) => {
@@ -406,6 +409,7 @@ async fn serve(
         log: observer_log,
         dns_cert,
         started: Timestamp::now(),
+        leak,
     };
     let mut plane = Some(
         plane::ControlPlane::start(config, config_path, &sockets, secrets, &data, true).await?,

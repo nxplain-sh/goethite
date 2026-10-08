@@ -213,6 +213,12 @@ const auditRoute = createRoute({
 	component: lazyRouteComponent(() => import('./pages/Audit'), 'Audit'),
 })
 
+const leakTestRoute = createRoute({
+	getParentRoute: () => appRoute,
+	path: '/leak-test',
+	component: lazyRouteComponent(() => import('./pages/LeakTest'), 'LeakTest'),
+})
+
 const routeTree = rootRoute.addChildren([
 	loginRoute,
 	appRoute.addChildren([
@@ -231,6 +237,7 @@ const routeTree = rootRoute.addChildren([
 		scheduleEditorRoute,
 		settingsRoute,
 		auditRoute,
+		leakTestRoute,
 	]),
 ])
 

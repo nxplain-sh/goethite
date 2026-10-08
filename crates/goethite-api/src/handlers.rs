@@ -34,8 +34,10 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
+use crate::auth::PeerAddr;
 use crate::catalog::{Directory, DirectoryList};
 use crate::error::{ApiError, ApiJson, ErrorBody};
+use crate::leak::{LeakTest, LeakTestList};
 use crate::recommended::{self, Recommended, RecommendedSizes};
 use crate::services::Services;
 use crate::{Api, Change, Status};
@@ -673,6 +675,58 @@ pub(crate) async fn get_services(State(api): Shared) -> Result<Json<Services>, A
     Ok(Json(api.control.services()?))
 }
 
+/// Starts a DNS leak test: names under `leak.goethite.test` that only
+/// goethite answers, for the device being tested to look up. The lookups
+/// that reach this node are recorded for an hour; names that never arrive
+/// were asked of another resolver. Tests live in memory, on this node.
+#[utoipa::path(post, path = "/api/v1/leak-tests", tag = "node",
+    responses(
+        (status = 201, description = "The test, with the names to look up", body = LeakTest),
+        (status = 503, description = "Not run on this node", body = ErrorBody),
+    ),
+    security(("token" = [])))]
+pub(crate) async fn create_leak_test(
+    State(api): Shared,
+    peer: Option<Extension<PeerAddr>>,
+) -> Result<(StatusCode, Json<LeakTest>), ApiError> {
+    let requested_by = peer.map(|Extension(peer)| peer.0.ip());
+    let test = api.control.leak_tests()?.create(requested_by);
+    Ok((StatusCode::CREATED, Json(test)))
+}
+
+/// The DNS leak tests this node keeps, newest first, with the lookups
+/// that reached it.
+#[utoipa::path(get, path = "/api/v1/leak-tests", tag = "node",
+    responses(
+        (status = 200, description = "The tests", body = LeakTestList),
+        (status = 503, description = "Not run on this node", body = ErrorBody),
+    ),
+    security(("token" = [])))]
+pub(crate) async fn list_leak_tests(State(api): Shared) -> Result<Json<LeakTestList>, ApiError> {
+    Ok(Json(api.control.leak_tests()?.list()))
+}
+
+/// A DNS leak test: which of its names reached this node, from where, how
+/// and as which client.
+#[utoipa::path(get, path = "/api/v1/leak-tests/{id}", tag = "node",
+    params(("id" = String, Path, description = "The test's ID")),
+    responses(
+        (status = 200, description = "The test", body = LeakTest),
+        (status = 404, description = "No such test, or it expired", body = ErrorBody),
+        (status = 503, description = "Not run on this node", body = ErrorBody),
+    ),
+    security(("token" = [])))]
+pub(crate) async fn get_leak_test(
+    State(api): Shared,
+    Path(id): Path<String>,
+) -> Result<Json<LeakTest>, ApiError> {
+    api.control
+        .leak_tests()?
+        .get(&id)
+        .map(Json)
+        .ok_or_else(|| ApiError::not_found("no such leak test; tests are kept for an hour"))
+}
+
 /// Every route that needs authentication.
 pub(crate) fn routes() -> Router<Arc<Api>> {
     Router::new()
@@ -703,6 +757,11 @@ pub(crate) fn routes() -> Router<Arc<Api>> {
             get(get_group).put(update_group).delete(delete_group),
         )
         .route("/api/v1/services", get(get_services))
+        .route(
+            "/api/v1/leak-tests",
+            get(list_leak_tests).post(create_leak_test),
+        )
+        .route("/api/v1/leak-tests/{id}", get(get_leak_test))
         .route("/api/v1/clients", get(list_clients).post(create_client))
         .route(
             "/api/v1/clients/{id}",

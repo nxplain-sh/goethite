@@ -23,6 +23,7 @@ mod cluster;
 mod docs;
 mod error;
 mod handlers;
+pub mod leak;
 mod openapi;
 pub mod recommended;
 mod serve;
@@ -142,6 +143,17 @@ pub trait Control: Send + Sync + 'static {
     /// [`services_off`] when this node does not use the catalog.
     fn services(&self) -> Result<services::Services, ApiError> {
         Err(services_off())
+    }
+
+    /// This node's DNS leak tests.
+    ///
+    /// # Errors
+    ///
+    /// When this node does not run them.
+    fn leak_tests(&self) -> Result<&leak::LeakTests, ApiError> {
+        Err(ApiError::unavailable(
+            "this node does not run DNS leak tests",
+        ))
     }
 
     /// Where configuration changes made through this node go.
@@ -416,7 +428,10 @@ async fn limit_time(request: Request<axum::body::Body>, next: Next) -> Result<Re
 
 /// Headers every response gets: a strict Content Security Policy, and no
 /// framing, sniffing or referrers. Responses are not cached unless they say
-/// otherwise (only the web UI's files do).
+/// otherwise (only the web UI's files do). Images may also come from the
+/// DNS leak test's names (`*.leak.goethite.test`), which only goethite
+/// answers and only with NXDOMAIN: loading them makes the browser look the
+/// names up.
 async fn security_headers(request: Request<axum::body::Body>, next: Next) -> Response {
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
@@ -424,7 +439,8 @@ async fn security_headers(request: Request<axum::body::Body>, next: Next) -> Res
     headers
         .entry(CONTENT_SECURITY_POLICY)
         .or_insert(HeaderValue::from_static(
-            "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; \
+            "default-src 'self'; script-src 'self'; style-src 'self'; \
+         img-src 'self' data: http://*.leak.goethite.test https://*.leak.goethite.test; \
          font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; \
          form-action 'self'; frame-ancestors 'none'",
         ));

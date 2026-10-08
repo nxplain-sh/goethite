@@ -25,6 +25,7 @@ export default defineConfig({
 				{ label: 'Configuration', slug: 'configuration' },
 				{ label: 'Filtering', slug: 'filtering' },
 				{ label: 'Clients and groups', slug: 'groups' },
+				{ label: 'DNS leak test', slug: 'leak-test' },
 				{ label: 'Encrypted DNS', slug: 'encrypted-dns' },
 				{ label: 'Recursion', slug: 'recursion' },
 				{ label: 'High availability', slug: 'ha' },

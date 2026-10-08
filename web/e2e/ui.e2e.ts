@@ -580,3 +580,44 @@ test('finds a list in the FilterLists directory, and adds it after checking', as
 	expect(added).toBeDefined()
 	await removeList(request, added?.id ?? '')
 })
+
+test('the leak test sees which lookups reach goethite', async ({ page }) => {
+	// Chromium asks the system's resolver, not this goethite. The test plays
+	// the device's resolver: it sends the lookups it chooses to goethite, then
+	// fails the image as an unknown name would.
+	const leakNames = /^https?:\/\/[^/]+\.leak\.goethite\.test\//
+	let reaching = (_: number) => true
+	let seen = 0
+	await page.route(leakNames, async (route) => {
+		const host = new URL(route.request().url()).hostname
+		if (reaching(seen++)) {
+			await ask(host)
+		}
+		await route.abort('namenotresolved')
+	})
+	await page.getByRole('link', { name: 'Leak test' }).click()
+	await page.getByRole('button', { name: 'Run the test' }).click()
+	const result = page.getByRole('region', { name: 'Result' })
+	await expect(result).toContainText('NO LEAK')
+	await expect(result).toContainText('8 of 8 lookups reached goethite')
+	await expect(result).toContainText('UDP')
+	await expect(result).toContainText('127.0.0.1')
+	await expect(result).toContainText('in the group Default')
+
+	// Every other one goes elsewhere: a second DNS server.
+	reaching = (n) => n % 2 === 0
+	await page.getByRole('button', { name: 'Run it again' }).click()
+	await expect(result).toContainText('PARTIAL LEAK')
+	await expect(result).toContainText('4 of 8 lookups reached goethite')
+
+	// None do: secure DNS in the browser, say.
+	reaching = () => false
+	await page.getByRole('button', { name: 'Run it again' }).click()
+	await expect(result).toContainText('0 of 8 lookups reached goethite')
+	await expect(result).toContainText('secure DNS')
+
+	const recent = page.getByRole('region', { name: 'Recent tests' })
+	await expect(recent.getByRole('row')).toHaveCount(4)
+	await recent.getByRole('button', { name: 'Show' }).last().click()
+	await expect(result).toContainText('8 of 8 lookups reached goethite')
+})

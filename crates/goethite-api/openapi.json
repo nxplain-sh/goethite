@@ -848,6 +848,133 @@
         }
       }
     },
+    "/api/v1/leak-tests": {
+      "get": {
+        "tags": [
+          "node"
+        ],
+        "summary": "The DNS leak tests this node keeps, newest first, with the lookups\nthat reached it.",
+        "operationId": "list_leak_tests",
+        "responses": {
+          "200": {
+            "description": "The tests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeakTestList"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Not run on this node",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "node"
+        ],
+        "summary": "Starts a DNS leak test: names under `leak.goethite.test` that only\ngoethite answers, for the device being tested to look up. The lookups\nthat reach this node are recorded for an hour; names that never arrive\nwere asked of another resolver. Tests live in memory, on this node.",
+        "operationId": "create_leak_test",
+        "responses": {
+          "201": {
+            "description": "The test, with the names to look up",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeakTest"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Not run on this node",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/leak-tests/{id}": {
+      "get": {
+        "tags": [
+          "node"
+        ],
+        "summary": "A DNS leak test: which of its names reached this node, from where, how\nand as which client.",
+        "operationId": "get_leak_test",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The test's ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The test",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeakTest"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such test, or it expired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Not run on this node",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      }
+    },
     "/api/v1/lists": {
       "get": {
         "tags": [
@@ -3159,6 +3286,132 @@
             "type": "string",
             "format": "date-time",
             "description": "When the hour starts."
+          }
+        }
+      },
+      "LeakLookup": {
+        "type": "object",
+        "description": "A lookup of a test name that reached goethite.",
+        "required": [
+          "probe",
+          "time",
+          "address",
+          "protocol",
+          "qtype",
+          "filtering"
+        ],
+        "properties": {
+          "address": {
+            "type": "string",
+            "description": "The address it came from."
+          },
+          "client": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The known client it was identified as."
+          },
+          "filtering": {
+            "type": "boolean",
+            "description": "Whether that client's queries are filtered: its group filters and\nprotection is on and not paused."
+          },
+          "group": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The group whose filtering applies to it."
+          },
+          "probe": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Which of the test's names, from 1.",
+            "minimum": 0
+          },
+          "protocol": {
+            "$ref": "#/components/schemas/Protocol",
+            "description": "How it arrived."
+          },
+          "qtype": {
+            "type": "string",
+            "description": "The type asked for, such as `A` or `AAAA`."
+          },
+          "time": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it arrived."
+          }
+        }
+      },
+      "LeakTest": {
+        "type": "object",
+        "description": "A test: the names to look up, and the lookups that reached goethite.",
+        "required": [
+          "id",
+          "names",
+          "created_at",
+          "expires_at",
+          "reached",
+          "lookups"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the test was made."
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Until when the test is kept and lookups for it are recorded."
+          },
+          "id": {
+            "type": "string",
+            "description": "The test's ID."
+          },
+          "lookups": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LeakLookup"
+            },
+            "description": "The lookups that reached goethite, oldest first; at most 64."
+          },
+          "names": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The names to look up, in order."
+          },
+          "reached": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many of the names reached goethite.",
+            "minimum": 0
+          },
+          "requested_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The address the test was made from, as the API saw it: the device\nbeing tested, when the web UI runs the test in its browser."
+          }
+        }
+      },
+      "LeakTestList": {
+        "type": "object",
+        "description": "The tests this node has, newest first.",
+        "required": [
+          "tests"
+        ],
+        "properties": {
+          "tests": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LeakTest"
+            },
+            "description": "The tests."
           }
         }
       },

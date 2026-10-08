@@ -53,6 +53,9 @@ pub use services::{
 pub use tls::{TlsError, TlsRoots, tls_client_config};
 
 /// The name every build answers itself, to check that the server is alive.
+/// Every name below it is goethite's own too: answered locally (NXDOMAIN
+/// unless it is a built-in record), never forwarded, never filtered. The
+/// DNS leak test's names are there.
 pub const TEST_NAME: &str = "goethite.test.";
 
 /// The address [`TEST_NAME`] resolves to.
@@ -162,6 +165,9 @@ pub struct Resolution {
     pub client: Option<Arc<str>>,
     /// The asking client's group, by ID.
     pub group: Option<Arc<str>>,
+    /// Whether the asking client's queries are filtered: its group filters,
+    /// and protection is on and not paused.
+    pub filtering: bool,
 }
 
 /// What applies to the client asking a query.
@@ -178,6 +184,8 @@ struct Asker {
 /// Answers queries.
 pub struct Resolver {
     local: Vec<Record>,
+    /// [`TEST_NAME`]: names below it are answered locally.
+    own: Option<Name>,
     policy: Option<Arc<PolicyState>>,
     rebinding: Option<RebindingProtection>,
     cache: Option<Cache>,
@@ -193,6 +201,7 @@ impl Resolver {
     pub fn new(local: Vec<Record>) -> Self {
         Self {
             local,
+            own: TEST_NAME.parse().ok(),
             policy: None,
             rebinding: None,
             cache: None,
@@ -314,6 +323,8 @@ impl Resolver {
     ///   `REFUSED`, never forwarded;
     /// - a name with local records: those records of the asked type,
     ///   authoritatively, or an empty `NOERROR` (NODATA) if there are none;
+    ///   any other name under [`TEST_NAME`] (such as the DNS leak test's):
+    ///   `NXDOMAIN`, authoritatively, never forwarded or filtered;
     /// - a name the filter blocks for the client's group: the configured
     ///   block response, even if an answer is cached;
     /// - a search host, when the group has safe search on: a CNAME to the
@@ -354,6 +365,7 @@ impl Resolver {
             filter,
             client: asker.client,
             group: asker.group,
+            filtering: asker.filtering,
         }
     }
 
@@ -582,7 +594,20 @@ impl Resolver {
             .iter()
             .filter(|record| record.name() == &question.name)
             .peekable();
-        matching.peek()?;
+        if matching.peek().is_none() {
+            // goethite's own names that do not exist, the leak test's
+            // included: never asked of anyone else.
+            let own = self
+                .own
+                .as_ref()
+                .is_some_and(|own| question.name.is_within(own));
+            if !own {
+                return None;
+            }
+            let mut response = Response::for_query(query, ResponseCode::NX_DOMAIN);
+            response.authoritative = true;
+            return Some(response);
+        }
         let mut response = Response::for_query(query, ResponseCode::NO_ERROR);
         response.authoritative = true;
         response.answers = matching
@@ -778,7 +803,6 @@ mod tests {
         for (name, qclass) in [
             ("example.com.", RecordClass::IN),
             ("test.", RecordClass::IN),
-            ("sub.goethite.test.", RecordClass::IN),
             (TEST_NAME, RecordClass::CH),
         ] {
             let response = resolve(&resolver(), &query(name, RecordType::A, qclass));
@@ -786,5 +810,12 @@ mod tests {
             assert_eq!(response.answers, vec![]);
             assert!(!response.authoritative);
         }
+        // Names below goethite.test are goethite's own: they do not exist.
+        let own = resolve(
+            &resolver(),
+            &query("sub.goethite.test.", RecordType::A, RecordClass::IN),
+        );
+        assert_eq!(own.rcode, ResponseCode::NX_DOMAIN);
+        assert!(own.authoritative);
     }
 }
