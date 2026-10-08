@@ -20,6 +20,7 @@ rand.workspace = true
 rustls.workspace = true
 tokio-rustls.workspace = true
 goethite-api.workspace = true
+goethite-cluster.workspace = true
 goethite-filter.workspace = true
 goethite-proto.workspace = true
 goethite-resolver.workspace = true

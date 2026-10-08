@@ -172,3 +172,18 @@ listen = "127.0.0.1:8053"
 # tls_cert = "/etc/goethite/api.crt"
 # tls_key = "/etc/goethite/api.key"
 web_ui = true
+
+# [cluster]
+# Two goethite nodes sharing one configuration: the primary owns it, the
+# replica copies it over mutual TLS. Create the certificates with
+# `goethite cluster init` and `goethite cluster cert <node>`.
+# node = "dns1"
+# role = "primary"            # or "replica"
+# listen = "0.0.0.0:8054"
+# ca = "/etc/goethite/cluster/ca.crt"
+# cert = "/etc/goethite/cluster/dns1.crt"
+# key = "/etc/goethite/cluster/dns1.key"
+#
+# [cluster.peer]
+# node = "dns2"
+# address = "192.0.2.12:8054"

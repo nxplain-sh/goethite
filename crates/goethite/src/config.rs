@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use goethite_api::TokenHash;
+use goethite_cluster::{NodeId, Role};
 use goethite_filter::{LineKind, parse_line};
 use goethite_proto::Name;
 use goethite_resolver::{
@@ -60,10 +61,68 @@ pub struct Config {
     /// The `[api]` table.
     #[serde(default)]
     pub api: ApiSection,
+    /// The `[cluster]` table; absent for a node on its own.
+    #[serde(default)]
+    pub cluster: Option<ClusterSection>,
     /// The absolute directory of the config file, which relative paths are
     /// relative to. Set by [`Config::load`].
     #[serde(skip)]
     pub dir: PathBuf,
+}
+
+/// The `[cluster]` table: this node's place in a two-node cluster.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ClusterSection {
+    /// This node's name, as in its certificate.
+    pub node: NodeId,
+    /// Its role when it starts.
+    pub role: Role,
+    /// Where it listens for its peer.
+    #[serde(default = "default_cluster_listen")]
+    pub listen: SocketAddr,
+    /// The cluster's CA certificate (PEM), from `goethite cluster init`.
+    pub ca: PathBuf,
+    /// This node's certificate (PEM), from `goethite cluster cert`.
+    pub cert: PathBuf,
+    /// This node's private key (PEM).
+    pub key: PathBuf,
+    /// The other node.
+    pub peer: PeerSection,
+}
+
+/// The `[cluster.peer]` table.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PeerSection {
+    /// The peer's name, as in its certificate.
+    pub node: NodeId,
+    /// The peer's cluster listener.
+    pub address: SocketAddr,
+}
+
+fn default_cluster_listen() -> SocketAddr {
+    SocketAddr::from((Ipv4Addr::UNSPECIFIED, 8054))
+}
+
+impl ClusterSection {
+    fn validate(&self) -> Result<()> {
+        if self.node == self.peer.node {
+            bail!(
+                "cluster.peer.node must name the other node, not {}",
+                self.node
+            );
+        }
+        Ok(())
+    }
+
+    fn resolve_paths(&mut self, base: &Path) {
+        for path in [&mut self.ca, &mut self.cert, &mut self.key] {
+            if path.is_relative() {
+                *path = base.join(&*path);
+            }
+        }
+    }
 }
 
 /// The `[api]` table.
@@ -894,6 +953,12 @@ impl Config {
             .and_then(|()| config.querylog.validate())
             .and_then(|()| config.api.validate())
             .and_then(|()| config.filter.validate())
+            .and_then(|()| {
+                config
+                    .cluster
+                    .as_ref()
+                    .map_or(Ok(()), ClusterSection::validate)
+            })
             .and_then(|()| config.security.rebinding_protection().map(drop))
             .with_context(|| format!("invalid config file {}", path.display()))?;
         let mut config = config;
@@ -906,6 +971,9 @@ impl Config {
         let dir = config.dir.clone();
         config.filter.resolve_paths(&dir);
         config.api.resolve_paths(&dir);
+        if let Some(cluster) = &mut config.cluster {
+            cluster.resolve_paths(&dir);
+        }
         if let Some(store) = &mut config.store.path
             && store.is_relative()
         {

@@ -21,6 +21,6 @@ pub use querylog::{
 };
 pub use stats::{Counters, HourPoint, StatsReport, TopEntry};
 pub use store::{
-    Actor, ActorKind, AuditAction, AuditEntry, Import, ImportSummary, Kind, MAX_AUDIT_ENTRIES,
-    Store, StoreError,
+    Actor, ActorKind, AuditAction, AuditEntry, ConfigExport, ConfigVersion, Import, ImportSummary,
+    Kind, MAX_AUDIT_ENTRIES, ReplaceSummary, Store, StoreError,
 };

@@ -10,5 +10,26 @@ homepage.workspace = true
 authors.workspace = true
 publish.workspace = true
 
+[dependencies]
+axum.workspace = true
+goethite-store.workspace = true
+http-body-util.workspace = true
+hyper = { workspace = true, features = ["client", "http1"] }
+hyper-util = { workspace = true, features = ["tokio"] }
+jiff.workspace = true
+rcgen.workspace = true
+ring.workspace = true
+rustls.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["net", "sync", "time"] }
+tokio-rustls.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+goethite-api.workspace = true
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
+
 [lints]
 workspace = true

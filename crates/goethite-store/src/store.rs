@@ -7,8 +7,13 @@
 //! the changed rows and an audit entry in one transaction before the new
 //! snapshot replaces the old one. Writes are serialized; they block on disk
 //! I/O, so async callers run them on a blocking thread.
+//!
+//! Every change that writes resources also bumps the [`ConfigVersion`], in
+//! the same transaction, and announces it on a watch channel, so a cluster
+//! replica can follow the configuration ([`Store::export`],
+//! [`Store::replace`]).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
@@ -19,6 +24,7 @@ use redb::{
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use tokio::sync::watch;
 use tracing::warn;
 use utoipa::ToSchema;
 
@@ -36,6 +42,10 @@ const SCHEMA_VERSION: &str = "1";
 const SETTINGS: TableDefinition<'static, &'static str, &'static [u8]> =
     TableDefinition::new("settings");
 const META: TableDefinition<'static, &'static str, &'static str> = TableDefinition::new("meta");
+/// The `meta` key of the configuration's epoch.
+const EPOCH_KEY: &str = "config_epoch";
+/// The `meta` key of the configuration's version.
+const VERSION_KEY: &str = "config_version";
 const AUDIT: TableDefinition<'static, u64, &'static [u8]> = TableDefinition::new("audit");
 
 /// A kind of stored resource.
@@ -76,8 +86,42 @@ pub trait Kind: Clone + Serialize + DeserializeOwned + Send + Sync + 'static {
     fn all_mut(config: &mut ConfigSnapshot) -> &mut Vec<Self>;
 }
 
+/// Implements the OpenAPI schema of an enum whose values grow over time: a
+/// string with `x-extensible-enum` rather than `enum`, so clients must
+/// handle values they do not know yet, and adding one is not a breaking
+/// change. The exhaustive match keeps the published list complete.
+macro_rules! extensible_enum {
+    ($ty:ident, $description:literal, [$($variant:ident),+ $(,)?]) => {
+        impl utoipa::PartialSchema for $ty {
+            fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+                // Fails to compile if a variant is missing below.
+                fn listed(value: $ty) {
+                    match value {
+                        $($ty::$variant)|+ => {}
+                    }
+                }
+                let _ = listed;
+                let values: Vec<serde_json::Value> = [$($ty::$variant),+]
+                    .iter()
+                    .filter_map(|value| serde_json::to_value(value).ok())
+                    .collect();
+                utoipa::openapi::ObjectBuilder::new()
+                    .schema_type(utoipa::openapi::schema::Type::String)
+                    .description(Some($description))
+                    .extensions(Some(utoipa::openapi::extensions::Extensions::from_iter([(
+                        "x-extensible-enum",
+                        serde_json::Value::Array(values),
+                    )])))
+                    .into()
+            }
+        }
+
+        impl utoipa::ToSchema for $ty {}
+    };
+}
+
 /// Who made a change.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ActorKind {
     /// An API client with the admin token.
@@ -88,6 +132,8 @@ pub enum ActorKind {
     Cli,
     /// goethite itself, such as seeding the store on the first start.
     System,
+    /// The cluster's primary, whose configuration this replica copied.
+    Replication,
 }
 
 /// Who made a change, and from where.
@@ -98,6 +144,10 @@ pub struct Actor {
     /// The client's IP address, for API requests.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub address: Option<String>,
+    /// The cluster node the change came from or through, when it was not
+    /// made on this node.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node: Option<String>,
 }
 
 impl Actor {
@@ -106,6 +156,7 @@ impl Actor {
         Self {
             kind: ActorKind::System,
             address: None,
+            node: None,
         }
     }
 
@@ -114,12 +165,31 @@ impl Actor {
         Self {
             kind: ActorKind::Cli,
             address: None,
+            node: None,
+        }
+    }
+
+    /// The cluster node `node`, whose configuration was copied.
+    pub fn replication(node: impl Into<String>) -> Self {
+        Self {
+            kind: ActorKind::Replication,
+            address: None,
+            node: Some(node.into()),
         }
     }
 }
 
+extensible_enum!(
+    ActorKind,
+    "Who made a change: `token` (an API client with the admin token), `unauthenticated` (an API \
+     client on loopback while no admin token is configured), `cli` (the goethite command line), \
+     `system` (goethite itself) or `replication` (copied from the cluster's primary). More may \
+     be added: show unknown values as they are.",
+    [Token, Unauthenticated, Cli, System, Replication]
+);
+
 /// What an audit entry records.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AuditAction {
     /// A resource was created.
@@ -136,7 +206,20 @@ pub enum AuditAction {
     Resume,
     /// A list download was started.
     Refresh,
+    /// The configuration was copied from the cluster's primary.
+    Replicate,
 }
+
+extensible_enum!(
+    AuditAction,
+    "What an audit entry records: `create`, `update` or `delete` (a resource or the settings), \
+     `import` (the config file's `[filter]` table), `pause` or `resume` (filtering), `refresh` \
+     (a list download) or `replicate` (a copy of the cluster primary's configuration). More may \
+     be added: show unknown values as they are.",
+    [
+        Create, Update, Delete, Import, Pause, Resume, Refresh, Replicate
+    ]
+);
 
 /// One entry of the audit log.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -217,6 +300,16 @@ pub enum StoreError {
     /// A value could not be encoded.
     #[error("cannot encode: {0}")]
     Encode(#[source] serde_json::Error),
+    /// A replicated configuration comes from a store with another schema.
+    #[error(
+        "the configuration comes from store schema {found}, this node has {expected}: run the same goethite version on every node"
+    )]
+    Schema {
+        /// This node's schema.
+        expected: String,
+        /// The sender's schema.
+        found: String,
+    },
 }
 
 impl From<ValidationError> for StoreError {
@@ -323,11 +416,83 @@ pub struct Import {
     pub rules: Vec<RuleSpec>,
 }
 
+/// Which configuration a store holds.
+///
+/// `epoch` names a line of history: it is chosen at random when a store is
+/// created and again when a node becomes the cluster's primary. `version`
+/// counts the changes along it. A replica takes a configuration whose epoch
+/// differs from its own, or whose version is newer.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
+pub struct ConfigVersion {
+    /// The line of history: a random number below 2^53, so it is exact in
+    /// JSON.
+    pub epoch: u64,
+    /// Changes so far along it.
+    pub version: u64,
+}
+
+impl ConfigVersion {
+    /// The next version in the same epoch.
+    fn next(self) -> Self {
+        Self {
+            epoch: self.epoch,
+            version: self.version.saturating_add(1),
+        }
+    }
+
+    /// Whether a configuration at `self` should replace one at `current`.
+    pub fn replaces(self, current: Self) -> bool {
+        self.epoch != current.epoch || self.version > current.version
+    }
+}
+
+/// A random epoch below 2^53.
+fn new_epoch() -> u64 {
+    rand::random::<u64>() >> 11
+}
+
+/// The whole configuration with its version, as a replica receives it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConfigExport {
+    /// The store schema it was taken from; a store with another schema
+    /// refuses it.
+    pub schema: String,
+    /// Its version.
+    pub version: ConfigVersion,
+    /// The configuration.
+    pub config: ConfigSnapshot,
+}
+
+/// What applying a replicated configuration changed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct ReplaceSummary {
+    /// Resources added.
+    pub added: usize,
+    /// Resources changed.
+    pub changed: usize,
+    /// Resources removed.
+    pub removed: usize,
+    /// Whether the settings changed.
+    pub settings_changed: bool,
+    /// Whether lists changed: they may need downloading.
+    pub lists_changed: bool,
+    /// Whether lists or custom rules changed: the filter must be rebuilt.
+    pub filter_changed: bool,
+}
+
+/// The configuration in memory, with its version.
+#[derive(Clone)]
+struct Current {
+    config: Arc<ConfigSnapshot>,
+    version: ConfigVersion,
+}
+
 /// The configuration and audit log, persisted.
 pub struct Store {
     path: PathBuf,
     db: Database,
-    config: RwLock<Arc<ConfigSnapshot>>,
+    current: RwLock<Current>,
+    changes: watch::Sender<ConfigVersion>,
     writer: Mutex<()>,
 }
 
@@ -346,11 +511,30 @@ impl Store {
         })?;
         let now = Timestamp::now();
         let tx = db.begin_write()?;
+        let version;
         {
             let mut meta = tx.open_table(META)?;
             if meta.get("schema")?.is_none() {
                 meta.insert("schema", SCHEMA_VERSION)?;
             }
+            let stored_epoch = meta
+                .get(EPOCH_KEY)?
+                .and_then(|value| value.value().parse::<u64>().ok());
+            let epoch = if let Some(epoch) = stored_epoch {
+                epoch
+            } else {
+                let epoch = new_epoch();
+                meta.insert(EPOCH_KEY, epoch.to_string().as_str())?;
+                epoch
+            };
+            let counted = meta
+                .get(VERSION_KEY)?
+                .and_then(|value| value.value().parse::<u64>().ok())
+                .unwrap_or(0);
+            version = ConfigVersion {
+                epoch,
+                version: counted,
+            };
             let mut settings = tx.open_table(SETTINGS)?;
             if settings.get("settings")?.is_none() {
                 let initial = ConfigSnapshot::empty(now).settings;
@@ -378,10 +562,15 @@ impl Store {
         if let Err(err) = config.validate() {
             warn!(%err, "the stored configuration has a problem; fix it through the API");
         }
+        let (changes, _) = watch::channel(version);
         Ok(Self {
             path: path.to_path_buf(),
             db,
-            config: RwLock::new(Arc::new(config)),
+            current: RwLock::new(Current {
+                config: Arc::new(config),
+                version,
+            }),
+            changes,
             writer: Mutex::new(()),
         })
     }
@@ -398,7 +587,34 @@ impl Store {
 
     /// The current configuration.
     pub fn config(&self) -> Arc<ConfigSnapshot> {
-        Arc::clone(&self.config.read().unwrap_or_else(PoisonError::into_inner))
+        self.current().config
+    }
+
+    /// The current configuration's version.
+    pub fn version(&self) -> ConfigVersion {
+        self.current().version
+    }
+
+    /// The current configuration and its version, as one.
+    pub fn export(&self) -> ConfigExport {
+        let current = self.current();
+        ConfigExport {
+            schema: SCHEMA_VERSION.to_owned(),
+            version: current.version,
+            config: (*current.config).clone(),
+        }
+    }
+
+    /// A receiver that sees every new configuration version.
+    pub fn subscribe(&self) -> watch::Receiver<ConfigVersion> {
+        self.changes.subscribe()
+    }
+
+    fn current(&self) -> Current {
+        self.current
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     /// The resource of kind `K` with `id`.
@@ -603,6 +819,76 @@ impl Store {
         Ok(summary)
     }
 
+    /// Makes this store's configuration a copy of `incoming`, from the
+    /// cluster's primary `actor`, if it is newer (see
+    /// [`ConfigVersion::replaces`]). Resources keep the primary's IDs,
+    /// revisions and times. Returns what changed, or `None` if `incoming`
+    /// is not newer.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::Schema`] for a configuration from another store schema,
+    /// an invalid configuration, or a database error.
+    pub fn replace(
+        &self,
+        incoming: ConfigExport,
+        actor: &Actor,
+    ) -> Result<Option<ReplaceSummary>, StoreError> {
+        if incoming.schema != SCHEMA_VERSION {
+            return Err(StoreError::Schema {
+                expected: SCHEMA_VERSION.to_owned(),
+                found: incoming.schema,
+            });
+        }
+        let _writer = self.writer.lock().unwrap_or_else(PoisonError::into_inner);
+        let current = self.current();
+        if !incoming.version.replaces(current.version) {
+            return Ok(None);
+        }
+        incoming.config.validate()?;
+        let old = &current.config;
+        let new = &incoming.config;
+        let mut batch = Batch::default();
+        let mut summary = ReplaceSummary::default();
+        replace_kind::<List>(old, new, &mut batch, &mut summary)?;
+        summary.lists_changed = !batch.writes.is_empty();
+        replace_kind::<Rule>(old, new, &mut batch, &mut summary)?;
+        summary.filter_changed = !batch.writes.is_empty();
+        replace_kind::<Group>(old, new, &mut batch, &mut summary)?;
+        replace_kind::<Client>(old, new, &mut batch, &mut summary)?;
+        replace_kind::<Schedule>(old, new, &mut batch, &mut summary)?;
+        if old.settings != new.settings {
+            batch.writes.push(Write::Settings(
+                serde_json::to_vec(&new.settings).map_err(StoreError::Encode)?,
+            ));
+            summary.settings_changed = true;
+        }
+        let settings = if summary.settings_changed {
+            "; settings changed"
+        } else {
+            ""
+        };
+        batch.audit.push(Pending {
+            action: AuditAction::Replicate,
+            kind: None,
+            resource: None,
+            before: serde_json::to_value(current.version).ok(),
+            after: serde_json::to_value(incoming.version).ok(),
+            detail: Some(format!(
+                "{} added, {} changed, {} removed{settings}",
+                summary.added, summary.changed, summary.removed
+            )),
+        });
+        self.commit(
+            incoming.config,
+            batch,
+            actor,
+            Timestamp::now(),
+            incoming.version,
+        )?;
+        Ok(Some(summary))
+    }
+
     /// Records an action that is not a configuration change, such as
     /// pausing filtering.
     ///
@@ -684,15 +970,41 @@ impl Store {
         change: impl FnOnce(&mut ConfigSnapshot, Timestamp, &mut Batch) -> Result<(), StoreError>,
     ) -> Result<Arc<ConfigSnapshot>, StoreError> {
         let _writer = self.writer.lock().unwrap_or_else(PoisonError::into_inner);
-        let mut next = (*self.config()).clone();
+        let current = self.current();
+        let mut next = (*current.config).clone();
         let now = Timestamp::now();
         let mut batch = Batch::default();
         change(&mut next, now, &mut batch)?;
         if batch.writes.is_empty() && batch.audit.is_empty() {
-            return Ok(self.config());
+            return Ok(current.config);
         }
         next.validate()?;
+        let version = if batch.writes.is_empty() {
+            current.version
+        } else {
+            current.version.next()
+        };
+        self.commit(next, batch, actor, now, version)
+    }
+
+    /// Writes `batch` and its audit entries in one transaction, with
+    /// `version` if it changed, then makes `next` the configuration. The
+    /// caller holds the writer lock.
+    fn commit(
+        &self,
+        next: ConfigSnapshot,
+        batch: Batch,
+        actor: &Actor,
+        now: Timestamp,
+        version: ConfigVersion,
+    ) -> Result<Arc<ConfigSnapshot>, StoreError> {
+        let previous = self.version();
         let tx = self.db.begin_write()?;
+        if version != previous {
+            let mut meta = tx.open_table(META)?;
+            meta.insert(EPOCH_KEY, version.epoch.to_string().as_str())?;
+            meta.insert(VERSION_KEY, version.version.to_string().as_str())?;
+        }
         for write in batch.writes {
             match write {
                 Write::Put(table, id, bytes) => {
@@ -738,9 +1050,44 @@ impl Store {
         }
         tx.commit()?;
         let next = Arc::new(next);
-        *self.config.write().unwrap_or_else(PoisonError::into_inner) = Arc::clone(&next);
+        *self.current.write().unwrap_or_else(PoisonError::into_inner) = Current {
+            config: Arc::clone(&next),
+            version,
+        };
+        if version != previous {
+            self.changes.send_replace(version);
+        }
         Ok(next)
     }
+}
+
+/// Writes the resources of kind `K` in which `new` differs from `old`.
+fn replace_kind<K: Kind + PartialEq>(
+    old: &ConfigSnapshot,
+    new: &ConfigSnapshot,
+    batch: &mut Batch,
+    summary: &mut ReplaceSummary,
+) -> Result<(), StoreError> {
+    let before: HashMap<&str, &K> = K::all(old).iter().map(|r| (r.id(), r)).collect();
+    let after: HashSet<&str> = K::all(new).iter().map(Kind::id).collect();
+    for resource in K::all(new) {
+        match before.get(resource.id()) {
+            None => {
+                batch.put(resource)?;
+                summary.added = summary.added.saturating_add(1);
+            }
+            Some(existing) if *existing != resource => {
+                batch.put(resource)?;
+                summary.changed = summary.changed.saturating_add(1);
+            }
+            Some(_) => {}
+        }
+    }
+    for id in before.keys().filter(|id| !after.contains(*id)) {
+        batch.delete::<K>(id);
+        summary.removed = summary.removed.saturating_add(1);
+    }
+    Ok(())
 }
 
 /// Makes the config-file lists match `lists`, by a stable ID derived from
@@ -1014,6 +1361,7 @@ mod tests {
         Actor {
             kind: ActorKind::Token,
             address: Some("192.0.2.1".into()),
+            node: None,
         }
     }
 
@@ -1252,6 +1600,115 @@ mod tests {
         let store = TempStore::new("locked");
         let err = Store::open(&store.path).err().unwrap();
         assert!(matches!(err, StoreError::Locked(_)), "{err}");
+    }
+
+    fn rule(text: &str) -> RuleSpec {
+        RuleSpec {
+            rule: text.into(),
+            enabled: true,
+            comment: String::new(),
+            managed_by: ManagedBy::Api,
+        }
+    }
+
+    #[test]
+    fn versions_count_changes_and_survive_restarts() {
+        let mut store = TempStore::new("versions");
+        let start = store.version();
+        assert_eq!(start.version, 0);
+        assert!(start.epoch < 1 << 53, "exact in JSON");
+        let mut changes = store.subscribe();
+        store
+            .create::<Rule>(rule("||ads.example^"), &api())
+            .unwrap();
+        assert_eq!(store.version().version, 1);
+        assert!(changes.has_changed().unwrap());
+        assert_eq!(changes.borrow_and_update().version, 1);
+        // Audit-only records and changes to nothing keep the version.
+        store.record(&api(), AuditAction::Pause, None).unwrap();
+        let settings = store.config().settings.spec.clone();
+        store.update_settings(settings, None, &api()).unwrap();
+        assert_eq!(store.version().version, 1);
+        assert!(!changes.has_changed().unwrap());
+        store.reopen();
+        assert_eq!(
+            store.version(),
+            ConfigVersion {
+                epoch: start.epoch,
+                version: 1
+            }
+        );
+        // Exports carry the version and the configuration as one.
+        let export = store.export();
+        assert_eq!(export.version, store.version());
+        assert_eq!(export.config, *store.config());
+    }
+
+    #[test]
+    fn replicas_copy_the_primary() {
+        let primary = TempStore::new("primary");
+        let replica = TempStore::new("replica");
+        let from = Actor::replication("dns1");
+        // The replica's own changes are replaced: its epoch differs.
+        replica
+            .create::<Rule>(rule("||local.example^"), &api())
+            .unwrap();
+        let ads = primary
+            .create::<List>(list("Ads", "https://lists.example/ads.txt"), &api())
+            .unwrap();
+        let mut group = primary.config().groups[0].clone();
+        group.spec.lists.push(GroupList {
+            list: ads.id.clone(),
+            schedule: None,
+        });
+        primary
+            .update::<Group>(DEFAULT_GROUP, group.spec, None, &api())
+            .unwrap();
+        primary
+            .create::<Rule>(rule("||tracker.example^"), &api())
+            .unwrap();
+
+        let summary = replica.replace(primary.export(), &from).unwrap().unwrap();
+        assert_eq!(summary.added, 2, "the list and the primary's rule");
+        assert_eq!(summary.changed, 1, "the default group");
+        assert_eq!(summary.removed, 1, "the replica's own rule");
+        assert!(summary.lists_changed && summary.filter_changed);
+        assert_eq!(*replica.config(), *primary.config(), "an exact copy");
+        assert_eq!(replica.version(), primary.version());
+
+        // The same version again changes nothing.
+        assert_eq!(replica.replace(primary.export(), &from).unwrap(), None);
+
+        // Deletions and settings follow.
+        let tracker = primary.config().rules[0].id.clone();
+        primary.delete::<Rule>(&tracker, None, &api()).unwrap();
+        let mut settings = primary.config().settings.spec.clone();
+        settings.protection = false;
+        primary.update_settings(settings, None, &api()).unwrap();
+        let summary = replica.replace(primary.export(), &from).unwrap().unwrap();
+        assert_eq!((summary.removed, summary.settings_changed), (1, true));
+        assert!(!summary.lists_changed && summary.filter_changed);
+        assert_eq!(*replica.config(), *primary.config());
+
+        // An older version of the same history is refused.
+        let mut stale = primary.export();
+        stale.version.version = 1;
+        assert_eq!(replica.replace(stale, &from).unwrap(), None);
+
+        // So is another schema.
+        let mut other = primary.export();
+        other.schema = "999".into();
+        other.version.version += 10;
+        assert!(matches!(
+            replica.replace(other, &from),
+            Err(StoreError::Schema { .. })
+        ));
+
+        // The copy is audit-logged as replication from the primary.
+        let audit = replica.audit(None, 1).unwrap();
+        assert_eq!(audit[0].action, AuditAction::Replicate);
+        assert_eq!(audit[0].actor.kind, ActorKind::Replication);
+        assert_eq!(audit[0].actor.node.as_deref(), Some("dns1"));
     }
 
     #[test]

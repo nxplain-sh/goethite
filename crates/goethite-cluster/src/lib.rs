@@ -1,7 +1,21 @@
 //! Clustering and high availability for goethite.
 //!
-//! Replicates configuration between nodes over mutually authenticated TLS,
-//! manages a VRRP floating IP and, later, consensus via Raft. Losing the cluster
-//! layer must never stop a node from answering DNS on its own.
+//! Two nodes form a cluster: the **primary** owns the configuration and the
+//! **replica** copies it ([`PeerClient::config`], [`goethite_store::Store::replace`]).
+//! They talk over a channel with mutual TLS ([`Identity`]): each node has a
+//! certificate from the cluster's private CA ([`certs`]) that names it, and
+//! each checks that the other is the configured peer.
 //!
-//! Status: empty skeleton. Two-node config sync and VRRP arrive in Phase 3.
+//! Losing the cluster layer never stops a node from answering DNS on its
+//! own: a replica that cannot reach the primary keeps its last copy.
+
+pub mod certs;
+mod client;
+mod node;
+pub mod server;
+mod tls;
+pub mod wire;
+
+pub use client::{ClientError, PeerClient};
+pub use node::{NodeId, NodeIdError, Role};
+pub use tls::{Identity, TlsError};

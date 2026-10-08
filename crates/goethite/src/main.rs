@@ -1,5 +1,6 @@
 //! The goethite binary: command-line interface, configuration and wiring.
 
+mod cluster;
 mod config;
 mod control;
 mod download;
@@ -74,6 +75,12 @@ enum Command {
     Token,
     /// Print the API's OpenAPI document.
     Openapi,
+    /// Create the certificates a cluster's nodes use to recognize each
+    /// other.
+    Cluster {
+        #[command(subcommand)]
+        command: ClusterCommand,
+    },
     /// Open the terminal UI for a goethite node, through its API.
     Tui {
         /// The API's address. Defaults to `GOETHITE_API`, then
@@ -90,6 +97,28 @@ enum Command {
     },
 }
 
+#[derive(Debug, Subcommand)]
+enum ClusterCommand {
+    /// Create the cluster's CA: `ca.crt` and `ca.key` in DIR.
+    Init {
+        /// Where to put them.
+        #[arg(long, value_name = "DIR", default_value = ".")]
+        dir: PathBuf,
+    },
+    /// Create a certificate for NODE, signed by the CA in DIR: `NODE.crt`
+    /// and `NODE.key`.
+    Cert {
+        /// The node's name, as in its `[cluster]` table.
+        node: String,
+        /// Where the CA is, and where to put the certificate.
+        #[arg(long, value_name = "DIR", default_value = ".")]
+        dir: PathBuf,
+        /// Replace an existing certificate for NODE.
+        #[arg(long)]
+        force: bool,
+    },
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
     // Log lines would garble the terminal UI.
@@ -103,6 +132,12 @@ fn main() -> ExitCode {
         Command::Import { config } => import(&config),
         Command::Token => token(),
         Command::Openapi => print(&goethite_api::openapi_json()),
+        Command::Cluster { command } => match command {
+            ClusterCommand::Init { dir } => cluster::init(&dir).and_then(|text| print(&text)),
+            ClusterCommand::Cert { node, dir, force } => {
+                cluster::cert(&dir, &node, force).and_then(|text| print(&text))
+            }
+        },
         Command::Tui {
             api,
             token_file,
@@ -155,6 +190,7 @@ struct Prepared {
     api_tls: Option<Arc<rustls::ServerConfig>>,
     store: Arc<Store>,
     query_log: Arc<goethite_store::QueryLog>,
+    cluster: Option<cluster::Prepared>,
 }
 
 fn run(config_path: &Path) -> Result<()> {
@@ -193,6 +229,7 @@ fn prepare(config: &Config, config_path: &Path) -> Result<Prepared> {
         (Some(cert), Some(key)) if config.api.enabled => Some(load_tls(cert, key)?),
         _ => None,
     };
+    let cluster = config.cluster.as_ref().map(cluster::prepare).transpose()?;
     privileges::drop_privileges(account.as_ref())?;
     let store = Arc::new(open_store(config)?);
     seed(&store, config, config_path)?;
@@ -212,6 +249,7 @@ fn prepare(config: &Config, config_path: &Path) -> Result<Prepared> {
         api_tls,
         store,
         query_log,
+        cluster,
     })
 }
 
@@ -260,6 +298,12 @@ async fn serve(config: &Config, prepared: Prepared) -> Result<()> {
         info!("filtering is turned off in the settings");
     }
     reload_on_hangup(Arc::clone(&control))?;
+    let started = Timestamp::now();
+    // Held until shutdown: dropping it would stop following the primary.
+    let _cluster = prepared
+        .cluster
+        .map(|cluster| cluster::start(cluster, &control, started, &stopped))
+        .transpose()?;
     let tls = tls_client_config(&TlsRoots::Bundled, &[b"h2", b"http/1.1"])?;
     let downloader = download::Downloader::new(Arc::clone(&resolver), tls, filters::MAX_LIST_LEN);
     control.spawn(downloader);
@@ -281,7 +325,7 @@ async fn serve(config: &Config, prepared: Prepared) -> Result<()> {
             metrics,
             log: Arc::clone(&prepared.query_log),
             querylog_enabled: config.querylog.enabled,
-            started: Timestamp::now(),
+            started,
         };
         let api = api(
             config,

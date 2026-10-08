@@ -381,17 +381,16 @@ export interface components {
             address?: string | null;
             /** @description What kind of actor. */
             kind: components["schemas"]["ActorKind"];
+            /**
+             * @description The cluster node the change came from or through, when it was not
+             *     made on this node.
+             */
+            node?: string | null;
         };
-        /**
-         * @description Who made a change.
-         * @enum {string}
-         */
-        ActorKind: "token" | "unauthenticated" | "cli" | "system";
-        /**
-         * @description What an audit entry records.
-         * @enum {string}
-         */
-        AuditAction: "create" | "update" | "delete" | "import" | "pause" | "resume" | "refresh";
+        /** @description Who made a change: `token` (an API client with the admin token), `unauthenticated` (an API client on loopback while no admin token is configured), `cli` (the goethite command line), `system` (goethite itself) or `replication` (copied from the cluster's primary). More may be added: show unknown values as they are. */
+        ActorKind: string;
+        /** @description What an audit entry records: `create`, `update` or `delete` (a resource or the settings), `import` (the config file's `[filter]` table), `pause` or `resume` (filtering), `refresh` (a list download) or `replicate` (a copy of the cluster primary's configuration). More may be added: show unknown values as they are. */
+        AuditAction: string;
         /** @description One entry of the audit log. */
         AuditEntry: {
             /** @description What. */

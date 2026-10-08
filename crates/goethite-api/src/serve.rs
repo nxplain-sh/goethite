@@ -82,17 +82,60 @@ pub async fn serve(
     api: Arc<Api>,
     shutdown: impl Future<Output = ()>,
 ) -> io::Result<()> {
-    let tls = api.config.tls.clone().map(TlsAcceptor::from);
+    let serving = Serving {
+        name: "API",
+        router: router(&api),
+        tls: api.config.tls.clone(),
+        max_connections: MAX_CONNECTIONS,
+    };
+    serve_router(listeners, serving, shutdown).await
+}
+
+/// What a listener serves, and how.
+pub struct Serving {
+    /// A name for the logs, such as `API`.
+    pub name: &'static str,
+    /// The routes, with their own limits and headers.
+    pub router: axum::Router,
+    /// TLS; plain HTTP without it.
+    pub tls: Option<Arc<rustls::ServerConfig>>,
+    /// The most connections served at once; more are closed at once.
+    pub max_connections: usize,
+}
+
+/// Serves `serving` on `listeners` until `shutdown` completes, with the same
+/// bounds as the API: connection count, handshake and header time, and a
+/// grace period on shutdown. The cluster listener uses it too.
+///
+/// # Errors
+///
+/// If a listener cannot be registered with the runtime.
+///
+/// # Panics
+///
+/// Outside a tokio runtime with I/O enabled, as tokio does.
+pub async fn serve_router(
+    listeners: ApiListeners,
+    serving: Serving,
+    shutdown: impl Future<Output = ()>,
+) -> io::Result<()> {
+    let Serving {
+        name,
+        router,
+        tls,
+        max_connections,
+    } = serving;
+    let tls = tls.map(TlsAcceptor::from);
     let scheme = if tls.is_some() { "https" } else { "http" };
-    let router = router(&api);
-    let slots = Arc::new(Semaphore::new(MAX_CONNECTIONS));
+    let slots = Arc::new(Semaphore::new(max_connections));
     let (stop_tx, stop_rx) = watch::channel(false);
     let mut accepting = JoinSet::new();
     for listener in listeners.0 {
         let listener = TcpListener::from_std(listener)?;
         let address = listener.local_addr()?;
-        info!(%address, scheme, web_ui = api.config.web.is_some(), "API listening");
+        info!(%address, scheme, "{name} listening");
         accepting.spawn(accept(
+            name,
             listener,
             router.clone(),
             tls.clone(),
@@ -107,6 +150,7 @@ pub async fn serve(
 }
 
 async fn accept(
+    name: &'static str,
     listener: TcpListener,
     router: axum::Router,
     tls: Option<TlsAcceptor>,
@@ -123,13 +167,13 @@ async fn accept(
         let (stream, peer) = match accepted {
             Ok(accepted) => accepted,
             Err(err) => {
-                debug!(%err, "API accept failed");
+                debug!(%err, "{name} accept failed");
                 tokio::time::sleep(Duration::from_millis(100)).await;
                 continue;
             }
         };
         let Ok(permit) = Arc::clone(&slots).try_acquire_owned() else {
-            debug!(%peer, "too many API connections, closing");
+            debug!(%peer, "too many {name} connections, closing");
             continue;
         };
         let service =
@@ -138,7 +182,7 @@ async fn accept(
         connections.spawn(async move {
             let _permit = permit;
             if let Err(err) = connection(stream, tls, service).await {
-                debug!(%peer, %err, "API connection ended");
+                debug!(%peer, %err, "{name} connection ended");
             }
         });
     }

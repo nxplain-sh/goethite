@@ -7,6 +7,21 @@ configuration format.
 
 ## [Unreleased]
 
+### Added
+
+- **Two-node clusters.** A `[cluster]` table makes a node the primary or the replica of a pair.
+  The replica copies the primary's configuration over mutual TLS within moments of every change,
+  and keeps resolving with its last copy while the primary is unreachable. `goethite cluster
+  init` and `goethite cluster cert <node>` create the cluster's CA and node certificates; each
+  node accepts only its configured peer.
+
+### Changed
+
+- In the API, the audit log's `actor.kind` and `action` are now open-ended strings
+  (`x-extensible-enum`): new values (such as `replication` and `replicate`) can appear without a
+  new API version, so clients should show unknown values as they are. Audit entries can name the
+  cluster `node` a change came from.
+
 ## [0.2.0] - 2026-10-08
 
 Control: per-client filtering, a query log and statistics, a REST API, a terminal UI and the start

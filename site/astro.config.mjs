@@ -25,6 +25,7 @@ export default defineConfig({
 				{ label: 'Configuration', slug: 'configuration' },
 				{ label: 'Filtering', slug: 'filtering' },
 				{ label: 'Clients and groups', slug: 'groups' },
+				{ label: 'High availability', slug: 'ha' },
 				{ label: 'REST API', slug: 'api' },
 				{ label: 'Web UI', slug: 'web-ui' },
 				{ label: 'Terminal UI', slug: 'tui' },

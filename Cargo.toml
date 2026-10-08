@@ -17,6 +17,7 @@ publish = false
 [workspace.dependencies]
 # Internal crates.
 goethite-api = { path = "crates/goethite-api" }
+goethite-cluster = { path = "crates/goethite-cluster" }
 goethite-filter = { path = "crates/goethite-filter" }
 goethite-proto = { path = "crates/goethite-proto" }
 goethite-resolver = { path = "crates/goethite-resolver" }
@@ -39,6 +40,7 @@ jiff = { version = "0.2.38", features = ["serde"] }
 proptest = "1.11.0"
 ratatui = { version = "0.30.2", default-features = false, features = ["crossterm_0_29", "layout-cache"] }
 rand = { version = "0.10.3", default-features = false, features = ["std", "thread_rng"] }
+rcgen = { version = "0.14.10", default-features = false, features = ["ring", "pem"] }
 redb = "4.3.0"
 ring = { version = "0.17.14", default-features = false }
 rust-embed = { version = "8.13.0", default-features = false, features = ["deterministic-timestamps"] }

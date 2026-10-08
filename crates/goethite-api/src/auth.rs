@@ -131,6 +131,7 @@ pub(crate) async fn authenticate(
                 Some(token) if hash.matches(token) => Actor {
                     kind: ActorKind::Token,
                     address,
+                    node: None,
                 },
                 _ => return Err(ApiError::unauthorized()),
             }
@@ -138,6 +139,7 @@ pub(crate) async fn authenticate(
         None if peer.ip().is_loopback() => Actor {
             kind: ActorKind::Unauthenticated,
             address,
+            node: None,
         },
         None => {
             return Err(ApiError::forbidden(

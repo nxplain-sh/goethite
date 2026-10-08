@@ -119,6 +119,21 @@ readable by goethite's user only, and only one goethite process can open it at a
 
 See [REST API](../api/) for how to use it.
 
+## `[cluster]`
+
+Absent for a node on its own. With it, the node is one of a two-node cluster: the primary owns the
+filtering configuration and the replica copies it. See [High availability](../ha/).
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `node` | required | This node's name, as in its certificate: 1 to 63 lowercase letters, digits and hyphens, starting with a letter. |
+| `role` | required | `"primary"` or `"replica"`. |
+| `listen` | `"0.0.0.0:8054"` | Where the node listens for its peer, over mutual TLS. |
+| `ca` | required | The cluster CA certificate, from `goethite cluster init`. |
+| `cert`, `key` | required | This node's certificate and key, from `goethite cluster cert <node>`. Read before goethite drops its privileges. |
+| `peer.node` | required | The other node's name. Only a certificate with that name is accepted. |
+| `peer.address` | required | The other node's `listen` address. |
+
 ## `[querylog]`
 
 | Key | Default | Meaning |
