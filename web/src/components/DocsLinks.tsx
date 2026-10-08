@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { useSyncExternalStore } from 'react'
+import { type ReactNode, useSyncExternalStore } from 'react'
 
 import { statusQuery } from '../api/queries'
 
@@ -37,18 +37,25 @@ export function DocsLinks() {
 	const local = servesDocs && isLoopback(window.location.hostname)
 	const apiDocs = local ? '/api/docs' : SITE_API_DOCS_URL
 	return (
-		<nav className="docs-links" aria-label="Documentation">
+		<nav className="docs-dock" aria-label="Documentation">
 			<a
-				className="button small"
+				className="docs-dock-link primary"
 				href={DOCS_URL}
 				target="_blank"
 				rel="noopener noreferrer"
 				title="goethite's documentation, in a new tab"
 			>
-				Docs<span aria-hidden="true"> ↗</span>
+				<BookIcon />
+				<span className="docs-dock-text">
+					<span className="docs-dock-label">Docs</span>
+					<span className="docs-dock-hint" aria-hidden="true">
+						guides
+					</span>
+				</span>
+				<OutIcon />
 			</a>
 			<a
-				className="button small"
+				className="docs-dock-link"
 				href={apiDocs}
 				target="_blank"
 				rel="noopener noreferrer"
@@ -58,8 +65,67 @@ export function DocsLinks() {
 						: 'The API reference on the documentation site, in a new tab'
 				}
 			>
-				API docs<span aria-hidden="true"> ↗</span>
+				<BracesIcon />
+				<span className="docs-dock-text">
+					<span className="docs-dock-label">API docs</span>
+					<span className="docs-dock-hint" aria-hidden="true">
+						{local ? 'this node' : 'online'}
+					</span>
+				</span>
+				<OutIcon />
 			</a>
 		</nav>
+	)
+}
+
+// Icons drawn with straight strokes and square ends, to match the borders.
+
+function Icon({ size, children }: { size: number; children: ReactNode }) {
+	return (
+		<svg
+			className="docs-dock-icon"
+			width={size}
+			height={size}
+			viewBox="0 0 24 24"
+			fill="none"
+			stroke="currentColor"
+			strokeWidth="2.5"
+			strokeLinecap="square"
+			strokeLinejoin="miter"
+			aria-hidden="true"
+			focusable="false"
+		>
+			{children}
+		</svg>
+	)
+}
+
+/** An open book. */
+function BookIcon() {
+	return (
+		<Icon size={20}>
+			<path d="M12 6v14" />
+			<path d="M12 6 3 4v14l9 2 9-2V4z" />
+		</Icon>
+	)
+}
+
+/** Curly braces, drawn angular. */
+function BracesIcon() {
+	return (
+		<Icon size={20}>
+			<path d="M8 3H6v7l-3 2 3 2v7h2" />
+			<path d="M16 3h2v7l3 2-3 2v7h-2" />
+		</Icon>
+	)
+}
+
+/** Opens elsewhere: an arrow out of the corner. */
+function OutIcon() {
+	return (
+		<Icon size={14}>
+			<path d="M7 17 17 7" />
+			<path d="M9 7h8v8" />
+		</Icon>
 	)
 }

@@ -15,6 +15,8 @@
 	--muted: #5a5247;
 	--accent: #e8a33d;
 	--on-accent: #111111;
+	/* The accent, pressed or hovered. */
+	--accent-strong: #d48f26;
 	--blocked: #a63d22;
 	--on-blocked: #fffdf8;
 	--ok: #1d6b5f;

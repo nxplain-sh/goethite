@@ -72,19 +72,102 @@ code,
 	gap: var(--space-5);
 }
 
-/* Documentation links, in the bottom right corner of every page. */
+/* Documentation links: one joined button in the bottom right corner of every page. */
 
-.docs-links {
+.docs-dock {
 	position: fixed;
 	right: var(--space-4);
 	bottom: var(--space-4);
 	z-index: 10;
 	display: flex;
-	gap: var(--space-2);
+	border: var(--border);
+	background: var(--panel);
+	box-shadow: var(--shadow);
+	transition:
+		transform 60ms,
+		box-shadow 60ms;
 }
 
-.docs-links a {
+.docs-dock:hover {
+	transform: translate(2px, 2px);
+	box-shadow: 4px 4px 0 var(--ink);
+}
+
+.docs-dock:has(.docs-dock-link:active) {
+	transform: translate(5px, 5px);
+	box-shadow: var(--shadow-pressed);
+}
+
+.docs-dock-link {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-2);
+	padding: var(--space-2) var(--space-3);
+	background: var(--panel);
+	color: var(--ink);
 	text-decoration: none;
+}
+
+.docs-dock-link + .docs-dock-link {
+	border-left: var(--border);
+}
+
+.docs-dock-link:hover {
+	background: var(--cached);
+}
+
+.docs-dock-link.primary {
+	background: var(--accent);
+	color: var(--on-accent);
+}
+
+.docs-dock-link.primary:hover {
+	background: var(--accent-strong);
+}
+
+.docs-dock-link:focus-visible {
+	outline: none;
+	box-shadow: inset 0 0 0 3px var(--ink);
+}
+
+.docs-dock-icon {
+	flex: none;
+}
+
+.docs-dock-text {
+	display: grid;
+	line-height: 1.1;
+}
+
+.docs-dock-label {
+	font-weight: 700;
+	white-space: nowrap;
+}
+
+.docs-dock-hint {
+	font-family: var(--font-mono);
+	font-size: 0.7rem;
+	color: var(--muted);
+	white-space: nowrap;
+}
+
+.docs-dock-link.primary .docs-dock-hint {
+	color: var(--on-accent);
+}
+
+@media (max-width: 380px) {
+	.docs-dock-hint {
+		display: none;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.docs-dock,
+	.docs-dock:hover,
+	.docs-dock:has(.docs-dock-link:active) {
+		transition: none;
+		transform: none;
+	}
 }
 
 .topbar {
