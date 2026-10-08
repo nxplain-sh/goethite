@@ -21,7 +21,10 @@ must be easy. The user chose the default: on, full client addresses, 7 days.
 - **Writer thread:** a dedicated thread drains the queue in batches of up to a second or 4,096
   events. It anonymizes clients if asked, updates the statistics, and writes the batch to the
   store's `querylog` table in one transaction. Every minute it prunes by age and by count and
-  saves the statistics.
+  saves the statistics. It never waits on the queue: it empties it every 50 ms and sleeps in
+  between. A writer blocked on the queue would make the next query wake it, which puts a system
+  call and a context switch on the hot path; the first v0.2.0 dnsperf run showed it in the tail
+  latency. At 50 ms, the queue holds over 300,000 queries a second.
 - **Records** use a compact, versioned binary encoding (about 60 bytes plus strings). It is decoded
   with bounds checks and fuzzed (`decode_query_record`). Keys are microseconds since the epoch
   times 1024, so they sort by time and serve as page cursors.

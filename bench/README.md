@@ -105,3 +105,27 @@ Percentiles are bucket upper bounds from dnsperf's latency histogram. The slowes
 So the target of a sub-millisecond p99 for cached answers holds at up to 100,000 queries per
 second on this machine. A bare-metal run with dnsperf on a separate host is still to be
 recorded.
+
+2026-10-08, v0.2.0 against v0.1.0 (commit `cd519c2`), same VM, image and command, with the query
+log on (the default): every answer is now also checked against a client policy, counted in the
+metrics and queued for the log. The Mac was busy this time (load average 7 to 8), so the two
+versions ran interleaved in the same session, 20 s each, and only those runs compare:
+
+| Offered load | Version | p50 | p90 | p99 | p99.9 |
+| --- | --- | --- | --- | --- | --- |
+| 50,000 q/s, 3 rounds | v0.1.0 | 46–49 µs | 81–103 µs | 251–303 µs | 1.3–1.8 ms |
+| | v0.2.0 | 35–36 µs | 71–73 µs | 295–367 µs | 1.8–1.9 ms |
+| 100,000 q/s, 2 rounds | v0.1.0 | 65–81 µs | 231–303 µs | 863–911 µs | 1.3 ms |
+| | v0.2.0 | 125–131 µs | 407–471 µs | 0.98–1.09 ms | 1.9–2.1 ms |
+
+Flat out (`-T 4`), v0.2.0 answered 178,155 q/s with no query log entries dropped.
+
+At 50,000 q/s the two versions are alike and the p99 stays well under a millisecond. At 100,000
+q/s, writing a log entry for every query costs CPU that the DNS workers, dnsperf and the writer
+share on 5 vCPUs: the median doubles and the p99 reaches a millisecond, where v0.1.0 was just
+under it on the same busy host. Turning the query log off removes that cost. Making the writer
+cheaper is in the [backlog](../docs/BACKLOG.md).
+
+The first v0.2.0 run was worse (p99 1.6 ms at 50,000 q/s, 140,000 q/s flat out, 5.7% of log
+entries dropped): the log writer waited on its queue, so every query had to wake it with a
+system call. It now empties the queue every 50 ms instead and is never woken by queries.

@@ -10,7 +10,7 @@
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, TrySendError, sync_channel};
+use std::sync::mpsc::{Receiver, SyncSender, TryRecvError, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -40,6 +40,12 @@ pub const MAX_PAGE: usize = 1000;
 
 /// How long the writer collects events before writing them.
 const BATCH_TIME: Duration = Duration::from_secs(1);
+
+/// How often the writer empties the queue. It never waits on the queue
+/// itself: a waiting receiver would make every query wake it with a system
+/// call. At this pace the queue holds [`QUEUE_CAPACITY`] / 0.05 s, over
+/// 300,000 queries a second.
+const POLL_EVERY: Duration = Duration::from_millis(50);
 
 /// The most events written in one transaction.
 const BATCH_SIZE: usize = 4096;
@@ -551,27 +557,30 @@ fn writer(
         .checked_sub(PRUNE_EVERY)
         .unwrap_or_else(Instant::now);
     let mut batch: Vec<LogEvent> = Vec::with_capacity(BATCH_SIZE);
+    let mut last_write = Instant::now();
     loop {
-        let deadline = Instant::now().checked_add(BATCH_TIME);
         let mut disconnected = false;
         while batch.len() < BATCH_SIZE {
-            let wait = deadline.map_or(Duration::ZERO, |d| {
-                d.saturating_duration_since(Instant::now())
-            });
-            match receiver.recv_timeout(wait) {
+            match receiver.try_recv() {
                 Ok(mut event) => {
                     if config.anonymize {
                         event.client = anonymize(event.client);
                     }
                     batch.push(event);
                 }
-                Err(RecvTimeoutError::Timeout) => break,
-                Err(RecvTimeoutError::Disconnected) => {
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
                     disconnected = true;
                     break;
                 }
             }
         }
+        let full = batch.len() >= BATCH_SIZE;
+        if !full && !disconnected && last_write.elapsed() < BATCH_TIME {
+            std::thread::sleep(POLL_EVERY);
+            continue;
+        }
+        last_write = Instant::now();
         let entries: Vec<(u64, StoredQuery)> = batch
             .drain(..)
             .map(|event| {
