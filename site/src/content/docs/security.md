@@ -131,3 +131,29 @@ supported on Linux; on other platforms, which are for development only, `server.
 - **Query privacy.** The [query log](../configuration/#querylog) keeps 7 days by default, can
   shorten client addresses to their /24 and /56 (`anonymize_clients = true`) or be turned off. The
   store file is readable by goethite's user only.
+
+## When filtering fails
+
+goethite answers every query on your network, so by default a failure in filtering never stops
+it from answering ("fail open"):
+
+- If its store file cannot be opened (but is not just in use by another goethite), it runs on a
+  temporary store in memory, seeded from the config file's `[filter]` table, and leaves the file
+  alone for you to look at.
+- If the filter cannot be built, it starts unfiltered; later, a filter that cannot be rebuilt
+  leaves the previous one in place.
+- If checking a name fails (a bug), that query is answered unfiltered.
+
+Each of these appears in `problems` in `GET /api/v1/status`, in the TUI and the web UI, and as
+`goethite_degraded 1` in the metrics; failed checks are counted in
+`goethite_filter_failures_total`.
+
+Where unfiltered answers are worse than none, fail closed instead:
+
+```toml
+[filter]
+on_failure = "closed"
+```
+
+goethite then refuses to start with a broken store or filter, and answers SERVFAIL to a query
+whose check failed.

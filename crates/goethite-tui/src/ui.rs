@@ -84,6 +84,15 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, app: &App) {
         if let Some(cluster) = &status.cluster {
             spans.extend(cluster_spans(cluster));
         }
+        if !status.problems.is_empty() {
+            spans.push(Span::from(" "));
+            spans.push(
+                Span::from(format!(" {} NODE PROBLEM(S) ", status.problems.len()))
+                    .fg(Color::Black)
+                    .bg(RUST)
+                    .bold(),
+            );
+        }
     }
     if let Some(updated) = app.updated {
         spans.push(Span::from(format!("  updated {}", clock(updated))).dim());
@@ -601,6 +610,7 @@ mod tests {
                 dropped: 0,
             },
             cluster: None,
+            problems: Vec::new(),
         }
     }
 

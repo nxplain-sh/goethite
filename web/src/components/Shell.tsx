@@ -91,6 +91,11 @@ export function Shell() {
 				<Link to="/querylog">Query log</Link>
 			</nav>
 			<ErrorNotice error={status.error ?? pause.error ?? resume.error} />
+			{(status.data?.problems ?? []).map((problem) => (
+				<div key={problem} className="notice error" role="alert">
+					This node: {problem}
+				</div>
+			))}
 			{(status.data?.cluster?.problems ?? []).map((problem) => (
 				<div key={problem} className="notice error" role="alert">
 					Cluster: {problem}

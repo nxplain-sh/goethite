@@ -356,6 +356,31 @@ pub struct FilterSection {
     pub cache_dir: Option<PathBuf>,
     /// How often downloaded lists are refreshed, in hours.
     pub update_hours: u32,
+    /// What to do when filtering fails. A node setting: it is not
+    /// copied into the store.
+    pub on_failure: OnFailure,
+}
+
+/// What to do when filtering fails: the store cannot be opened, the filter
+/// cannot be built, or checking a name fails.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum OnFailure {
+    /// Keep resolving, unfiltered if need be, and say so loudly.
+    #[default]
+    Open,
+    /// Refuse to start, or answer SERVFAIL: never resolve unfiltered.
+    Closed,
+}
+
+impl OnFailure {
+    /// The resolver's mode.
+    pub fn mode(self) -> goethite_resolver::FailMode {
+        match self {
+            Self::Open => goethite_resolver::FailMode::Open,
+            Self::Closed => goethite_resolver::FailMode::Closed,
+        }
+    }
 }
 
 impl Default for FilterSection {
@@ -368,6 +393,7 @@ impl Default for FilterSection {
             list: Vec::new(),
             cache_dir: None,
             update_hours: 24,
+            on_failure: OnFailure::Open,
         }
     }
 }

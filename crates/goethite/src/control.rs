@@ -34,6 +34,8 @@ pub struct Control {
     downloads: Mutex<HashMap<String, ListStatus>>,
     rebuilding: tokio::sync::Mutex<()>,
     refresh: Notify,
+    /// Why the last filter or policy build failed, while it did.
+    build_error: Mutex<Option<String>>,
 }
 
 impl Control {
@@ -48,6 +50,7 @@ impl Control {
             downloads: Mutex::new(HashMap::new()),
             rebuilding: tokio::sync::Mutex::new(()),
             refresh: Notify::new(),
+            build_error: Mutex::new(None),
         })
     }
 
@@ -66,10 +69,26 @@ impl Control {
         Arc::clone(&self.compiled.lock().unwrap_or_else(PoisonError::into_inner))
     }
 
+    /// Why the last filter or policy build failed, if it did and nothing
+    /// has been built since.
+    pub fn build_error(&self) -> Option<String> {
+        self.build_error
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    fn set_build_error(&self, error: Option<String>) {
+        *self
+            .build_error
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = error;
+    }
+
     /// Recompiles the filter from the store's lists and rules off the async
     /// runtime, then the policy. If compiling fails, the current filter
-    /// stays.
-    pub async fn rebuild_filter(&self) {
+    /// stays. Returns whether the new filter is in use.
+    pub async fn rebuild_filter(&self) -> bool {
         let _rebuilding = self.rebuilding.lock().await;
         let config = self.store.config();
         let lists = self.lists.clone();
@@ -79,14 +98,18 @@ impl Control {
             }
             Ok(Err(err)) => {
                 error!("{err:#}; keeping the current filter");
-                return;
+                self.set_build_error(Some(format!("cannot build the filter: {err:#}")));
+                return false;
             }
             Err(err) => {
                 error!(%err, "compiling the filter failed; keeping the current filter");
-                return;
+                self.set_build_error(Some(format!("building the filter failed: {err}")));
+                return false;
             }
         }
-        self.rebuild_policy();
+        if !self.rebuild_policy() {
+            return false;
+        }
         // Only now does the new filter answer queries.
         let filter = &self.compiled().filter;
         info!(
@@ -94,18 +117,25 @@ impl Control {
             memory_kib = filter.memory_bytes() / 1024,
             "filter ready"
         );
+        true
     }
 
     /// Recompiles the policy around the current filter, after groups,
     /// clients, schedules or settings changed.
-    pub fn rebuild_policy(&self) {
+    pub fn rebuild_policy(&self) -> bool {
         let config = self.store.config();
         match build_policy(&config, &self.compiled()) {
             Ok(policy) => {
                 self.state.replace(policy);
                 self.update_schedules();
+                self.set_build_error(None);
+                true
             }
-            Err(err) => error!(%err, "cannot apply the configuration; keeping the current policy"),
+            Err(err) => {
+                error!(%err, "cannot apply the configuration; keeping the current policy");
+                self.set_build_error(Some(format!("cannot apply the configuration: {err}")));
+                false
+            }
         }
     }
 

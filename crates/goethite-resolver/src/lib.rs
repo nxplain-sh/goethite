@@ -12,6 +12,7 @@ mod blocking;
 mod cache;
 mod cidr;
 mod forward;
+mod guard;
 mod policy;
 mod rebinding;
 mod safe_search;
@@ -19,9 +20,10 @@ mod tls;
 
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use goethite_filter::{Action, Match, Sources, Verdict};
-use tracing::debug;
+use tracing::{debug, error};
 
 use goethite_proto::{
     Edns, Name, NameError, Query, Question, Record, RecordClass, RecordType, Response, ResponseCode,
@@ -34,6 +36,7 @@ pub use forward::{
     Forwarder, ForwarderConfig, ForwarderError, MAX_UPSTREAMS, Transport, UpstreamConfig,
     UpstreamStatus,
 };
+pub use guard::FailMode;
 pub use policy::{
     ClientPolicy, GroupPolicy, MAX_SCHEDULES, Policy, PolicyError, PolicyParts, PolicyState,
     ScheduledSources,
@@ -153,6 +156,8 @@ pub struct Resolver {
     rebinding: Option<RebindingProtection>,
     cache: Option<Cache>,
     forwarder: Option<Forwarder>,
+    fail_mode: FailMode,
+    filter_failures: AtomicU64,
 }
 
 impl Resolver {
@@ -165,6 +170,51 @@ impl Resolver {
             rebinding: None,
             cache: None,
             forwarder: None,
+            fail_mode: FailMode::Open,
+            filter_failures: AtomicU64::new(0),
+        }
+    }
+
+    /// What to do with a query when filtering it fails (open by default).
+    #[must_use]
+    pub fn with_fail_mode(mut self, mode: FailMode) -> Self {
+        self.fail_mode = mode;
+        self
+    }
+
+    /// How many times filtering a query failed. Anything above zero is a
+    /// bug worth reporting.
+    pub fn filter_failures(&self) -> u64 {
+        self.filter_failures.load(Ordering::Relaxed)
+    }
+
+    /// The filter's verdict on `name`, or `None` if checking failed.
+    fn check(policy: &Policy, name: &Name, sources: Sources) -> Option<Verdict> {
+        guard::guarded(|| policy.filter().check(name, sources))
+    }
+
+    /// Counts a failed filter check on `query`. Returns the answer in
+    /// closed mode (SERVFAIL); in open mode the query goes on unfiltered.
+    fn filter_failed(&self, query: &Query) -> Option<(Response, Outcome, Option<FilterHit>)> {
+        let count = self
+            .filter_failures
+            .fetch_add(1, Ordering::Relaxed)
+            .saturating_add(1);
+        if guard::worth_logging(count) {
+            error!(
+                failures = count,
+                mode = ?self.fail_mode,
+                name = %query.question.name,
+                "filtering a query failed, which is a bug; please report it"
+            );
+        }
+        match self.fail_mode {
+            FailMode::Open => None,
+            FailMode::Closed => Some((
+                Response::for_query(query, ResponseCode::SERV_FAIL),
+                Outcome::Failed,
+                None,
+            )),
         }
     }
 
@@ -288,15 +338,20 @@ impl Resolver {
         }
         let mut exception = None;
         if let (true, Some(policy)) = (asker.filtering, &asker.policy) {
-            match policy.filter().check(&question.name, asker.sources) {
-                Verdict::Blocked(matched) => {
+            match Self::check(policy, &question.name, asker.sources) {
+                Some(Verdict::Blocked(matched)) => {
                     debug!(name = %question.name, qtype = %question.qtype, "blocked");
                     return blocked(query, policy, matched, None);
                 }
-                Verdict::Allowed(matched) => {
+                Some(Verdict::Allowed(matched)) => {
                     exception = Some(hit(policy, Action::Allow, matched, None));
                 }
-                Verdict::Pass => {}
+                Some(Verdict::Pass) => {}
+                None => {
+                    if let Some(answer) = self.filter_failed(query) {
+                        return answer;
+                    }
+                }
             }
         }
         if self.forwarder.is_none() {
@@ -315,12 +370,17 @@ impl Resolver {
         if let (true, None, Some(policy)) = (asker.filtering, &exception, &asker.policy) {
             let targets = response.answers.iter().filter_map(Record::cname_target);
             for target in targets.take(MAX_CNAME_CHAIN) {
-                match policy.filter().check(&target, asker.sources) {
-                    Verdict::Blocked(matched) => {
+                match Self::check(policy, &target, asker.sources) {
+                    Some(Verdict::Blocked(matched)) => {
                         debug!(name = %question.name, cname = %target, "blocked through a CNAME");
                         return blocked(query, policy, matched, Some(target));
                     }
-                    Verdict::Allowed(_) | Verdict::Pass => {}
+                    Some(Verdict::Allowed(_) | Verdict::Pass) => {}
+                    None => {
+                        if let Some(answer) = self.filter_failed(query) {
+                            return answer;
+                        }
+                    }
                 }
             }
         }
@@ -491,6 +551,23 @@ mod tests {
                 dnssec_ok: false,
             }),
         }
+    }
+
+    #[test]
+    fn a_failed_filter_check_fails_open_or_closed() {
+        let query = query("ads.example.", RecordType::A, RecordClass::IN);
+        let open = resolver();
+        assert!(
+            open.filter_failed(&query).is_none(),
+            "open: the query goes on"
+        );
+        assert_eq!(open.filter_failures(), 1);
+        let closed = resolver().with_fail_mode(FailMode::Closed);
+        let (response, outcome, hit) = closed.filter_failed(&query).unwrap();
+        assert_eq!(response.rcode, ResponseCode::SERV_FAIL);
+        assert_eq!((outcome, hit), (Outcome::Failed, None));
+        closed.filter_failed(&query);
+        assert_eq!(closed.filter_failures(), 2);
     }
 
     /// Resolves without a runtime: the paths tested here never wait.

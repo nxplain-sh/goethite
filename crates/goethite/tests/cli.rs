@@ -418,6 +418,50 @@ mod serving {
         assert!(server.wait_for_exit().success());
     }
 
+    #[test]
+    fn a_broken_store_fails_open_or_closed() {
+        let store = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("broken-store.redb");
+        let garbage = b"this is not a redb database, and it must survive".repeat(100);
+        std::fs::write(&store, &garbage).unwrap();
+        let config = format!(
+            "[server]\nlisten = \"127.0.0.1:0\"\n\n[[upstream]]\naddress = \"{}\"\n\n\
+             [filter]\nrules = [\"||ads.example^\"]\n\n[store]\npath = {:?}\n",
+            upstream(),
+            store.display().to_string()
+        );
+
+        // Open (the default): it answers, filtering by the config file.
+        let mut server = Running::start_config("broken_store_open", &config);
+        server.wait_for_log("temporary store in memory");
+        let udp = field(&server.wait_for_log(DNS_LISTENING), "udp");
+        assert_eq!(
+            ask(udp, "ads.example.").answers[0].data,
+            RData::A(A(Ipv4Addr::UNSPECIFIED))
+        );
+        assert_eq!(
+            ask(udp, "popup.example.").answers[0].data,
+            RData::A(A(Ipv4Addr::new(192, 0, 2, 53)))
+        );
+        server.signal("TERM");
+        assert!(server.wait_for_exit().success());
+        assert_eq!(
+            std::fs::read(&store).unwrap(),
+            garbage,
+            "the file is left alone"
+        );
+
+        // Closed: it refuses to start.
+        let closed = config.replace("[filter]\n", "[filter]\non_failure = \"closed\"\n");
+        let path = config_file(
+            "broken_store_closed",
+            &format!("{closed}\n[api]\nlisten = \"127.0.0.1:0\"\n"),
+        );
+        let output = super::goethite(&["run", "--config", path.to_str().unwrap()]);
+        assert!(!output.status.success());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("cannot open the store"), "{stderr}");
+    }
+
     /// The value of `key` in `/proc/<pid>/status`.
     #[cfg(target_os = "linux")]
     fn proc_status(pid: u32, key: &str) -> String {

@@ -72,6 +72,7 @@ impl Control for FakeControl {
                 dropped: 0,
             },
             cluster: None,
+            problems: Vec::new(),
         }
     }
 

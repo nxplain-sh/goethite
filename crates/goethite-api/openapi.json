@@ -3499,6 +3499,13 @@
             "format": "date-time",
             "description": "Until when filtering is paused, if it is."
           },
+          "problems": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "What is wrong with this node, in words, such as filtering running\nwithout its store. Empty when all is well."
+          },
           "protection": {
             "type": "boolean",
             "description": "Whether filtering is on in the settings."

@@ -1078,6 +1078,11 @@ export interface components {
              * @description Until when filtering is paused, if it is.
              */
             paused_until?: string | null;
+            /**
+             * @description What is wrong with this node, in words, such as filtering running
+             *     without its store. Empty when all is well.
+             */
+            problems?: string[];
             /** @description Whether filtering is on in the settings. */
             protection: boolean;
             /** @description The query log. */

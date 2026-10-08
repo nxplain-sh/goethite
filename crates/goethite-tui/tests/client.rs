@@ -41,6 +41,7 @@ impl Control for Idle {
                 dropped: 0,
             },
             cluster: None,
+            problems: Vec::new(),
         }
     }
     fn apply(&self, _change: Change) -> BoxFuture<'_> {

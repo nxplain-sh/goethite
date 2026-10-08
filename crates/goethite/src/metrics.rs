@@ -84,6 +84,10 @@ pub struct Sources<'a> {
     pub protection: (bool, bool),
     /// Query log events dropped because the writer could not keep up.
     pub querylog_dropped: u64,
+    /// Queries whose filtering failed.
+    pub filter_failures: u64,
+    /// Whether the node reports problems.
+    pub degraded: bool,
 }
 
 /// Text in the exposition format.
@@ -276,6 +280,18 @@ fn state(out: &mut Out, sources: &Sources<'_>) {
         "Query log events dropped because the writer could not keep up.",
         sources.querylog_dropped,
     );
+    out.single(
+        "goethite_filter_failures_total",
+        "counter",
+        "Queries whose filtering failed (a bug), answered as [filter] on_failure says.",
+        sources.filter_failures,
+    );
+    out.single(
+        "goethite_degraded",
+        "gauge",
+        "1 while the node reports problems (see /api/v1/status).",
+        u8::from(sources.degraded),
+    );
     out.family("goethite_build_info", "gauge", "The running version.");
     out.sample(
         "goethite_build_info",
@@ -368,6 +384,8 @@ mod tests {
             lists: (3, 2),
             protection: (true, false),
             querylog_dropped: 0,
+            filter_failures: 0,
+            degraded: false,
         });
         for line in [
             "goethite_queries_total{outcome=\"blocked\",protocol=\"udp\"} 1",

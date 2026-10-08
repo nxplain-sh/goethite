@@ -189,6 +189,8 @@ struct Prepared {
     api_listeners: Option<ApiListeners>,
     api_tls: Option<Arc<rustls::ServerConfig>>,
     store: Arc<Store>,
+    /// Why the store file is not in use, if it is not.
+    store_problem: Option<String>,
     query_log: Arc<goethite_store::QueryLog>,
     cluster: Option<cluster::Prepared>,
 }
@@ -231,7 +233,8 @@ fn prepare(config: &Config, config_path: &Path) -> Result<Prepared> {
     };
     let cluster = config.cluster.as_ref().map(cluster::prepare).transpose()?;
     privileges::drop_privileges(account.as_ref())?;
-    let store = Arc::new(open_store(config)?);
+    let (store, store_problem) = open_store_or_fall_back(config)?;
+    let store = Arc::new(store);
     seed(&store, config, config_path)?;
     let upstream_names = config
         .upstream
@@ -248,6 +251,7 @@ fn prepare(config: &Config, config_path: &Path) -> Result<Prepared> {
         api_listeners,
         api_tls,
         store,
+        store_problem,
         query_log,
         cluster,
     })
@@ -270,7 +274,8 @@ fn resolver(config: &Config, state: &Arc<PolicyState>) -> Result<Resolver> {
     let mut resolver = Resolver::new(vec![test_record()?])
         .with_cache(cache)
         .with_forwarder(forwarder)
-        .with_policy(Arc::clone(state));
+        .with_policy(Arc::clone(state))
+        .with_fail_mode(config.filter.on_failure.mode());
     if let Some(protection) = config.security.rebinding_protection()? {
         resolver = resolver.with_rebinding_protection(protection);
     } else {
@@ -293,7 +298,15 @@ async fn serve(config: &Config, prepared: Prepared) -> Result<()> {
     let resolver = Arc::new(resolver(config, &state)?);
     let control = Control::new(prepared.store, state, ListStore::new(config.lists_dir()));
     // Filter from the first query on, with the lists already on disk.
-    control.rebuild_filter().await;
+    if !control.rebuild_filter().await {
+        if config.filter.on_failure == config::OnFailure::Closed {
+            anyhow::bail!(
+                "the filter cannot be built ({}), and [filter] on_failure is \"closed\": not starting",
+                control.build_error().unwrap_or_default()
+            );
+        }
+        warn!("starting without filtering: [filter] on_failure is \"open\"");
+    }
     if !control.store().config().settings.spec.protection {
         info!("filtering is turned off in the settings");
     }
@@ -324,6 +337,7 @@ async fn serve(config: &Config, prepared: Prepared) -> Result<()> {
         log: Arc::clone(&prepared.query_log),
         querylog_enabled: config.querylog.enabled,
         started,
+        store_problem: prepared.store_problem,
         cluster: cluster.clone(),
     };
     // The API exists even when it is not served: the primary runs the
@@ -480,6 +494,35 @@ fn check_config(config_path: &Path) -> Result<()> {
 }
 
 /// Opens the store, creating its directory if needed.
+/// The store, or, if its file cannot be used and filtering fails open, a
+/// store in memory with the reason. A store locked by another goethite is
+/// never worked around: that one is answering already.
+fn open_store_or_fall_back(config: &Config) -> Result<(Store, Option<String>)> {
+    let err = match open_store(config) {
+        Ok(store) => return Ok((store, None)),
+        Err(err) => err,
+    };
+    let locked = matches!(
+        err.downcast_ref::<goethite_store::StoreError>(),
+        Some(goethite_store::StoreError::Locked(_))
+    );
+    if locked || config.filter.on_failure == config::OnFailure::Closed {
+        return Err(err);
+    }
+    error!(
+        "{err:#}; running on a temporary store in memory, seeded from the config file, \
+         until the file is fixed and goethite restarted ([filter] on_failure is \"open\")"
+    );
+    let store = Store::open_in_memory().context("cannot create a store in memory")?;
+    Ok((
+        store,
+        Some(format!(
+            "{err:#}: running on a temporary store in memory, seeded from the config file; \
+             changes are lost when goethite stops"
+        )),
+    ))
+}
+
 fn open_store(config: &Config) -> Result<Store> {
     let path = config.store_path();
     if let Some(dir) = path.parent() {

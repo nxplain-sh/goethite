@@ -19,6 +19,12 @@ configuration format.
   unreachable, they are refused rather than lost. `GET /api/v1/cluster` (and `cluster` in
   `/api/v1/status`) reports both nodes, sync state and problems such as two primaries.
   `POST /api/v1/cluster/promote` and `/demote` change roles; a promoted role survives restarts.
+- **Fail open.** If the store cannot be opened, goethite runs on a temporary one in memory seeded
+  from the config file; if the filter cannot be built it starts unfiltered; if checking a name
+  fails, the query is answered unfiltered. Each case is reported in `problems` of
+  `/api/v1/status`, in the TUI and web UI, and in the metrics (`goethite_degraded`,
+  `goethite_filter_failures_total`). `[filter] on_failure = "closed"` refuses to start or
+  answers SERVFAIL instead.
 - **Cluster statistics.** `GET /api/v1/stats?scope=cluster` adds up both nodes' counts and
   merges their top lists, naming any node it could not ask. The TUI and the web UI show the
   cluster's statistics and state.

@@ -165,6 +165,10 @@ pub struct Status {
     /// This node's cluster, if it is in one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cluster: Option<ClusterStatus>,
+    /// What is wrong with this node, in words, such as filtering running
+    /// without its store. Empty when all is well.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub problems: Vec<String>,
 }
 
 /// The compiled filter.

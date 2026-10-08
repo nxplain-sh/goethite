@@ -514,6 +514,25 @@ impl Store {
             DatabaseError::DatabaseAlreadyOpen => StoreError::Locked(path.to_path_buf()),
             other => StoreError::Database(other.into()),
         })?;
+        Self::init(path.to_path_buf(), db)
+    }
+
+    /// A store that lives in memory, for when the database file cannot be
+    /// used: everything works, and everything is lost when goethite stops.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn open_in_memory() -> Result<Self, StoreError> {
+        let db = redb::Builder::new()
+            .create_with_backend(redb::backends::InMemoryBackend::new())
+            .map_err(|err| StoreError::Database(err.into()))?;
+        Self::init(PathBuf::from("(in memory)"), db)
+    }
+
+    /// Creates the tables a new database needs and loads the
+    /// configuration.
+    fn init(path: PathBuf, db: Database) -> Result<Self, StoreError> {
         let now = Timestamp::now();
         let tx = db.begin_write()?;
         let version;
@@ -569,7 +588,7 @@ impl Store {
         }
         let (changes, _) = watch::channel(version);
         Ok(Self {
-            path: path.to_path_buf(),
+            path,
             db,
             current: RwLock::new(Current {
                 config: Arc::new(config),
@@ -1751,6 +1770,18 @@ mod tests {
         assert_eq!(audit[0].action, AuditAction::Replicate);
         assert_eq!(audit[0].actor.kind, ActorKind::Replication);
         assert_eq!(audit[0].actor.node.as_deref(), Some("dns1"));
+    }
+
+    #[test]
+    fn a_store_in_memory_works_like_a_file() {
+        let store = Store::open_in_memory().unwrap();
+        assert_eq!(store.config().groups[0].id, DEFAULT_GROUP);
+        store
+            .create::<Rule>(rule("||ads.example^"), &api())
+            .unwrap();
+        assert_eq!(store.config().rules.len(), 1);
+        assert_eq!(store.version().version, 1);
+        assert_eq!(store.audit(None, 10).unwrap().len(), 1);
     }
 
     #[test]

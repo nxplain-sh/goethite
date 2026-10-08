@@ -35,6 +35,24 @@ pub struct Node {
     pub started: Timestamp,
     /// This node's cluster, if it is in one.
     pub cluster: Option<Arc<Cluster>>,
+    /// Why the store file is not in use, if it is not.
+    pub store_problem: Option<String>,
+}
+
+impl Node {
+    /// What is wrong with this node, in words, for people to look at.
+    fn problems(&self) -> Vec<String> {
+        let mut problems: Vec<String> = self.store_problem.iter().cloned().collect();
+        problems.extend(self.control.build_error());
+        let failures = self.resolver.filter_failures();
+        if failures > 0 {
+            problems.push(format!(
+                "filtering a query failed {failures} times, which is a bug: please report it \
+                 (with the log); those queries were answered as [filter] on_failure says"
+            ));
+        }
+        problems
+    }
 }
 
 fn as_u64(value: usize) -> u64 {
@@ -113,14 +131,19 @@ impl goethite_api::Control for Node {
                 dropped: self.log.dropped(),
             },
             cluster: self.cluster.as_ref().map(|cluster| cluster.status()),
+            problems: self.problems(),
         }
     }
 
     fn apply(&self, change: Change) -> BoxFuture<'_> {
         Box::pin(async move {
             match change {
-                Change::Filter => self.control.rebuild_filter().await,
-                Change::Policy => self.control.rebuild_policy(),
+                Change::Filter => {
+                    self.control.rebuild_filter().await;
+                }
+                Change::Policy => {
+                    self.control.rebuild_policy();
+                }
             }
         })
     }
@@ -210,6 +233,8 @@ impl goethite_api::Control for Node {
                 self.control.state().paused_until().is_some(),
             ),
             querylog_dropped: self.log.dropped(),
+            filter_failures: self.resolver.filter_failures(),
+            degraded: !self.problems().is_empty(),
         })
     }
 }

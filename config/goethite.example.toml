@@ -123,6 +123,10 @@ rules = [
 # state directory (see [store]).
 cache_dir = "lists"
 update_hours = 24            # how often url lists are refreshed (1 to 168)
+# What to do when filtering fails (a broken store or filter): "open" keeps
+# resolving, unfiltered if need be, and reports it; "closed" refuses to
+# start or answers SERVFAIL.
+on_failure = "open"
 
 # A list from a local file:
 #
