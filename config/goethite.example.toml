@@ -93,6 +93,11 @@ max_ttl = 86400           # ... and at most this long (at most one week)
 max_negative_ttl = 3600   # NXDOMAIN and NODATA at most this long (at most one day)
 
 [filter]
+# Filtering lives in goethite's store (see [store] below), where the API can
+# change it. This table only seeds the store on the first start: after that
+# the store is the source of truth, and edits here are reported but not
+# applied until you stop goethite and run `goethite import --config <file>`.
+#
 # Blocking. Rules come from list files and from `rules` below; hosts files,
 # plain domain lists and the core AdGuard syntax are all understood, mixed
 # freely:
@@ -114,7 +119,8 @@ rules = [
 ]
 
 # Downloaded lists are kept here (relative paths are relative to this file),
-# so goethite starts with them even when offline. Required for url lists.
+# so goethite starts with them even when offline. Defaults to "lists" in the
+# state directory (see [store]).
 cache_dir = "lists"
 update_hours = 24            # how often url lists are refreshed (1 to 168)
 
@@ -135,3 +141,11 @@ update_hours = 24            # how often url lists are refreshed (1 to 168)
 # goethite itself. These are the defaults.
 rebinding_protection = true
 private_domains = ["lan", "home.arpa", "internal", "local"]
+
+[store]
+# goethite's database: the filtering configuration (lists, rules, groups,
+# clients, schedules) and the audit log of every change. It defaults to
+# goethite.redb in the state directory: systemd's StateDirectory
+# (/var/lib/goethite with the unit in dist/systemd), otherwise the directory
+# of this file. Only one goethite process can use it at a time.
+# path = "/var/lib/goethite/goethite.redb"

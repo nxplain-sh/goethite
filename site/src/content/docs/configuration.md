@@ -70,13 +70,20 @@ operating system's store. Each query has 2 seconds per upstream and 4 seconds in
 
 See [Filtering](../filtering/) for the rule syntax.
 
+Filtering configuration lives in goethite's [store](#store), where the API changes it. This table
+**seeds the store on the first start** and is then only read by `goethite import`: the store is the
+source of truth, so if the table changes later, goethite logs a warning and keeps what the store
+says. To apply the table again, stop goethite and run `goethite import --config <file>`, which
+replaces the lists and rules that came from the config file and keeps those created through the
+API.
+
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `enabled` | `true` | Whether filtering is on. |
+| `enabled` | `true` | Whether filtering is on (the `protection` setting in the store). |
 | `block_response` | `"null_ip"` | How blocked names are answered: `"null_ip"` (`0.0.0.0` / `::`), `"nxdomain"` or `"refused"`. |
 | `blocked_ttl` | `10` | TTL of the null-IP answers, in seconds (at most one day). |
 | `rules` | `[]` | Rules written into the config, at most 10,000. Each must be a supported rule; anything else is an error. |
-| `cache_dir` | unset | Where downloaded lists are kept. Required if a list has a `url`. Relative paths are relative to the config file. |
+| `cache_dir` | `lists` in the state directory | Where downloaded lists are kept. Relative paths are relative to the config file. This one is read on every start. |
 | `update_hours` | `24` | How often downloaded lists are refreshed, 1 to 168 hours, with up to 10% random delay. |
 
 ### `[[filter.list]]`
@@ -89,6 +96,16 @@ Up to 63 lists, each with exactly one of:
 | `url` | An `https://` URL. The list is downloaded at startup and every `update_hours`, checked, and kept in `cache_dir`, so goethite starts with the last good copy when offline. |
 
 Lists may be at most 128 MiB.
+
+## `[store]`
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `path` | `goethite.redb` in the state directory | goethite's database: lists, rules, groups, clients, schedules, settings and the audit log. Relative paths are relative to the config file. |
+
+The state directory is systemd's `StateDirectory` (`/var/lib/goethite` with the
+[shipped unit](../install/)) or, without it, the config file's directory. The file is created
+readable by goethite's user only, and only one goethite process can open it at a time.
 
 ## `[security]`
 

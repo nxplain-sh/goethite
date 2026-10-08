@@ -10,5 +10,18 @@ homepage.workspace = true
 authors.workspace = true
 publish.workspace = true
 
+[dependencies]
+goethite-filter.workspace = true
+goethite-proto.workspace = true
+goethite-resolver.workspace = true
+jiff.workspace = true
+rand.workspace = true
+redb.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+utoipa.workspace = true
+
 [lints]
 workspace = true

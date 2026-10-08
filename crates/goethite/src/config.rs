@@ -15,11 +15,14 @@ use anyhow::{Context, Result, bail};
 use goethite_filter::{LineKind, parse_line};
 use goethite_proto::Name;
 use goethite_resolver::{
-    BlockResponse, CacheConfig, DEFAULT_PRIVATE_DOMAINS, MAX_ENTRIES, MAX_UPSTREAMS,
-    RebindingProtection, Transport, UpstreamConfig,
+    CacheConfig, DEFAULT_PRIVATE_DOMAINS, MAX_ENTRIES, MAX_UPSTREAMS, RebindingProtection,
+    Transport, UpstreamConfig,
 };
 use goethite_server::{
     MAX_LISTEN_ADDRESSES, MAX_RATE_LIMITED_CLIENTS, MAX_UDP_SOCKETS, RateLimitConfig, ServerConfig,
+};
+use goethite_store::{
+    BlockResponseKind, Import, ListSpec, ManagedBy, RuleSpec, SettingsSpec, model::MAX_NAME_LEN,
 };
 use serde::de::{self, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer};
@@ -46,6 +49,53 @@ pub struct Config {
     /// The `[security]` table.
     #[serde(default)]
     pub security: SecuritySection,
+    /// The `[store]` table.
+    #[serde(default)]
+    pub store: StoreSection,
+    /// The absolute directory of the config file, which relative paths are
+    /// relative to. Set by [`Config::load`].
+    #[serde(skip)]
+    pub dir: PathBuf,
+}
+
+/// The `[store]` table.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, default)]
+pub struct StoreSection {
+    /// The database file. Defaults to `goethite.redb` in the state
+    /// directory.
+    pub path: Option<PathBuf>,
+}
+
+impl Config {
+    /// Where goethite keeps its state: systemd's `STATE_DIRECTORY` (the
+    /// unit's `StateDirectory=`) if set, otherwise the config file's
+    /// directory.
+    pub fn state_dir(&self) -> PathBuf {
+        std::env::var_os("STATE_DIRECTORY")
+            .and_then(|dirs| {
+                std::env::split_paths(&dirs)
+                    .next()
+                    .filter(|dir| dir.is_absolute())
+            })
+            .unwrap_or_else(|| self.dir.clone())
+    }
+
+    /// The store's database file.
+    pub fn store_path(&self) -> PathBuf {
+        self.store
+            .path
+            .clone()
+            .unwrap_or_else(|| self.state_dir().join("goethite.redb"))
+    }
+
+    /// Where downloaded lists are kept.
+    pub fn lists_dir(&self) -> PathBuf {
+        self.filter
+            .cache_dir
+            .clone()
+            .unwrap_or_else(|| self.state_dir().join("lists"))
+    }
 }
 
 /// The `[security]` table.
@@ -183,10 +233,63 @@ impl FilterSection {
                 (Some(_), None) => {}
             }
         }
-        if self.cache_dir.is_none() && self.list.iter().any(|list| list.url.is_some()) {
-            bail!("filter.cache_dir is required to download lists from a url");
-        }
         Ok(())
+    }
+
+    /// The table as resources to import into the store: config rules and
+    /// lists become resources managed by the config file.
+    pub fn to_import(&self) -> Import {
+        let lists = self
+            .list
+            .iter()
+            .filter_map(|list| {
+                let (url, path) = match (&list.url, &list.path) {
+                    (Some(url), _) => (Some(url.clone()), None),
+                    (None, Some(path)) => (None, Some(path.display().to_string())),
+                    (None, None) => return None,
+                };
+                let name = url.clone().unwrap_or_else(|| {
+                    list.path
+                        .as_ref()
+                        .and_then(|path| path.file_name())
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_default()
+                });
+                Some(ListSpec {
+                    name: name.chars().take(MAX_NAME_LEN).collect(),
+                    url,
+                    path,
+                    enabled: true,
+                    comment: String::new(),
+                    managed_by: ManagedBy::ConfigFile,
+                })
+            })
+            .collect();
+        let rules = self
+            .rules
+            .iter()
+            .filter(|rule| matches!(parse_line(rule, |_| {}), LineKind::Rules(_)))
+            .map(|rule| RuleSpec {
+                rule: rule.clone(),
+                enabled: true,
+                comment: String::new(),
+                managed_by: ManagedBy::ConfigFile,
+            })
+            .collect();
+        Import {
+            settings: SettingsSpec {
+                protection: self.enabled,
+                block_response: match self.block_response {
+                    BlockResponseSetting::NullIp => BlockResponseKind::NullIp,
+                    BlockResponseSetting::Nxdomain => BlockResponseKind::Nxdomain,
+                    BlockResponseSetting::Refused => BlockResponseKind::Refused,
+                },
+                blocked_ttl: self.blocked_ttl,
+                list_update_hours: self.update_hours,
+            },
+            lists,
+            rules,
+        }
     }
 
     /// Makes relative paths relative to `base`, the config file's directory.
@@ -228,17 +331,6 @@ pub enum BlockResponseSetting {
     Nxdomain,
     /// `REFUSED`.
     Refused,
-}
-
-impl BlockResponseSetting {
-    /// The resolver's view of this setting.
-    pub fn to_block_response(self) -> BlockResponse {
-        match self {
-            Self::NullIp => BlockResponse::NullIp,
-            Self::Nxdomain => BlockResponse::NxDomain,
-            Self::Refused => BlockResponse::Refused,
-        }
-    }
 }
 
 /// The longest `max_ttl` accepted: one week.
@@ -670,8 +762,18 @@ impl Config {
             .and_then(|()| config.security.rebinding_protection().map(drop))
             .with_context(|| format!("invalid config file {}", path.display()))?;
         let mut config = config;
-        if let Some(base) = path.parent() {
-            config.filter.resolve_paths(base);
+        let base = path
+            .parent()
+            .filter(|dir| !dir.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        config.dir = std::path::absolute(base)
+            .with_context(|| format!("cannot resolve the directory of {}", path.display()))?;
+        let dir = config.dir.clone();
+        config.filter.resolve_paths(&dir);
+        if let Some(store) = &mut config.store.path
+            && store.is_relative()
+        {
+            *store = dir.join(&*store);
         }
         if config.upstream.len() > MAX_UPSTREAMS {
             bail!(
@@ -841,9 +943,20 @@ mod tests {
         )
         .unwrap();
         assert!(config.filter.enabled);
+        assert_eq!(config.filter.block_response, BlockResponseSetting::Nxdomain);
+        let import = config.filter.to_import();
+        assert_eq!(import.settings.block_response, BlockResponseKind::Nxdomain);
+        assert_eq!(import.rules.len(), 2);
+        assert_eq!(import.lists[0].name, "hosts.txt");
         assert_eq!(
-            config.filter.block_response.to_block_response(),
-            BlockResponse::NxDomain
+            import.lists[0].path.as_deref(),
+            Some("/var/lib/goethite/lists/hosts.txt")
+        );
+        assert!(
+            import
+                .lists
+                .iter()
+                .all(|l| l.managed_by == ManagedBy::ConfigFile)
         );
         assert_eq!(config.filter.blocked_ttl, 10);
         assert_eq!(config.filter.rules.len(), 2);
@@ -887,7 +1000,6 @@ mod tests {
         );
 
         for bad in [
-            "[[filter.list]]\nurl = \"https://lists.example/hosts\"",
             "[filter]\ncache_dir = \"c\"\n[[filter.list]]\nurl = \"http://lists.example/hosts\"",
             "[filter]\ncache_dir = \"c\"\n[[filter.list]]\nurl = \"https://x/\"\npath = \"y\"",
             "[filter]\ncache_dir = \"c\"\n[[filter.list]]",

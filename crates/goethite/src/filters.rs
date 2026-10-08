@@ -1,14 +1,16 @@
-//! Loading filter lists and keeping the compiled filter current.
+//! Compiling the filter from the store's lists and rules, and downloading
+//! lists.
 
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use goethite_filter::{Filter, FilterBuilder, ListStats, Source};
-use goethite_resolver::{Policy, PolicyState};
+use goethite_store::{ConfigSnapshot, List};
+use jiff::Timestamp;
 use tracing::{debug, error, info, warn};
 
 use crate::config::FilterSection;
@@ -18,77 +20,102 @@ use crate::lists::{ListStore, validate};
 /// List files and downloads larger than this many bytes are refused.
 pub const MAX_LIST_LEN: usize = 128 * 1024 * 1024;
 
-/// Reads the configured rules and lists and compiles them into a policy for
-/// startup: if compiling fails, nothing is blocked rather than nothing
-/// resolving.
-pub fn build(section: &FilterSection) -> Policy {
-    compile(section).unwrap_or_else(|| policy(section, Filter::empty(), Vec::new()))
+/// The ID of the source holding the custom rules.
+pub const CUSTOM_RULES: &str = "custom";
+
+/// How one list is doing, for logs and the API.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ListStatus {
+    /// What was read the last time the filter was compiled; `None` if the
+    /// list was not read (disabled, not downloaded yet, or unreadable).
+    pub stats: Option<ListStats>,
+    /// Why the list could not be read, if it could not.
+    pub error: Option<String>,
+    /// When a download was last tried.
+    pub last_attempt: Option<Timestamp>,
+    /// When a download last succeeded or found the list unchanged.
+    pub last_success: Option<Timestamp>,
+    /// Why the last download failed or was rejected, if it was.
+    pub download_error: Option<String>,
 }
 
-/// Reads the configured rules and lists and compiles them.
+/// A compiled filter, with what each source is.
+#[allow(
+    dead_code,
+    reason = "the API, in the next commit, reads the list statuses"
+)]
+pub struct Compiled {
+    /// The filter.
+    pub filter: Arc<Filter>,
+    /// Source `i`'s ID: [`CUSTOM_RULES`], then list IDs.
+    pub source_ids: Vec<Arc<str>>,
+    /// What was read from each list, by list ID.
+    pub lists: HashMap<String, ListStatus>,
+}
+
+impl Compiled {
+    /// No rules at all.
+    pub fn empty() -> Self {
+        Self {
+            filter: Arc::new(Filter::empty()),
+            source_ids: Vec::new(),
+            lists: HashMap::new(),
+        }
+    }
+
+    /// The source index of `id`, if it was compiled in.
+    pub fn source(&self, id: &str) -> Option<Source> {
+        self.source_ids
+            .iter()
+            .position(|source| &**source == id)
+            .and_then(Source::new)
+    }
+}
+
+/// Compiles the enabled custom rules (source 0) and enabled lists (one
+/// source each, in order). A list that cannot be read is logged, recorded in
+/// its status and skipped: filtering must never take resolution down.
 ///
-/// A list that cannot be read is logged and skipped rather than failing:
-/// filtering must never take resolution down. `None` if compiling failed.
-fn compile(section: &FilterSection) -> Option<Policy> {
-    match compile_lists(section, false) {
-        Ok((filter, ids)) => Some(policy(section, filter, ids)),
-        Err(err) => {
-            error!("{err:#}");
-            None
-        }
-    }
-}
-
-/// One group for everyone, using every source.
-fn policy(section: &FilterSection, filter: Filter, ids: Vec<Arc<str>>) -> Policy {
-    Policy::simple(
-        Arc::new(filter),
-        ids,
-        section.block_response.to_block_response(),
-        section.blocked_ttl,
-        section.enabled,
-    )
-}
-
-/// Reads and compiles the configured rules and lists like startup does, but
-/// fails on a list that cannot be read, for `goethite check-config`.
-pub fn check(section: &FilterSection) -> Result<()> {
-    compile_lists(section, true).map(drop)
-}
-
-/// Compiles the rules and lists; a list that cannot be read is an error if
-/// `strict`, and skipped otherwise. Returns the filter and each source's ID.
-fn compile_lists(section: &FilterSection, strict: bool) -> Result<(Filter, Vec<Arc<str>>)> {
+/// # Errors
+///
+/// Only if the FST cannot be built, which does not happen for parsed rules.
+pub fn compile(config: &ConfigSnapshot, lists: &ListStore) -> Result<Compiled> {
     let mut builder = FilterBuilder::new();
-    let mut ids: Vec<Arc<str>> = vec!["config".into()];
-    // Config rules are source 0, each list the next one. Every source
-    // applies to every client until groups exist.
-    let sources = (0..).map_while(Source::new);
-    let mut sources = sources.skip(1);
-    if !section.rules.is_empty()
-        && let Some(source) = Source::new(0)
+    let mut source_ids: Vec<Arc<str>> = vec![CUSTOM_RULES.into()];
+    let mut statuses = HashMap::new();
+    let rules: Vec<&str> = config
+        .rules
+        .iter()
+        .filter(|rule| rule.spec.enabled)
+        .map(|rule| rule.spec.rule.as_str())
+        .collect();
+    if let Some(source) = Source::new(0)
+        && !rules.is_empty()
     {
-        let stats = builder.add_list(source, &section.rules.join("\n"));
-        log_stats("config rules", stats);
+        log_stats("custom rules", builder.add_list(source, &rules.join("\n")));
     }
-    for (name, path) in list_files(section) {
-        let Some(source) = sources.next() else {
-            error!(list = %name, "too many filter lists; skipping this one");
+    for list in config.lists.iter().filter(|list| list.spec.enabled) {
+        let Some(source) = Source::new(source_ids.len()) else {
+            error!(list = %list.id, "too many filter lists; skipping this one");
             continue;
         };
-        ids.push(name.as_str().into());
-        let Some(path) = path else {
-            info!(list = %name, "not downloaded yet");
-            continue;
-        };
-        match read_list(&path) {
-            Ok(text) => {
-                let stats = builder.add_list(source, &text);
-                log_stats(&name, stats);
-            }
-            Err(err) if strict => return Err(err),
-            Err(err) => error!(list = %name, "{err:#}; skipping this list"),
+        source_ids.push(list.id.as_str().into());
+        let mut status = ListStatus::default();
+        match list_file(list, lists) {
+            None => info!(list = %list.spec.name, "not downloaded yet"),
+            Some(path) => match read_list(&path) {
+                Ok(text) => {
+                    let read = builder.add_list(source, &text);
+                    log_stats(&list.spec.name, read);
+                    status.stats = Some(read);
+                }
+                Err(err) => {
+                    error!(list = %list.spec.name, "{err:#}; skipping this list");
+                    status.error = Some(format!("{err:#}"));
+                }
+            },
         }
+        statuses.insert(list.id.clone(), status);
     }
     let filter = builder.build().context("cannot compile the filter")?;
     info!(
@@ -96,25 +123,52 @@ fn compile_lists(section: &FilterSection, strict: bool) -> Result<(Filter, Vec<A
         memory_kib = filter.memory_bytes() / 1024,
         "filter ready"
     );
-    Ok((filter, ids))
+    Ok(Compiled {
+        filter: Arc::new(filter),
+        source_ids,
+        lists: statuses,
+    })
 }
 
-/// Each configured list's source, for logs, and the file to read it from:
-/// its path, or the downloaded copy of its URL (`None` if not downloaded yet).
-fn list_files(section: &FilterSection) -> Vec<(String, Option<PathBuf>)> {
-    let store = section.cache_dir.clone().map(ListStore::new);
-    section
-        .list
-        .iter()
-        .filter_map(|list| match (&list.path, &list.url, &store) {
-            (Some(path), _, _) => Some((path.display().to_string(), Some(path.clone()))),
-            (None, Some(url), Some(store)) => {
-                let path = store.path_for(url);
-                Some((url.clone(), path.exists().then_some(path)))
-            }
-            _ => None,
-        })
-        .collect()
+/// The file `list` is read from: its path, or the downloaded copy of its URL
+/// (`None` if not downloaded yet).
+fn list_file(list: &List, lists: &ListStore) -> Option<PathBuf> {
+    match (&list.spec.path, &list.spec.url) {
+        (Some(path), _) => Some(PathBuf::from(path)),
+        (None, Some(url)) => Some(lists.path_for(url)).filter(|path| path.exists()),
+        (None, None) => None,
+    }
+}
+
+/// Reads and compiles the config file's rules and lists, for
+/// `goethite check-config`: a list file that cannot be read is an error.
+pub fn check(section: &FilterSection, lists: &ListStore) -> Result<()> {
+    let mut builder = FilterBuilder::new();
+    let source = Source::new(0).context("no filter source")?;
+    if !section.rules.is_empty() {
+        log_stats(
+            "config rules",
+            builder.add_list(source, &section.rules.join("\n")),
+        );
+    }
+    for list in &section.list {
+        let (name, path) = match (&list.path, &list.url) {
+            (Some(path), _) => (path.display().to_string(), Some(path.clone())),
+            (None, Some(url)) => (
+                url.clone(),
+                Some(lists.path_for(url)).filter(|p| p.exists()),
+            ),
+            (None, None) => continue,
+        };
+        let Some(path) = path else {
+            info!(list = %name, "not downloaded yet");
+            continue;
+        };
+        log_stats(&name, builder.add_list(source, &read_list(&path)?));
+    }
+    let filter = builder.build().context("cannot compile the filter")?;
+    info!(rules = filter.rule_count(), "filter ready");
+    Ok(())
 }
 
 fn log_stats(source: &str, stats: ListStats) {
@@ -150,134 +204,150 @@ fn read_list(path: &Path) -> Result<String> {
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
-/// Downloads every `url` list that changed, validating each before it
-/// replaces the last good copy. Returns whether anything changed.
-pub async fn update(section: &FilterSection, downloader: &Downloader) -> bool {
-    let Some(store) = section.cache_dir.clone().map(ListStore::new) else {
-        return false;
-    };
-    let mut changed = false;
-    for url in section.list.iter().filter_map(|list| list.url.clone()) {
-        let validators = store.validators(&url);
-        match downloader.fetch(&url, &validators).await {
-            Ok(Fetched::NotModified) => debug!(list = %url, "list unchanged"),
-            Ok(Fetched::Body { bytes, validators }) => {
-                let store = store.clone();
-                let saved = {
-                    let url = url.clone();
-                    tokio::task::spawn_blocking(move || {
-                        let stats = validate(&bytes)?;
-                        store.save(&url, &bytes, &validators)?;
-                        Ok::<_, anyhow::Error>(stats)
-                    })
-                    .await
-                };
-                match saved {
-                    Ok(Ok(stats)) => {
-                        info!(list = %url, rules = stats.rules, "list downloaded");
-                        changed = true;
-                    }
-                    Ok(Err(err)) => {
-                        warn!(list = %url, "download rejected: {err:#}; keeping the last good copy");
-                    }
-                    Err(err) => error!(list = %url, %err, "saving the list failed"),
+/// The outcome of one list download.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Downloaded {
+    /// A new copy was saved.
+    Changed,
+    /// The server says the copy we have is current.
+    Unchanged,
+    /// The download failed or was rejected; the last good copy stays.
+    Failed(String),
+}
+
+/// Downloads `url` into `lists` if it changed, validating it before it
+/// replaces the last good copy.
+pub async fn download(url: &str, lists: &ListStore, downloader: &Downloader) -> Downloaded {
+    let validators = lists.validators(url);
+    match downloader.fetch(url, &validators).await {
+        Ok(Fetched::NotModified) => {
+            debug!(list = %url, "list unchanged");
+            Downloaded::Unchanged
+        }
+        Ok(Fetched::Body { bytes, validators }) => {
+            let lists = lists.clone();
+            let owned = url.to_owned();
+            let saved = tokio::task::spawn_blocking(move || {
+                let stats = validate(&bytes)?;
+                lists.save(&owned, &bytes, &validators)?;
+                Ok::<_, anyhow::Error>(stats)
+            })
+            .await;
+            match saved {
+                Ok(Ok(stats)) => {
+                    info!(list = %url, rules = stats.rules, "list downloaded");
+                    Downloaded::Changed
+                }
+                Ok(Err(err)) => {
+                    warn!(list = %url, "download rejected: {err:#}; keeping the last good copy");
+                    Downloaded::Failed(format!("rejected: {err:#}"))
+                }
+                Err(err) => {
+                    error!(list = %url, %err, "saving the list failed");
+                    Downloaded::Failed(format!("saving failed: {err}"))
                 }
             }
-            Err(err) => {
-                warn!(list = %url, "cannot download: {err:#}; keeping the last good copy");
-            }
         }
-    }
-    changed
-}
-
-/// Downloads lists now and then every `update_hours` (with up to 10% random
-/// delay, so many installations do not hit list servers at once), and
-/// rebuilds the filter when one changed.
-pub fn spawn_updates(state: Arc<PolicyState>, section: FilterSection, downloader: Downloader) {
-    if !section.list.iter().any(|list| list.url.is_some()) {
-        return;
-    }
-    let interval = Duration::from_secs(u64::from(section.update_hours).saturating_mul(3600));
-    tokio::spawn(async move {
-        loop {
-            if update(&section, &downloader).await {
-                reload(&state, section.clone()).await;
-            }
-            let jitter = interval.mul_f64(rand::random::<f64>() * 0.1);
-            tokio::time::sleep(interval.saturating_add(jitter)).await;
+        Err(err) => {
+            warn!(list = %url, "cannot download: {err:#}; keeping the last good copy");
+            Downloaded::Failed(format!("{err:#}"))
         }
-    });
-}
-
-/// Rebuilds the filter from `section` off the async runtime and swaps it in.
-/// If compiling fails, the current filter stays.
-pub async fn reload(state: &Arc<PolicyState>, section: FilterSection) {
-    match tokio::task::spawn_blocking(move || compile(&section)).await {
-        Ok(Some(policy)) => state.replace(policy),
-        Ok(None) => error!("filter reload failed; keeping the current filter"),
-        Err(err) => error!(%err, "filter reload failed; keeping the current filter"),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use goethite_filter::Sources;
+    use goethite_store::{ListSpec, ManagedBy, Rule, RuleSpec};
 
     use super::*;
-    use crate::config::ListSection;
+
+    fn now() -> Timestamp {
+        Timestamp::now()
+    }
+
+    fn list(id: &str, path: Option<&Path>, url: Option<&str>, enabled: bool) -> List {
+        List {
+            id: id.into(),
+            revision: 1,
+            created_at: now(),
+            updated_at: now(),
+            spec: ListSpec {
+                name: id.into(),
+                url: url.map(Into::into),
+                path: path.map(|p| p.display().to_string()),
+                enabled,
+                comment: String::new(),
+                managed_by: ManagedBy::Api,
+            },
+        }
+    }
 
     #[test]
-    fn unreadable_lists_are_skipped() {
-        let dir = std::env::temp_dir().join(format!("goethite-lists-{}", std::process::id()));
+    fn compiles_rules_and_lists_as_sources() {
+        let dir = std::env::temp_dir().join(format!("goethite-compile-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let good = dir.join("good.txt");
         std::fs::write(&good, "0.0.0.0 ads.example\n").unwrap();
-        let section = FilterSection {
-            rules: vec!["||tracker.example^".into()],
-            list: vec![
-                ListSection {
-                    path: Some(good),
-                    url: None,
-                },
-                ListSection {
-                    path: Some(dir.join("missing.txt")),
-                    url: None,
-                },
-            ],
-            ..FilterSection::default()
-        };
-        let policy = build(&section);
-        let filter = policy.filter();
+        let mut config = ConfigSnapshot::empty(now());
+        config.rules.push(Rule {
+            id: "ru_1".into(),
+            revision: 1,
+            created_at: now(),
+            updated_at: now(),
+            spec: RuleSpec {
+                rule: "||tracker.example^".into(),
+                enabled: true,
+                comment: String::new(),
+                managed_by: ManagedBy::Api,
+            },
+        });
+        config.lists = vec![
+            list("li_good", Some(&good), None, true),
+            list("li_missing", Some(&dir.join("missing.txt")), None, true),
+            list("li_off", Some(&good), None, false),
+            list("li_url", None, Some("https://lists.example/x"), true),
+        ];
+        let compiled = compile(&config, &ListStore::new(dir.join("lists"))).unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
-        assert_eq!(filter.rule_count(), 2);
-        let blocked = |name: &str| {
-            filter
-                .check(&name.parse().unwrap(), Sources::ALL)
-                .is_blocked()
-        };
-        assert!(blocked("ads.example"));
-        assert!(blocked("x.tracker.example"));
+        assert_eq!(compiled.filter.rule_count(), 2);
+        let ids: Vec<&str> = compiled.source_ids.iter().map(|id| &**id).collect();
+        assert_eq!(ids, ["custom", "li_good", "li_missing", "li_url"]);
+        let only = |id: &str| Sources::NONE.with(compiled.source(id).unwrap());
+        let ads = "ads.example".parse().unwrap();
+        assert!(compiled.filter.check(&ads, only("li_good")).is_blocked());
+        assert!(!compiled.filter.check(&ads, only("custom")).is_blocked());
+        let tracker = "x.tracker.example".parse().unwrap();
+        assert!(compiled.filter.check(&tracker, only("custom")).is_blocked());
+        assert_eq!(compiled.lists["li_good"].stats.unwrap().rules, 1);
+        assert!(
+            compiled.lists["li_missing"]
+                .error
+                .as_ref()
+                .unwrap()
+                .contains("cannot open filter list")
+        );
+        assert_eq!(
+            compiled.lists["li_url"],
+            ListStatus::default(),
+            "not downloaded yet"
+        );
+        assert!(!compiled.lists.contains_key("li_off"));
     }
 
     #[test]
     fn checking_fails_on_unreadable_lists() {
         let section = FilterSection {
-            list: vec![ListSection {
+            list: vec![crate::config::ListSection {
                 path: Some(PathBuf::from("/nonexistent/goethite/list.txt")),
                 url: None,
             }],
             ..FilterSection::default()
         };
-        let err = check(&section).unwrap_err();
+        let err = check(&section, &ListStore::new(PathBuf::from("/nonexistent"))).unwrap_err();
         assert!(
             err.to_string().contains("cannot open filter list"),
             "{err:#}"
-        );
-        assert_eq!(
-            build(&section).filter().rule_count(),
-            0,
-            "startup skips it instead"
         );
     }
 
@@ -307,6 +377,7 @@ mod update_tests {
     use goethite_filter::{Sources, Verdict};
     use goethite_proto::Record;
     use goethite_resolver::{Resolver, TlsRoots, tls_client_config};
+    use goethite_store::{ListSpec, ManagedBy};
     use http_body_util::Full;
     use hyper::body::{Bytes, Incoming};
     use hyper::header::{ETAG, IF_NONE_MATCH, LOCATION};
@@ -319,14 +390,13 @@ mod update_tests {
     use tokio_rustls::TlsAcceptor;
 
     use super::*;
-    use crate::config::ListSection;
     use crate::download::Downloader;
 
     const CA: &[u8] = include_bytes!("../../goethite-resolver/tests/fixtures/ca.pem");
     const CERT: &[u8] = include_bytes!("../../goethite-resolver/tests/fixtures/server.pem");
     const KEY: &[u8] = include_bytes!("../../goethite-resolver/tests/fixtures/server.key");
 
-    struct List {
+    struct Served {
         body: Vec<u8>,
         etag: String,
         requests: usize,
@@ -336,7 +406,7 @@ mod update_tests {
     /// An HTTPS server for `dns.goethite.test` serving `/list` (with ETag
     /// revalidation), `/moved` (a redirect to it) and `/downgrade` (a
     /// redirect to http://). `alpn` picks HTTP/1.1 or HTTP/2.
-    async fn server(list: Arc<Mutex<List>>, alpn: &'static [u8]) -> SocketAddr {
+    async fn server(list: Arc<Mutex<Served>>, alpn: &'static [u8]) -> SocketAddr {
         let certs = vec![CertificateDer::from_pem_slice(CERT).unwrap()];
         let key = PrivateKeyDer::from_pem_slice(KEY).unwrap();
         let provider = Arc::new(rustls::crypto::ring::default_provider());
@@ -379,7 +449,7 @@ mod update_tests {
         addr
     }
 
-    fn respond(list: &Mutex<List>, request: &Request<Incoming>) -> Response<Full<Bytes>> {
+    fn respond(list: &Mutex<Served>, request: &Request<Incoming>) -> Response<Full<Bytes>> {
         let mut list = list.lock().unwrap();
         list.requests += 1;
         let builder = Response::builder();
@@ -419,26 +489,32 @@ mod update_tests {
         Downloader::new(Arc::new(resolver), tls, max_len)
     }
 
-    fn section(cache_dir: &Path, url: String) -> FilterSection {
-        FilterSection {
-            cache_dir: Some(cache_dir.to_path_buf()),
-            list: vec![ListSection {
+    /// The verdict for `name` with one URL list compiled from `lists`.
+    fn verdict(lists: &ListStore, url: &str, name: &str) -> Verdict {
+        let now = Timestamp::now();
+        let mut config = ConfigSnapshot::empty(now);
+        config.lists.push(List {
+            id: "li_test".into(),
+            revision: 1,
+            created_at: now,
+            updated_at: now,
+            spec: ListSpec {
+                name: "test".into(),
+                url: Some(url.into()),
                 path: None,
-                url: Some(url),
-            }],
-            ..FilterSection::default()
-        }
-    }
-
-    fn verdict(section: &FilterSection, name: &str) -> Verdict {
-        compile(section)
+                enabled: true,
+                comment: String::new(),
+                managed_by: ManagedBy::Api,
+            },
+        });
+        compile(&config, lists)
             .unwrap()
-            .filter()
+            .filter
             .check(&name.parse().unwrap(), Sources::ALL)
     }
 
     async fn download_cycle(alpn: &'static [u8]) {
-        let list = Arc::new(Mutex::new(List {
+        let list = Arc::new(Mutex::new(Served {
             body: b"0.0.0.0 ads.example\n".to_vec(),
             etag: "\"v1\"".into(),
             requests: 0,
@@ -450,20 +526,27 @@ mod update_tests {
             std::process::id(),
             String::from_utf8_lossy(alpn)
         ));
+        let lists = ListStore::new(cache_dir.clone());
         let base = format!("https://dns.goethite.test:{}", addr.port());
-        let section = section(&cache_dir, format!("{base}/list"));
+        let url = format!("{base}/list");
         let downloader = downloader(MAX_LIST_LEN);
 
         assert_eq!(
-            verdict(&section, "ads.example"),
+            verdict(&lists, &url, "ads.example"),
             Verdict::Pass,
             "nothing yet"
         );
-        assert!(update(&section, &downloader).await);
-        assert!(verdict(&section, "ads.example").is_blocked());
+        assert_eq!(
+            download(&url, &lists, &downloader).await,
+            Downloaded::Changed
+        );
+        assert!(verdict(&lists, &url, "ads.example").is_blocked());
 
         // Unchanged: revalidated with the ETag, nothing transferred.
-        assert!(!update(&section, &downloader).await);
+        assert_eq!(
+            download(&url, &lists, &downloader).await,
+            Downloaded::Unchanged
+        );
         assert_eq!(list.lock().unwrap().not_modified, 1);
 
         // An error page served with 200 is rejected; the old copy stays.
@@ -472,8 +555,12 @@ mod update_tests {
             list.body = b"<html><body>Service unavailable</body></html>\n".to_vec();
             list.etag = "\"v2\"".into();
         }
-        assert!(!update(&section, &downloader).await);
-        assert!(verdict(&section, "ads.example").is_blocked());
+        let rejected = download(&url, &lists, &downloader).await;
+        assert!(
+            matches!(rejected, Downloaded::Failed(ref why) if why.starts_with("rejected")),
+            "{rejected:?}"
+        );
+        assert!(verdict(&lists, &url, "ads.example").is_blocked());
 
         // A real update replaces it.
         {
@@ -481,25 +568,33 @@ mod update_tests {
             list.body = b"||new.example^\n".to_vec();
             list.etag = "\"v3\"".into();
         }
-        assert!(update(&section, &downloader).await);
-        assert!(verdict(&section, "x.new.example").is_blocked());
-        assert_eq!(verdict(&section, "ads.example"), Verdict::Pass);
+        assert_eq!(
+            download(&url, &lists, &downloader).await,
+            Downloaded::Changed
+        );
+        assert!(verdict(&lists, &url, "x.new.example").is_blocked());
+        assert_eq!(verdict(&lists, &url, "ads.example"), Verdict::Pass);
 
         // Redirects are followed, but never to http://.
-        let moved = section_for(&cache_dir.join("moved"), format!("{base}/moved"));
-        assert!(update(&moved, &downloader).await);
-        let downgrade = section_for(&cache_dir.join("downgrade"), format!("{base}/downgrade"));
-        assert!(!update(&downgrade, &downloader).await);
+        let moved = format!("{base}/moved");
+        assert_eq!(
+            download(&moved, &lists, &downloader).await,
+            Downloaded::Changed
+        );
+        let downgrade = format!("{base}/downgrade");
+        assert!(matches!(
+            download(&downgrade, &lists, &downloader).await,
+            Downloaded::Failed(_)
+        ));
 
         // Too large: refused.
-        let tiny = section_for(&cache_dir.join("tiny"), format!("{base}/list"));
-        assert!(!update(&tiny, &self::downloader(4)).await);
+        let tiny = ListStore::new(cache_dir.join("tiny"));
+        assert!(matches!(
+            download(&url, &tiny, &self::downloader(4)).await,
+            Downloaded::Failed(_)
+        ));
 
         std::fs::remove_dir_all(&cache_dir).unwrap();
-    }
-
-    fn section_for(cache_dir: &Path, url: String) -> FilterSection {
-        section(cache_dir, url)
     }
 
     #[tokio::test]

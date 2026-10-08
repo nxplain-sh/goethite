@@ -126,6 +126,7 @@ fn check_config_rejects_problems() {
 mod serving {
     use std::io::{BufRead, BufReader};
     use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
+    use std::path::PathBuf;
     use std::process::{Child, Command, Stdio};
     use std::str::FromStr;
     use std::sync::mpsc;
@@ -159,8 +160,20 @@ mod serving {
             )
         }
 
+        /// Starts goethite with `config`, plus a fresh store of its own
+        /// unless the config names one.
         fn start_config(test: &str, config: &str) -> Self {
-            let path = config_file(test, config);
+            let config = if config.contains("[store]") {
+                config.to_owned()
+            } else {
+                let store = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{test}.redb"));
+                let _ = std::fs::remove_file(&store);
+                format!(
+                    "{config}\n[store]\npath = {:?}\n",
+                    store.display().to_string()
+                )
+            };
+            let path = config_file(test, &config);
             let mut child = Command::new(BIN)
                 .args(["run", "--config", path.to_str().unwrap()])
                 .env("RUST_LOG", "info")
@@ -319,7 +332,7 @@ mod serving {
 
     #[test]
     fn blocks_listed_names_and_reloads_lists_on_sighup() {
-        let list = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("blocklist.txt");
+        let list = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("blocklist.txt");
         std::fs::write(&list, "0.0.0.0 ads.example\n").unwrap();
         let extra = format!(
             "\n[filter]\nrules = [\"||tracker.example^\"]\n\n[[filter.list]]\npath = {:?}\n",
@@ -391,9 +404,19 @@ mod serving {
             );
             return;
         }
+        // The store must be writable by nobody.
+        let state =
+            std::env::temp_dir().join(format!("goethite-switch-user-{}", std::process::id()));
+        std::fs::create_dir_all(&state).unwrap();
+        let status = Command::new("chown")
+            .args(["nobody", state.to_str().unwrap()])
+            .status()
+            .unwrap();
+        assert!(status.success());
         let config = format!(
-            "[server]\nlisten = \"127.0.0.1:0\"\nuser = \"nobody\"\n\n[[upstream]]\naddress = \"{}\"\n",
-            upstream()
+            "[server]\nlisten = \"127.0.0.1:0\"\nuser = \"nobody\"\n\n[[upstream]]\naddress = \"{}\"\n\n[store]\npath = {:?}\n",
+            upstream(),
+            state.join("goethite.redb").display().to_string()
         );
         let mut server = Running::start_config("switch_user", &config);
         let line = server.wait_for_log("dropped privileges");
@@ -408,6 +431,44 @@ mod serving {
         assert_eq!(proc_status(pid, "CapEff"), "0000000000000000");
         assert_eq!(proc_status(pid, "CapPrm"), "0000000000000000");
         assert_eq!(ask(udp, "goethite.test.").answers.len(), 1);
+    }
+
+    #[test]
+    fn import_needs_the_server_stopped() {
+        let store = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("import.redb");
+        let _ = std::fs::remove_file(&store);
+        let config = format!(
+            "[server]\nlisten = \"127.0.0.1:0\"\n\n[[upstream]]\naddress = \"{}\"\n\n\
+             [filter]\nrules = [\"||ads.example^\"]\n\n[store]\npath = {:?}\n",
+            upstream(),
+            store.display().to_string()
+        );
+        let path = config_file("import", &config);
+        let import = || {
+            Command::new(BIN)
+                .args(["import", "--config", path.to_str().unwrap()])
+                .env("RUST_LOG", "info")
+                .output()
+                .unwrap()
+        };
+        let first = import();
+        let log = String::from_utf8_lossy(&first.stderr);
+        assert!(first.status.success(), "{log}");
+        assert!(log.contains("rules_added=1"), "{log}");
+
+        let mut server = Running::start_config("import", &config);
+        server.wait_for_log("listening");
+        let refused = import();
+        let log = String::from_utf8_lossy(&refused.stderr);
+        assert!(!refused.status.success());
+        assert!(log.contains("in use by another goethite process"), "{log}");
+        server.signal("TERM");
+        assert!(server.wait_for_exit().success());
+
+        let again = import();
+        let log = String::from_utf8_lossy(&again.stderr);
+        assert!(again.status.success(), "{log}");
+        assert!(log.contains("rules_added=0"), "{log}");
     }
 
     #[test]

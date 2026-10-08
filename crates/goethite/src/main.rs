@@ -1,6 +1,7 @@
 //! The goethite binary: command-line interface, configuration and wiring.
 
 mod config;
+mod control;
 mod download;
 mod filters;
 mod lists;
@@ -19,11 +20,17 @@ use goethite_resolver::{
     tls_client_config,
 };
 use goethite_server::{Listeners, Server};
-use tracing::{error, info};
+use goethite_store::{Actor, Import, Store};
+use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::filter::LevelFilter;
 
 use crate::config::Config;
+use crate::control::Control;
+use crate::lists::ListStore;
+
+/// The `meta` key holding a fingerprint of the last imported `[filter]`.
+const IMPORTED_FILTER: &str = "imported_filter";
 
 /// A self-hosted, clustered, security-hardened DNS filtering resolver.
 #[derive(Debug, Parser)]
@@ -48,6 +55,14 @@ enum Command {
         #[arg(long, short, value_name = "PATH")]
         config: PathBuf,
     },
+    /// Import the `[filter]` table of the config file into the store,
+    /// replacing the lists and rules imported before. goethite must not be
+    /// running.
+    Import {
+        /// Path to the TOML configuration file.
+        #[arg(long, short, value_name = "PATH")]
+        config: PathBuf,
+    },
 }
 
 fn main() -> ExitCode {
@@ -56,6 +71,7 @@ fn main() -> ExitCode {
     let result = match cli.command {
         Command::Run { config } => run(&config),
         Command::CheckConfig { config } => check_config(&config),
+        Command::Import { config } => import(&config),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -108,6 +124,9 @@ fn run(config_path: &Path) -> Result<()> {
     // starts, so privileges can be dropped once the sockets exist.
     let listeners = Listeners::bind(&server_config)?;
     privileges::drop_privileges(account.as_ref())?;
+    // Opened as the user goethite runs as, so the files are its own.
+    let store = Arc::new(open_store(&config)?);
+    seed(&store, &config, config_path)?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -136,27 +155,20 @@ fn run(config_path: &Path) -> Result<()> {
         } else {
             info!("DNS rebinding protection is turned off");
         }
-        let mut policy_state = None;
-        if config.filter.enabled {
-            let section = config.filter.clone();
-            let policy = tokio::task::spawn_blocking(move || filters::build(&section))
-                .await
-                .context("building the filter failed")?;
-            let state = Arc::new(PolicyState::new(policy));
-            reload_on_hangup(Arc::clone(&state), config.filter.clone())?;
-            resolver = resolver.with_policy(Arc::clone(&state));
-            policy_state = Some(state);
-        } else {
-            resolver = resolver.with_policy(Arc::new(PolicyState::new(Policy::none())));
-            info!("filtering is turned off");
-        }
+        let state = Arc::new(PolicyState::new(Policy::none()));
+        resolver = resolver.with_policy(Arc::clone(&state));
         let resolver = Arc::new(resolver);
-        if let Some(state) = policy_state {
-            let tls = tls_client_config(&TlsRoots::Bundled, &[b"h2", b"http/1.1"])?;
-            let downloader =
-                download::Downloader::new(Arc::clone(&resolver), tls, filters::MAX_LIST_LEN);
-            filters::spawn_updates(state, config.filter.clone(), downloader);
+        let control = Control::new(store, state, ListStore::new(config.lists_dir()));
+        // Filter from the first query on, with the lists already on disk.
+        control.rebuild_filter().await;
+        if !control.store().config().settings.spec.protection {
+            info!("filtering is turned off in the settings");
         }
+        reload_on_hangup(Arc::clone(&control))?;
+        let tls = tls_client_config(&TlsRoots::Bundled, &[b"h2", b"http/1.1"])?;
+        let downloader =
+            download::Downloader::new(Arc::clone(&resolver), tls, filters::MAX_LIST_LEN);
+        control.spawn(downloader);
         let server = Server::new(listeners, server_config, Arc::clone(&resolver))?;
         server.run(shutdown).await?;
         Ok(())
@@ -178,24 +190,96 @@ fn check_config(config_path: &Path) -> Result<()> {
         .collect();
     Forwarder::new(ForwarderConfig::new(upstreams))
         .context("invalid [[upstream]] configuration")?;
-    if config.filter.enabled {
-        filters::check(&config.filter)?;
-    }
+    filters::check(&config.filter, &ListStore::new(config.lists_dir()))?;
     info!(config = %config_path.display(), "configuration is valid");
     Ok(())
 }
 
-/// Rebuilds the filter from the list files on every SIGHUP. The config file
-/// itself is not re-read.
+/// Opens the store, creating its directory if needed.
+fn open_store(config: &Config) -> Result<Store> {
+    let path = config.store_path();
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)
+            .with_context(|| format!("cannot create the store directory {}", dir.display()))?;
+    }
+    let store = Store::open(&path).with_context(|| {
+        format!(
+            "cannot open the store {} (set [store] path to a writable file)",
+            path.display()
+        )
+    })?;
+    info!(path = %path.display(), "store");
+    Ok(store)
+}
+
+/// A stable fingerprint of an import, to notice when `[filter]` changes.
+fn fingerprint(import: &Import) -> Result<String> {
+    let bytes = serde_json::to_vec(&(&import.settings, &import.lists, &import.rules))?;
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in bytes {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    Ok(format!("{hash:016x}"))
+}
+
+/// Imports `[filter]` into a store that never had it imported. After that
+/// the store is the source of truth: a changed `[filter]` is only reported.
+fn seed(store: &Store, config: &Config, config_path: &Path) -> Result<()> {
+    let import = config.filter.to_import();
+    let print = fingerprint(&import)?;
+    match store.meta(IMPORTED_FILTER)? {
+        None => {
+            let summary = store
+                .import(import, &Actor::system())
+                .context("cannot import [filter] into the store")?;
+            store.set_meta(IMPORTED_FILTER, &print)?;
+            info!(
+                lists = summary.lists_added,
+                rules = summary.rules_added,
+                "seeded the store from [filter] in the config file"
+            );
+        }
+        Some(imported) if imported != print => warn!(
+            config = %config_path.display(),
+            "[filter] changed since it was imported, but the store is the source of truth, so \
+             the change is not applied; stop goethite and run `goethite import`, or use the API"
+        ),
+        Some(_) => {}
+    }
+    Ok(())
+}
+
+/// Imports `[filter]` into the store; goethite must not be running.
+fn import(config_path: &Path) -> Result<()> {
+    let config = Config::load(config_path)?;
+    let store = open_store(&config)?;
+    let import = config.filter.to_import();
+    let print = fingerprint(&import)?;
+    let summary = store.import(import, &Actor::cli())?;
+    store.set_meta(IMPORTED_FILTER, &print)?;
+    info!(
+        lists_added = summary.lists_added,
+        lists_updated = summary.lists_updated,
+        lists_removed = summary.lists_removed,
+        rules_added = summary.rules_added,
+        rules_removed = summary.rules_removed,
+        settings_changed = summary.settings_changed,
+        "imported [filter]"
+    );
+    Ok(())
+}
+
+/// Re-reads the list files and recompiles the filter on every SIGHUP.
 #[cfg(unix)]
-fn reload_on_hangup(state: Arc<PolicyState>, section: config::FilterSection) -> Result<()> {
+fn reload_on_hangup(control: Arc<Control>) -> Result<()> {
     use tokio::signal::unix::{SignalKind, signal};
 
     let mut hangup = signal(SignalKind::hangup()).context("cannot handle SIGHUP")?;
     tokio::spawn(async move {
         while hangup.recv().await.is_some() {
             info!("received SIGHUP, reloading filter lists");
-            filters::reload(&state, section.clone()).await;
+            control.rebuild_filter().await;
         }
     });
     Ok(())
@@ -207,7 +291,7 @@ fn reload_on_hangup(state: Arc<PolicyState>, section: config::FilterSection) -> 
     clippy::unnecessary_wraps,
     reason = "same signature as the Unix version"
 )]
-fn reload_on_hangup(_state: Arc<PolicyState>, _section: config::FilterSection) -> Result<()> {
+fn reload_on_hangup(_control: Arc<Control>) -> Result<()> {
     Ok(())
 }
 

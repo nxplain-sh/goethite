@@ -33,6 +33,18 @@ and invalid.
 
 ## Configuration
 
+Lists, rules and the filtering settings live in goethite's store, which the API (coming in this
+release series) edits. The `[filter]` table in the config file **seeds the store on the first
+start**; after that the store is the source of truth. If you edit `[filter]` later, goethite logs
+a warning and keeps the store as it is. To apply your edits, stop goethite and import them:
+
+```sh
+goethite import --config /etc/goethite/goethite.toml
+```
+
+Importing replaces the lists and rules that came from the config file, adds new lists to the
+default group, and updates the settings. Lists and rules created through the API stay.
+
 ```toml
 [filter]
 enabled = true
@@ -100,7 +112,7 @@ kill -HUP "$(pidof goethite)"
 The new rules are compiled in the background while queries keep using the old ones, then swapped
 in atomically. If compiling fails, the current filter stays. A list file that cannot be read is
 logged and skipped, so a missing list never stops resolution. The config file itself is not
-re-read; restart for config changes.
+re-read: restart for changes to node settings, and use `goethite import` for `[filter]`.
 
 ## Limits
 
