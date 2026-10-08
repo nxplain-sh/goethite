@@ -25,6 +25,7 @@ goethite-proto.workspace = true
 goethite-resolver.workspace = true
 goethite-server.workspace = true
 goethite-store.workspace = true
+goethite-tui.workspace = true
 jiff.workspace = true
 serde.workspace = true
 serde_json.workspace = true

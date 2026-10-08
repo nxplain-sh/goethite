@@ -5,7 +5,8 @@ description: Different filtering for different devices, at different times.
 
 By default everyone is in the **default group**, which uses every list imported from the config
 file plus the custom rules. To filter some devices differently, put them in a group of their own.
-All of this is configured through the [REST API](../api/), and soon the TUI and web UI.
+All of this is configured through the [REST API](../api/); the [terminal UI](../tui/) shows it
+and turns lists on and off.
 
 ## Groups
 

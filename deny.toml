@@ -40,6 +40,12 @@ confidence-threshold = 0.93
 crate = "webpki-roots"
 allow = ["CDLA-Permissive-2.0"]
 
+# foldhash is the hasher behind ratatui's layout solver (kasuari, via
+# hashbrown), under the permissive zlib license.
+[[licenses.exceptions]]
+crate = "foldhash"
+allow = ["Zlib"]
+
 # libfuzzer-sys bundles LLVM's libFuzzer (NCSA). It is only used by the fuzz
 # targets in fuzz/, which CI checks with --manifest-path, and never ships.
 [[licenses.exceptions]]

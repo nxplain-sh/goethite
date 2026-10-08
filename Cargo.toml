@@ -22,6 +22,7 @@ goethite-proto = { path = "crates/goethite-proto" }
 goethite-resolver = { path = "crates/goethite-resolver" }
 goethite-server = { path = "crates/goethite-server" }
 goethite-store = { path = "crates/goethite-store" }
+goethite-tui = { path = "crates/goethite-tui" }
 
 # External crates. Every addition must pass `cargo deny check` and be justified in the PR.
 anyhow = "1.0.104"
@@ -36,6 +37,7 @@ hyper = { version = "1.12.0", default-features = false, features = ["client", "h
 hyper-util = { version = "0.1.21", default-features = false, features = ["tokio"] }
 jiff = { version = "0.2.38", features = ["serde"] }
 proptest = "1.11.0"
+ratatui = { version = "0.30.2", default-features = false, features = ["crossterm_0_29", "layout-cache"] }
 rand = { version = "0.10.3", default-features = false, features = ["std", "thread_rng"] }
 redb = "4.3.0"
 ring = { version = "0.17.14", default-features = false }

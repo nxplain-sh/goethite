@@ -74,21 +74,48 @@ enum Command {
     Token,
     /// Print the API's OpenAPI document.
     Openapi,
+    /// Open the terminal UI for a goethite node, through its API.
+    Tui {
+        /// The API's address. Defaults to `GOETHITE_API`, then
+        /// `http://127.0.0.1:8053`.
+        #[arg(long, value_name = "URL")]
+        api: Option<String>,
+        /// A file holding the admin token. Without it, the `GOETHITE_TOKEN`
+        /// environment variable is used, if set.
+        #[arg(long, value_name = "PATH")]
+        token_file: Option<PathBuf>,
+        /// A PEM CA certificate, for a node that serves HTTPS with its own.
+        #[arg(long, value_name = "PATH")]
+        ca_file: Option<PathBuf>,
+    },
 }
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    init_logging();
+    // Log lines would garble the terminal UI.
+    let tui_mode = matches!(cli.command, Command::Tui { .. });
+    if !tui_mode {
+        init_logging();
+    }
     let result = match cli.command {
         Command::Run { config } => run(&config),
         Command::CheckConfig { config } => check_config(&config),
         Command::Import { config } => import(&config),
         Command::Token => token(),
         Command::Openapi => print(&goethite_api::openapi_json()),
+        Command::Tui {
+            api,
+            token_file,
+            ca_file,
+        } => tui(api, token_file.as_deref(), ca_file.as_deref()),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
+            if tui_mode {
+                // The terminal is restored by now.
+                init_logging();
+            }
             error!("{err:#}");
             ExitCode::FAILURE
         }
@@ -322,6 +349,36 @@ fn load_tls(cert: &Path, key: &Path) -> Result<Arc<rustls::ServerConfig>> {
         .context("the API certificate and key do not fit together")?;
     tls.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
     Ok(Arc::new(tls))
+}
+
+/// Runs the terminal UI.
+fn tui(api: Option<String>, token_file: Option<&Path>, ca_file: Option<&Path>) -> Result<()> {
+    let url = api
+        .or_else(|| std::env::var("GOETHITE_API").ok())
+        .unwrap_or_else(|| "http://127.0.0.1:8053".to_owned());
+    let token = match token_file {
+        Some(path) => Some(
+            std::fs::read_to_string(path)
+                .with_context(|| format!("cannot read the token file {}", path.display()))?
+                .trim()
+                .to_owned(),
+        ),
+        None => std::env::var("GOETHITE_TOKEN")
+            .ok()
+            .filter(|token| !token.is_empty()),
+    };
+    let ca = ca_file
+        .map(|path| {
+            std::fs::read(path)
+                .with_context(|| format!("cannot read the CA certificate {}", path.display()))
+        })
+        .transpose()?;
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .context("cannot start the async runtime")?;
+    runtime.block_on(goethite_tui::run(goethite_tui::Options { url, token, ca }))?;
+    Ok(())
 }
 
 /// Prints a new admin token and its hash.

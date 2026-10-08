@@ -51,6 +51,9 @@ RUST_LOG=debug cargo run -- run --config config/goethite.example.toml
 Ctrl-C or `SIGTERM` shuts the server down gracefully. `goethite check-config --config <path>`
 checks a config file and its filter lists without starting the server.
 
+While it runs, `cargo run -- tui` opens the terminal UI, and the REST API answers on
+`http://127.0.0.1:8053/api/v1` (see the [API docs](https://nxplain-sh.github.io/goethite/api/)).
+
 ## Repository layout
 
 | Path                        | Purpose                                                                 |

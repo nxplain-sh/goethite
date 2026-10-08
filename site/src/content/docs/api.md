@@ -5,7 +5,7 @@ description: Configure and observe goethite over HTTP with /api/v1.
 
 goethite has a REST API at `/api/v1` for everything the config file does not cover: filter lists,
 custom rules, clients, groups, schedules, the filtering settings, pausing, the query log,
-statistics and the audit log. The TUI, the web UI and the Terraform provider all use it. The
+statistics and the audit log. The [terminal UI](../tui/), the web UI and the Terraform provider all use it. The
 [API reference](../api-reference/) lists every endpoint.
 
 ## Access

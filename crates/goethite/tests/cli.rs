@@ -75,6 +75,13 @@ fn openapi_prints_the_committed_document() {
 }
 
 #[test]
+fn tui_rejects_a_bad_api_address() {
+    let output = goethite(&["tui", "--api", "ftp://nowhere"]);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("not an http:// or https:// URL"));
+}
+
+#[test]
 fn run_requires_a_config() {
     let output = goethite(&["run"]);
     assert!(!output.status.success());
