@@ -476,22 +476,42 @@ async fn recommended_lists_and_a_directory_turned_off() {
     let server = start(false);
     let recommended = server.get("/api/v1/lists/recommended").await;
     assert_eq!(recommended.status, StatusCode::OK);
-    let lists = recommended.body.as_array().unwrap();
-    assert_eq!(lists.len(), goethite_api::catalog::RECOMMENDED.len());
+    let lists = recommended.body["lists"].as_array().unwrap();
+    assert_eq!(lists.len(), goethite_api::recommended::LISTS.len());
     let defaults: Vec<&str> = lists
         .iter()
         .filter(|list| list["default"] == true)
         .filter_map(|list| list["id"].as_str())
         .collect();
-    assert_eq!(defaults, ["hagezi-normal"]);
+    assert_eq!(
+        defaults,
+        ["hagezi-normal", "hagezi-tif-mini", "hagezi-fake"]
+    );
     assert!(
         lists
             .iter()
             .all(|list| list["url"].as_str().unwrap().starts_with("https://"))
     );
+    let categories: Vec<&str> = lists
+        .iter()
+        .filter_map(|list| list["category"].as_str())
+        .collect();
+    for category in ["base", "security", "optional", "legacy"] {
+        assert!(categories.contains(&category), "{category}");
+    }
+    let presets = recommended.body["presets"].as_array().unwrap();
+    let names: Vec<&str> = presets.iter().filter_map(|p| p["name"].as_str()).collect();
+    assert_eq!(
+        names,
+        ["Balanced", "Strict", "Family", "Don't break anything"]
+    );
 
-    // A node that does not offer the directory says why.
-    for path in ["/api/v1/lists/directory", "/api/v1/lists/directory/2594"] {
+    // A node that does not look lists up says why.
+    for path in [
+        "/api/v1/lists/directory",
+        "/api/v1/lists/directory/2594",
+        "/api/v1/lists/recommended/sizes",
+    ] {
         let off = server.get(path).await;
         assert_eq!(off.status, StatusCode::SERVICE_UNAVAILABLE, "{path}");
         assert_eq!(off.body["error"]["code"], "unavailable");

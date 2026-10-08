@@ -17,6 +17,7 @@ mod plane;
 mod privileges;
 mod secrets;
 mod services;
+mod sizes;
 mod sockets;
 mod vrrp;
 
@@ -772,7 +773,7 @@ fn seed(store: &Store, config: &Config, config_path: &Path) -> Result<()> {
                 .import(import, &Actor::system())
                 .context("cannot import [filter] into the store")?;
             if config.filter.default_lists && config.filter.list.is_empty() {
-                add_default_list(store)?;
+                add_default_lists(store)?;
             }
             store.set_meta(IMPORTED_FILTER, &print)?;
             info!(
@@ -791,38 +792,46 @@ fn seed(store: &Store, config: &Config, config_path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Adds goethite's default list to a new store, used by the default group.
-/// It is an ordinary list: the API, the UIs or Terraform may change or
-/// remove it, and `goethite import` leaves it alone.
-fn add_default_list(store: &Store) -> Result<()> {
-    let Some(default) = goethite_api::catalog::default_list() else {
-        return Ok(());
-    };
+/// Adds goethite's default lists (the default preset's) to a new store,
+/// used by the default group. They are ordinary lists: the API, the UIs or
+/// Terraform may change or remove them, and `goethite import` leaves them
+/// alone.
+fn add_default_lists(store: &Store) -> Result<()> {
     let actor = Actor::system();
-    let list = store.create::<List>(
-        ListSpec {
-            name: default.name.to_owned(),
-            url: Some(default.url.to_owned()),
-            path: None,
-            enabled: true,
-            comment: "goethite's default list: keep it, replace it or add others.".to_owned(),
-            managed_by: ManagedBy::Api,
-        },
-        &actor,
-    )?;
+    let mut ids = Vec::new();
+    for default in goethite_api::recommended::default_lists() {
+        let list = store.create::<List>(
+            ListSpec {
+                name: default.name.to_owned(),
+                url: Some(default.url.to_owned()),
+                path: None,
+                enabled: true,
+                comment: format!(
+                    "One of goethite's default lists ({}): keep it, replace it or add others.",
+                    default.license
+                ),
+                managed_by: ManagedBy::Api,
+            },
+            &actor,
+        )?;
+        info!(
+            list = default.name,
+            "a new store: filtering with a default list"
+        );
+        ids.push(list.id);
+    }
+    if ids.is_empty() {
+        return Ok(());
+    }
     let group = store
         .get::<Group>(DEFAULT_GROUP)
         .context("the default group is missing")?;
     let mut spec = group.spec;
-    spec.lists.push(GroupList {
-        list: list.id,
+    spec.lists.extend(ids.into_iter().map(|list| GroupList {
+        list,
         schedule: None,
-    });
+    }));
     store.update::<Group>(DEFAULT_GROUP, spec, Some(group.revision), &actor)?;
-    info!(
-        list = default.name,
-        "a new store: filtering with goethite's default list"
-    );
     Ok(())
 }
 

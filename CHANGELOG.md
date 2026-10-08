@@ -50,10 +50,18 @@ configuration format.
 - Web UI tests: Vitest for the forms' logic, and Playwright end-to-end tests against a real
   goethite, in CI.
 
-- **Recommended and default filter lists**: ten lists for ads and trackers, each checked, added
-  from the Lists page in a click (`GET /api/v1/lists/recommended`). A new node starts with
-  HaGeZi Multi Normal in its default group, unless its config file names lists or sets
+- **Recommended filter lists and presets**: 36 lists, each checked, by category: one base list
+  against ads and trackers (★ HaGeZi Multi Normal, Multi Pro, OISD Big, and others for minimal,
+  aggressive or compatible blocking), security lists to stack on it (★ HaGeZi TIF Mini and Fake,
+  and more), optional lists by topic (bypass prevention, device trackers, family, hardening) and
+  legacy ones. The Lists page warns when two base lists overlap, switches rather than stacks
+  lists that do the same job, and shows sizes from each list's header, or what goethite read
+  with the lines it skipped. Presets (Balanced, Strict, Family, Don't break anything) set a
+  group's lists in one step after showing what changes. `GET /api/v1/lists/recommended` and
+  `/api/v1/lists/recommended/sizes`. A new node starts with the Balanced preset (HaGeZi Multi
+  Normal, TIF Mini and Fake) in its default group, unless its config file names lists or sets
   `[filter] default_lists = false`; existing nodes do not change.
+- A byte order mark at the start of a list file is no longer read as part of its first line.
 - **Find lists in the FilterLists directory** (filterlists.com) from the Lists page: the node
   fetches the directory when someone browses it, keeps it a day, and shows only the lists
   goethite can read, allowlists left out. `GET /api/v1/lists/directory`;

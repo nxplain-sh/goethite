@@ -76,19 +76,55 @@ the name does not exist; `refused` refuses the query.
 Blocking applies before the cache, so a name that becomes blocked is blocked at once even if its
 answer is cached. Local names such as `goethite.test` are answered before filtering.
 
-## Recommended and default lists
+## Recommended lists and presets
 
-goethite recommends ten lists for ads and trackers, each checked to download and read cleanly:
-HaGeZi Multi Light, Normal, Pro and Pro++, the AdGuard DNS filter, OISD Small and Big, Steven
-Black's Unified Hosts, AdAway and Peter Lowe's list. The [web UI](../web-ui/) shows them on the
-Lists page with what each blocks, its license and its size, and adds one in a click, used by the
-default group at once (`GET /api/v1/lists/recommended` lists them for scripts). HaGeZi, OISD and
-AdGuard overlap a lot: one of them is usually enough.
+goethite recommends lists in four categories, each list checked to download and read cleanly.
+The [web UI](../web-ui/) shows them on the Lists page, marks the ones it recommends most with ★,
+and adds one in a click to the default group (`GET /api/v1/lists/recommended` has them all, for
+scripts):
 
-A **new node** starts with HaGeZi Multi Normal in its default group: all-round protection from
-ads, trackers, telemetry, phishing and malware, made for DNS blocking, rarely breaking anything.
-It is an ordinary list, to keep, replace or remove. A config file that lists its own
-`[[filter.list]]` entries, or sets `default_lists = false` in `[filter]`, starts without it;
+- **Base list**, against ads and trackers: pick one, since they overlap a lot. ★ HaGeZi Multi
+  Normal, Multi Pro and OISD Big; HaGeZi Multi Light and OISD Small for devices where nothing may
+  break; HaGeZi Pro++ and Ultimate for people who will allow what they break; the AdGuard DNS
+  filter and Steven Black's hosts for people coming from AdGuard Home or Pi-hole. With two base
+  lists on, the Lists page says they overlap.
+- **Security**, to stack on it: ★ HaGeZi Threat Intelligence Feeds Mini and ★ HaGeZi Fake (fake
+  shops and scams); the full Threat Intelligence Feeds, which replaces Mini and is very large;
+  Dandelion Sprout's Anti-Malware List; URLhaus; HaGeZi Pop-Up Ads.
+- **Optional**, off unless you want them: bypass prevention (encrypted DNS, VPN, Tor and proxy
+  services, so devices cannot go around goethite); device trackers (★ HaGeZi's lists per vendor:
+  Amazon, Apple, Huawei, LG, OPPO and Realme, Roku, Samsung, TikTok, vivo, Windows, Xiaomi; or
+  Perflyst's Smart-TV list), best used for a group with those devices; family (gambling, adult
+  content); hardening (dynamic DNS, badware hosters, URL shorteners, the most abused top-level
+  domains).
+- **Legacy**: AdAway and Peter Lowe's list, which HaGeZi's and OISD's lists already include.
+
+Lists that do the same job are never stacked: TIF replaces TIF Mini, and Perflyst's list does the
+job of HaGeZi's Samsung, LG and Roku lists. Adding one while the other is on offers to **switch**:
+it takes the other's place in every group that uses it, with the same schedules, and the other is
+turned off.
+
+**Presets** set a group's lists in one step, after showing what changes:
+
+| Preset | Lists |
+| --- | --- |
+| **Balanced** (default) | HaGeZi Multi Normal, TIF Mini, Fake |
+| **Strict** | HaGeZi Multi Pro, TIF, Fake, Dandelion Sprout's Anti-Malware List, DoH/VPN/Tor/Proxy Bypass |
+| **Family** | OISD Big, TIF Mini, Fake, Gambling, NSFW, DoH/VPN/Tor/Proxy Bypass |
+| **Don't break anything** | HaGeZi Multi Light, TIF Mini |
+
+A preset's lists join the group, created or turned on as needed; recommended lists the preset
+does not have leave the group, and are turned off if no other group uses them. Your own lists
+stay. Family suits a group of children's devices; the default group is fine for the others.
+
+Sizes are not built in, since lists change daily: the Lists page shows what each list's header
+says (HaGeZi, OISD and Steven Black state theirs), and, once a list is added, what goethite read:
+its rules, and the lines it skipped, such as cosmetic or path rules a DNS server cannot apply.
+The node reads the first 8 KiB of each recommended list when someone opens the page, and keeps
+the sizes for a day.
+
+A **new node** starts with the Balanced preset in its default group. A config file that lists its
+own `[[filter.list]]` entries, or sets `default_lists = false` in `[filter]`, starts without it;
 nodes that already have a store are never changed.
 
 ## Finding more lists

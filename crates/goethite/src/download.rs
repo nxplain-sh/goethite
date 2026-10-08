@@ -17,7 +17,8 @@ use goethite_resolver::Resolver;
 use http_body_util::{BodyExt, Empty, Limited};
 use hyper::body::{Bytes, Incoming};
 use hyper::header::{
-    ETAG, HOST, HeaderMap, IF_MODIFIED_SINCE, IF_NONE_MATCH, LAST_MODIFIED, LOCATION, USER_AGENT,
+    ETAG, HOST, HeaderMap, IF_MODIFIED_SINCE, IF_NONE_MATCH, LAST_MODIFIED, LOCATION, RANGE,
+    USER_AGENT,
 };
 use hyper::{Request, Response, StatusCode, Uri};
 use hyper_util::rt::{TokioExecutor, TokioIo};
@@ -65,6 +66,8 @@ pub enum Fetched {
 enum Step {
     Done(Fetched),
     Redirect(String),
+    /// The server refuses ranges: ask for the whole thing.
+    NoRange,
 }
 
 /// Fetches `https://` URLs.
@@ -88,26 +91,59 @@ impl Downloader {
     /// Downloads `url`, sending `validators` so an unchanged list is not
     /// transferred again.
     pub async fn fetch(&self, url: &str, validators: &Validators) -> Result<Fetched> {
-        timeout(DOWNLOAD_TIMEOUT, self.fetch_following(url, validators))
-            .await
-            .map_err(|_| anyhow!("timed out after {} s", DOWNLOAD_TIMEOUT.as_secs()))?
+        timeout(
+            DOWNLOAD_TIMEOUT,
+            self.fetch_following(url, validators, None),
+        )
+        .await
+        .map_err(|_| anyhow!("timed out after {} s", DOWNLOAD_TIMEOUT.as_secs()))?
     }
 
-    async fn fetch_following(&self, url: &str, validators: &Validators) -> Result<Fetched> {
+    /// The first `len` bytes of `url` (fewer if it is shorter), for its
+    /// header: asked for with a range, and cut off there if the server
+    /// sends more.
+    pub async fn fetch_start(&self, url: &str, len: usize) -> Result<Vec<u8>> {
+        let fetched = timeout(
+            DOWNLOAD_TIMEOUT,
+            self.fetch_following(url, &Validators::default(), Some(len)),
+        )
+        .await
+        .map_err(|_| anyhow!("timed out after {} s", DOWNLOAD_TIMEOUT.as_secs()))??;
+        match fetched {
+            Fetched::Body { bytes, .. } => Ok(bytes),
+            Fetched::NotModified => bail!("{url} answered \"not modified\" to a plain request"),
+        }
+    }
+
+    async fn fetch_following(
+        &self,
+        url: &str,
+        validators: &Validators,
+        start: Option<usize>,
+    ) -> Result<Fetched> {
         let mut uri = https_uri(url)?;
-        for _ in 0..=MAX_REDIRECTS {
-            match self.get(&uri, validators).await? {
+        let mut ranged = start.is_some();
+        for _ in 0..=MAX_REDIRECTS.saturating_add(1) {
+            match self.get(&uri, validators, start, ranged).await? {
                 Step::Done(fetched) => return Ok(fetched),
                 Step::Redirect(location) => {
                     debug!(from = %uri, to = %location, "following redirect");
                     uri = redirect_target(&uri, &location)?;
                 }
+                Step::NoRange if ranged => ranged = false,
+                Step::NoRange => bail!("{uri} refused a request without a range"),
             }
         }
         bail!("more than {MAX_REDIRECTS} redirects")
     }
 
-    async fn get(&self, uri: &Uri, validators: &Validators) -> Result<Step> {
+    async fn get(
+        &self,
+        uri: &Uri,
+        validators: &Validators,
+        start: Option<usize>,
+        ranged: bool,
+    ) -> Result<Step> {
         let host = uri.host().context("URL has no host")?;
         let port = uri.port_u16().unwrap_or(443);
         let bare_host = host.trim_start_matches('[').trim_end_matches(']');
@@ -143,6 +179,9 @@ impl Downloader {
         if let Some(last_modified) = &validators.last_modified {
             request = request.header(IF_MODIFIED_SINCE, last_modified);
         }
+        if let Some(last) = start.and_then(|len| len.checked_sub(1)).filter(|_| ranged) {
+            request = request.header(RANGE, format!("bytes=0-{last}"));
+        }
         let request = request.body(Empty::<Bytes>::new())?;
 
         let response = if http2 {
@@ -155,7 +194,35 @@ impl Downloader {
             tokio::spawn(connection);
             sender.send_request(request).await?
         };
-        self.handle(response).await
+        match start {
+            Some(len) => Self::handle_start(response, len).await,
+            None => self.handle(response).await,
+        }
+    }
+
+    /// The first `len` bytes of a 200 or 206 answer.
+    async fn handle_start(response: Response<Incoming>, len: usize) -> Result<Step> {
+        match response.status() {
+            StatusCode::OK | StatusCode::PARTIAL_CONTENT => {
+                let mut body = response.into_body();
+                let mut bytes = Vec::new();
+                while bytes.len() < len {
+                    let Some(frame) = body.frame().await else {
+                        break;
+                    };
+                    if let Ok(data) = frame?.into_data() {
+                        bytes.extend_from_slice(&data);
+                    }
+                }
+                bytes.truncate(len);
+                Ok(Step::Done(Fetched::Body {
+                    bytes,
+                    validators: Validators::default(),
+                }))
+            }
+            StatusCode::RANGE_NOT_SATISFIABLE => Ok(Step::NoRange),
+            _ => redirect(&response),
+        }
     }
 
     async fn handle(&self, response: Response<Incoming>) -> Result<Step> {
@@ -177,20 +244,27 @@ impl Downloader {
                 }))
             }
             StatusCode::NOT_MODIFIED => Ok(Step::Done(Fetched::NotModified)),
-            StatusCode::MOVED_PERMANENTLY
-            | StatusCode::FOUND
-            | StatusCode::SEE_OTHER
-            | StatusCode::TEMPORARY_REDIRECT
-            | StatusCode::PERMANENT_REDIRECT => {
-                let location = response
-                    .headers()
-                    .get(LOCATION)
-                    .and_then(|value| value.to_str().ok())
-                    .context("redirect without a Location")?;
-                Ok(Step::Redirect(location.to_owned()))
-            }
-            status => bail!("HTTP status {status}"),
+            _ => redirect(&response),
         }
+    }
+}
+
+/// Where a redirect leads; any other status is an error.
+fn redirect(response: &Response<Incoming>) -> Result<Step> {
+    match response.status() {
+        StatusCode::MOVED_PERMANENTLY
+        | StatusCode::FOUND
+        | StatusCode::SEE_OTHER
+        | StatusCode::TEMPORARY_REDIRECT
+        | StatusCode::PERMANENT_REDIRECT => {
+            let location = response
+                .headers()
+                .get(LOCATION)
+                .and_then(|value| value.to_str().ok())
+                .context("redirect without a Location")?;
+            Ok(Step::Redirect(location.to_owned()))
+        }
+        status => bail!("HTTP status {status}"),
     }
 }
 

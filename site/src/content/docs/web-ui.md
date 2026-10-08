@@ -43,9 +43,11 @@ the network; otherwise the token crosses it in clear text.
   what decided it (the rule, a CNAME, the upstream). Search by name and by answer, and page back
   through older entries. Filters set from the dashboard (a client, a time window) show as chips
   to remove. Searches are part of the address, so they can be bookmarked.
-- **Lists**: every filter list with its rule count and any problem, and a button to download
-  them all again now. A new list can join the default group at once, so it filters straight
-  away. [Recommended lists](../filtering/#recommended-and-default-lists) add in a click, and
+- **Lists**: every filter list with its rule count, the lines it skipped and any problem, and a
+  button to download them all again now. A new list can join the default group at once, so it
+  filters straight away. [Recommended lists](../filtering/#recommended-lists-and-presets) are
+  shown by category with their sizes and add in a click; **presets** set a group's lists in one
+  step after showing what changes; lists that do the same job switch rather than stack; and
   **Find lists** searches the [FilterLists directory](../filtering/#finding-more-lists).
 - **Rules**: custom rules, added from the top of the page, filtered as you type, turned on and
   off in place. goethite explains a rule it cannot use.

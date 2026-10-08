@@ -1,16 +1,18 @@
-//! Fuzz target: reading the FilterLists directory, third-party JSON the
-//! node fetches when someone browses it: `/lists`, `/lists/{id}`, and the
-//! names of syntaxes, tags and licenses.
+//! Fuzz target: reading what the node looks up about filter lists when
+//! someone browses them: the FilterLists directory, third-party JSON
+//! (`/lists`, `/lists/{id}`, and the names of syntaxes, tags and licenses),
+//! and the size a list's header states.
 //!
 //! Invariants checked on every input:
 //! - nothing panics;
 //! - every list kept is in a syntax goethite reads, named, and bounded;
 //! - every address kept is `https://`, bounded and free of control
-//!   characters.
+//!   characters;
+//! - a stated size has at most twelve digits.
 
 #![no_main]
 
-use goethite_api::catalog;
+use goethite_api::{catalog, recommended};
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
@@ -22,6 +24,9 @@ fuzz_target!(|data: &[u8]| {
     )
     .expect("fixed names parse");
     let _ = catalog::parse_names(data, data, data);
+    if let Some(size) = recommended::stated_size(data) {
+        assert!(size < 1_000_000_000_000);
+    }
     if let Ok(lists) = catalog::parse_lists(data, &names) {
         assert!(lists.len() <= catalog::MAX_LISTS);
         for list in &lists {

@@ -1031,18 +1031,51 @@
         "tags": [
           "lists"
         ],
-        "summary": "The filter lists goethite recommends: ads and trackers, each checked\nto download and parse. The one marked `default` is what a new node\nstarts with.",
+        "summary": "The filter lists goethite recommends, each checked to download and read\ncleanly, by category: one base list against ads and trackers, security\nlists to stack on it, optional lists by topic, and legacy lists the base\nlists include. Lists that do the same job name each other in `excludes`.\nPresets are sets of them for a group; the `default` one is what a new\nnode starts with.",
         "operationId": "recommended_lists",
         "responses": {
           "200": {
-            "description": "Recommended lists",
+            "description": "Recommended lists and presets",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/RecommendedList"
-                  }
+                  "$ref": "#/components/schemas/Recommended"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/lists/recommended/sizes": {
+      "get": {
+        "tags": [
+          "lists"
+        ],
+        "summary": "How big the recommended lists say they are, read from the start of each\nlist by the node when asked, and kept for a day. Lists whose header\nstates no size are left out.",
+        "operationId": "recommended_sizes",
+        "responses": {
+          "200": {
+            "description": "The sizes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecommendedSizes"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Turned off on this node",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
                 }
               }
             }
@@ -2527,6 +2560,16 @@
           }
         }
       },
+      "Category": {
+        "type": "string",
+        "description": "What a recommended list is for.",
+        "enum": [
+          "base",
+          "security",
+          "optional",
+          "legacy"
+        ]
+      },
       "Client": {
         "type": "object",
         "description": "A stored client.",
@@ -3372,6 +3415,42 @@
           }
         }
       },
+      "Preset": {
+        "type": "object",
+        "description": "A set of recommended lists for a group, in one step.",
+        "required": [
+          "id",
+          "name",
+          "description",
+          "lists",
+          "default"
+        ],
+        "properties": {
+          "default": {
+            "type": "boolean",
+            "description": "Whether a new node starts with it."
+          },
+          "description": {
+            "type": "string",
+            "description": "Who it is for."
+          },
+          "id": {
+            "type": "string",
+            "description": "A stable identifier, such as `balanced`."
+          },
+          "lists": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Its lists, by ID."
+          },
+          "name": {
+            "type": "string",
+            "description": "Its name."
+          }
+        }
+      },
       "Protocol": {
         "type": "string",
         "description": "How a query reached goethite.",
@@ -3549,6 +3628,30 @@
           }
         }
       },
+      "Recommended": {
+        "type": "object",
+        "description": "The recommended lists and presets.",
+        "required": [
+          "lists",
+          "presets"
+        ],
+        "properties": {
+          "lists": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RecommendedList"
+            },
+            "description": "The lists, by category."
+          },
+          "presets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Preset"
+            },
+            "description": "The presets."
+          }
+        }
+      },
       "RecommendedList": {
         "type": "object",
         "description": "A filter list goethite recommends.",
@@ -3560,17 +3663,37 @@
           "url",
           "homepage",
           "license",
-          "rules",
-          "default"
+          "category",
+          "recommended",
+          "default",
+          "excludes"
         ],
         "properties": {
+          "badge": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A short label, such as `Minimal` or `Compatibility`."
+          },
+          "category": {
+            "$ref": "#/components/schemas/Category",
+            "description": "Its category."
+          },
           "default": {
             "type": "boolean",
             "description": "Whether a new node starts with it."
           },
           "description": {
             "type": "string",
-            "description": "What it blocks, and how strictly."
+            "description": "What it blocks."
+          },
+          "excludes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Lists not to use with it: one includes the other, or they do the\nsame job. Switch instead of stacking."
           },
           "homepage": {
             "type": "string",
@@ -3582,7 +3705,7 @@
           },
           "license": {
             "type": "string",
-            "description": "Its license."
+            "description": "Its license, as the project states it."
           },
           "maintainer": {
             "type": "string",
@@ -3592,15 +3715,49 @@
             "type": "string",
             "description": "Its name."
           },
-          "rules": {
-            "type": "integer",
-            "format": "int32",
-            "description": "About how many rules it has.",
-            "minimum": 0
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When to choose it, or what to know first."
+          },
+          "recommended": {
+            "type": "boolean",
+            "description": "One of the lists goethite recommends most in its category."
+          },
+          "topic": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For optional lists, their topic, such as `Family`."
           },
           "url": {
             "type": "string",
             "description": "Where goethite downloads it."
+          }
+        }
+      },
+      "RecommendedSizes": {
+        "type": "object",
+        "description": "How big recommended lists say they are, from their headers.",
+        "required": [
+          "fetched_at",
+          "lists"
+        ],
+        "properties": {
+          "fetched_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When this node read them."
+          },
+          "lists": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatedSize"
+            },
+            "description": "The lists whose header states a size; others are left out."
           }
         }
       },
@@ -3933,6 +4090,26 @@
           }
         },
         "additionalProperties": false
+      },
+      "StatedSize": {
+        "type": "object",
+        "description": "How many entries a list says it has.",
+        "required": [
+          "id",
+          "entries"
+        ],
+        "properties": {
+          "entries": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The number its header gives.",
+            "minimum": 0
+          },
+          "id": {
+            "type": "string",
+            "description": "The list's ID."
+          }
+        }
       },
       "StatsReport": {
         "type": "object",

@@ -29,6 +29,7 @@ use crate::filterlists::FilterLists;
 use crate::lists::ListStore;
 use crate::metrics::Metrics;
 use crate::secrets::Secrets;
+use crate::sizes::ListSizes;
 use crate::sockets::Sockets;
 use crate::{download, filters, node};
 
@@ -143,7 +144,7 @@ impl ControlPlane {
             (None, _) => None,
         };
         let tls = tls_client_config(&TlsRoots::Bundled, &[b"h2", b"http/1.1"])?;
-        let filterlists = filterlists(config, data, &tls);
+        let (filterlists, sizes) = lookups(config, data, &tls).unzip();
         let downloader =
             download::Downloader::new(Arc::clone(&data.resolver), tls, filters::MAX_LIST_LEN);
         control.spawn(downloader, &mut tasks, &stopped);
@@ -159,6 +160,7 @@ impl ControlPlane {
             cluster: cluster.clone(),
             encrypted: encrypted_status(config),
             filterlists,
+            sizes,
         };
         let api_tls = api_cert
             .as_ref()
@@ -276,16 +278,21 @@ fn encrypted_status(config: &Config) -> Option<goethite_api::EncryptedStatus> {
         })
 }
 
-/// The FilterLists directory, unless `[filter] directory` turns it off.
-fn filterlists(
+/// What the node looks up for the Lists page, the FilterLists directory
+/// and the recommended lists' sizes, unless `[filter] directory` turns it
+/// off.
+fn lookups(
     config: &Config,
     data: &DataPlane,
     tls: &Arc<rustls::ClientConfig>,
-) -> Option<Arc<FilterLists>> {
+) -> Option<(Arc<FilterLists>, Arc<ListSizes>)> {
     config.filter.directory.then(|| {
-        Arc::new(FilterLists::new(
-            Arc::clone(&data.resolver),
-            Arc::clone(tls),
-        ))
+        (
+            Arc::new(FilterLists::new(
+                Arc::clone(&data.resolver),
+                Arc::clone(tls),
+            )),
+            Arc::new(ListSizes::new(Arc::clone(&data.resolver), Arc::clone(tls))),
+        )
     })
 }

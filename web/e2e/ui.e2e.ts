@@ -427,21 +427,95 @@ async function removeList(request: APIRequestContext, list: string) {
 	await apiCall(request, 'DELETE', `/api/v1/lists/${list}`)
 }
 
-test('adds a recommended list to the default group in a click', async ({ page, request }) => {
+/** Deletes every list, behind the UI's back, after taking them out of the default group. */
+async function removeAllLists(request: APIRequestContext) {
+	const lists: { id: string }[] = await apiCall(request, 'GET', '/api/v1/lists')
+	for (const list of lists) await removeList(request, list.id)
+}
+
+/** The default group's lists, by URL, and whether each is on. */
+async function defaultGroupLists(request: APIRequestContext): Promise<Map<string, boolean>> {
+	const lists: { id: string; spec: { url?: string; enabled?: boolean } }[] = await apiCall(
+		request,
+		'GET',
+		'/api/v1/lists',
+	)
+	const group = await apiCall(request, 'GET', '/api/v1/groups/default')
+	const used = new Set(group.spec.lists.map((entry: { list: string }) => entry.list))
+	return new Map(
+		lists.filter((list) => used.has(list.id)).map((list) => [list.spec.url ?? '', list.spec.enabled !== false]),
+	)
+}
+
+const HAGEZI = 'https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/'
+
+test('recommended lists by category: add, overlap, legacy', async ({ page, request }) => {
 	await page.getByRole('link', { name: 'Lists', exact: true }).click()
 	const recommended = page.getByRole('region', { name: 'Recommended lists' })
-	await expect(recommended).toContainText('new nodes start with it')
-	await recommended.getByRole('button', { name: 'Add OISD Small' }).click()
-	const row = recommended.getByRole('row').filter({ hasText: 'OISD Small' })
-	await expect(row).toContainText('ADDED')
-	await expect(page.getByRole('row').filter({ hasText: 'https://small.oisd.nl/' })).toBeVisible()
+	for (const heading of ['Presets', 'Base list', 'Security', 'Optional', 'Bypass prevention', 'Device trackers', 'Family', 'Hardening']) {
+		await expect(recommended.getByRole('heading', { name: heading, exact: true })).toBeVisible()
+	}
+	const normal = recommended.getByRole('row').filter({ hasText: 'HaGeZi Multi Normal' })
+	await expect(normal).toContainText('★ RECOMMENDED')
+	await expect(normal).toContainText('DEFAULT')
+	await expect(recommended.getByRole('row').filter({ hasText: 'HaGeZi Multi Ultimate' })).toContainText('STRICT')
 
-	const lists: { id: string; spec: { url?: string } }[] = await apiCall(request, 'GET', '/api/v1/lists')
-	const oisd = lists.find((list) => list.spec.url === 'https://small.oisd.nl/')
-	expect(oisd).toBeDefined()
-	const group = await apiCall(request, 'GET', '/api/v1/groups/default')
-	expect(group.spec.lists.map((entry: { list: string }) => entry.list)).toContain(oisd?.id)
-	await removeList(request, oisd?.id ?? '')
+	// Legacy lists are tucked away.
+	await expect(recommended.getByRole('row').filter({ hasText: 'AdAway' })).toBeHidden()
+	await recommended.getByText('Legacy lists').click()
+	await expect(recommended.getByRole('row').filter({ hasText: 'AdAway' })).toBeVisible()
+
+	await recommended.getByRole('button', { name: 'Add: OISD Small' }).click()
+	await expect(recommended.getByRole('row').filter({ hasText: 'OISD Small' })).toContainText('ADDED')
+	await expect(page.getByRole('row').filter({ hasText: 'https://small.oisd.nl/' })).toBeVisible()
+	expect((await defaultGroupLists(request)).get('https://small.oisd.nl/')).toBe(true)
+
+	// A second base list: they overlap.
+	await expect(recommended.getByRole('status').filter({ hasText: 'Overlap' })).toHaveCount(0)
+	await recommended.getByRole('button', { name: 'Add: HaGeZi Multi Light' }).click()
+	await expect(recommended.getByRole('status').filter({ hasText: 'Overlap' })).toContainText(
+		'HaGeZi Multi Light and OISD Small',
+	)
+	await removeAllLists(request)
+})
+
+test('presets: preview, apply, swap; switching instead of stacking', async ({ page, request }) => {
+	await page.getByRole('link', { name: 'Lists', exact: true }).click()
+	const recommended = page.getByRole('region', { name: 'Recommended lists' })
+	const balanced = recommended.getByRole('article', { name: 'Preset Balanced' })
+	await expect(balanced).toContainText('DEFAULT')
+	await balanced.getByRole('button', { name: 'Use for a group' }).click()
+	const preview = recommended.getByRole('group', { name: 'Use Balanced' })
+	await expect(preview).toContainText(
+		'New, downloaded at once: HaGeZi Multi Normal, HaGeZi Threat Intelligence Feeds Mini, HaGeZi Fake',
+	)
+	await preview.getByRole('button', { name: 'Use Balanced' }).click()
+	await expect(preview).toBeHidden()
+	let used = await defaultGroupLists(request)
+	expect([...used.keys()].sort()).toEqual([`${HAGEZI}fake.txt`, `${HAGEZI}multi.txt`, `${HAGEZI}tif.mini.txt`])
+
+	// Another preset: what it does not have leaves, and is turned off.
+	await recommended.getByRole('article', { name: "Preset Don't break anything" }).getByRole('button', { name: 'Use for a group' }).click()
+	const minimal = recommended.getByRole('group', { name: "Use Don't break anything" })
+	await expect(minimal).toContainText('no longer uses HaGeZi Multi Normal, HaGeZi Fake')
+	await expect(minimal).toContainText('Turned off, no group uses them: HaGeZi Multi Normal, HaGeZi Fake')
+	await minimal.getByRole('button', { name: "Use Don't break anything" }).click()
+	await expect(minimal).toBeHidden()
+	used = await defaultGroupLists(request)
+	expect([...used.keys()].sort()).toEqual([`${HAGEZI}light.txt`, `${HAGEZI}tif.mini.txt`])
+
+	// TIF replaces TIF Mini: switch, never stack.
+	const tif = recommended.getByRole('row').filter({ hasText: 'HaGeZi Threat Intelligence Feeds' }).filter({ hasText: 'MAX SECURITY' })
+	await tif.getByRole('button', { name: /^Switch from HaGeZi Threat Intelligence Feeds Mini/ }).click()
+	const swap = recommended.getByRole('group', { name: 'Switch to HaGeZi Threat Intelligence Feeds' })
+	await expect(swap).toContainText('Turned off, no group uses them: HaGeZi Threat Intelligence Feeds Mini')
+	await swap.getByRole('button', { name: 'Switch to HaGeZi Threat Intelligence Feeds' }).click()
+	await expect(swap).toBeHidden()
+	used = await defaultGroupLists(request)
+	expect([...used.keys()].sort()).toEqual([`${HAGEZI}light.txt`, `${HAGEZI}tif.txt`])
+	const lists: { spec: { url?: string; enabled?: boolean } }[] = await apiCall(request, 'GET', '/api/v1/lists')
+	expect(lists.find((list) => list.spec.url === `${HAGEZI}tif.mini.txt`)?.spec.enabled).toBe(false)
+	await removeAllLists(request)
 })
 
 test('says when the FilterLists directory is turned off', async ({ page }) => {

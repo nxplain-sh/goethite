@@ -34,8 +34,9 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
-use crate::catalog::{self, Directory, DirectoryList, RecommendedList};
+use crate::catalog::{Directory, DirectoryList};
 use crate::error::{ApiError, ApiJson, ErrorBody};
+use crate::recommended::{self, Recommended, RecommendedSizes};
 use crate::services::Services;
 use crate::{Api, Change, Status};
 
@@ -597,14 +598,32 @@ pub(crate) async fn get_metrics(State(api): Shared) -> Response {
         .into_response()
 }
 
-/// The filter lists goethite recommends: ads and trackers, each checked
-/// to download and parse. The one marked `default` is what a new node
-/// starts with.
+/// The filter lists goethite recommends, each checked to download and read
+/// cleanly, by category: one base list against ads and trackers, security
+/// lists to stack on it, optional lists by topic, and legacy lists the base
+/// lists include. Lists that do the same job name each other in `excludes`.
+/// Presets are sets of them for a group; the `default` one is what a new
+/// node starts with.
 #[utoipa::path(get, path = "/api/v1/lists/recommended", tag = "lists",
-    responses((status = 200, description = "Recommended lists", body = [RecommendedList])),
+    responses((status = 200, description = "Recommended lists and presets", body = Recommended)),
     security(("token" = [])))]
-pub(crate) async fn recommended_lists() -> Json<&'static [RecommendedList]> {
-    Json(&catalog::RECOMMENDED)
+pub(crate) async fn recommended_lists() -> Json<Recommended> {
+    Json(recommended::RECOMMENDED)
+}
+
+/// How big the recommended lists say they are, read from the start of each
+/// list by the node when asked, and kept for a day. Lists whose header
+/// states no size are left out.
+#[utoipa::path(get, path = "/api/v1/lists/recommended/sizes", tag = "lists",
+    responses(
+        (status = 200, description = "The sizes", body = RecommendedSizes),
+        (status = 503, description = "Turned off on this node", body = ErrorBody),
+    ),
+    security(("token" = [])))]
+pub(crate) async fn recommended_sizes(
+    State(api): Shared,
+) -> Result<Json<RecommendedSizes>, ApiError> {
+    Ok(Json(api.control.recommended_sizes().await?))
 }
 
 /// The FilterLists directory (filterlists.com): the lists goethite can
@@ -666,6 +685,7 @@ pub(crate) fn routes() -> Router<Arc<Api>> {
         .route("/api/v1/lists", get(list_lists).post(create_list))
         .route("/api/v1/lists/refresh", post(refresh_lists))
         .route("/api/v1/lists/recommended", get(recommended_lists))
+        .route("/api/v1/lists/recommended/sizes", get(recommended_sizes))
         .route("/api/v1/lists/directory", get(get_directory))
         .route("/api/v1/lists/directory/{id}", get(get_directory_list))
         .route(

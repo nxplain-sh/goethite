@@ -515,8 +515,9 @@ pub struct FilterSection {
     /// Multi Normal) when this table names no lists. Only the first start
     /// of a new store looks at it.
     pub default_lists: bool,
-    /// Whether the API offers the FilterLists directory (filterlists.com)
-    /// for finding lists: the node fetches it when someone browses it.
+    /// Whether the node looks lists up for the web UI when someone browses
+    /// them: the FilterLists directory (filterlists.com), and the sizes the
+    /// recommended lists state.
     pub directory: bool,
     /// Whether groups can block services (TikTok, YouTube…): the node
     /// downloads AdGuard's services catalog with the lists.

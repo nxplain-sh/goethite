@@ -624,6 +624,83 @@ a.stat:focus-visible {
 	margin-top: var(--space-3);
 }
 
+/* Recommended lists: presets, categories, badges. */
+.category {
+	display: grid;
+	gap: var(--space-2);
+}
+
+.category h3,
+.category h4 {
+	margin: var(--space-2) 0 0;
+}
+
+.category > p {
+	margin: 0;
+}
+
+.presets {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
+	gap: var(--space-3);
+}
+
+.preset {
+	display: grid;
+	gap: var(--space-2);
+	align-content: start;
+	padding: var(--space-3);
+	border: var(--border);
+	box-shadow: 4px 4px 0 var(--ink);
+	background: var(--bg);
+}
+
+.preset p,
+.preset ul {
+	margin: 0;
+}
+
+.preset ul {
+	padding-left: 1.2rem;
+	font-size: 0.88rem;
+}
+
+.preset .button {
+	justify-self: start;
+}
+
+.recommended-head {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--space-2);
+}
+
+.table.recommended .note {
+	font-style: italic;
+}
+
+.plan {
+	margin: 0;
+	padding-left: 1.2rem;
+}
+
+.apply-preset {
+	border-top: var(--border);
+	padding-top: var(--space-3);
+}
+
+details.legacy summary {
+	cursor: pointer;
+	font-weight: 700;
+	font-size: 1.1rem;
+}
+
+details.legacy summary:focus-visible {
+	outline: none;
+	box-shadow: var(--focus);
+}
+
 /* Blocked services: toggles by kind. */
 .services h3 {
 	margin: 0 0 var(--space-2);

@@ -242,11 +242,35 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * The filter lists goethite recommends: ads and trackers, each checked
-         *     to download and parse. The one marked `default` is what a new node
-         *     starts with.
+         * The filter lists goethite recommends, each checked to download and read
+         *     cleanly, by category: one base list against ads and trackers, security
+         *     lists to stack on it, optional lists by topic, and legacy lists the base
+         *     lists include. Lists that do the same job name each other in `excludes`.
+         *     Presets are sets of them for a group; the `default` one is what a new
+         *     node starts with.
          */
         get: operations["recommended_lists"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lists/recommended/sizes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * How big the recommended lists say they are, read from the start of each
+         *     list by the node when asked, and kept for a day. Lists whose header
+         *     states no size are left out.
+         */
+        get: operations["recommended_sizes"];
         put?: never;
         post?: never;
         delete?: never;
@@ -601,6 +625,11 @@ export interface components {
              */
             misses: number;
         };
+        /**
+         * @description What a recommended list is for.
+         * @enum {string}
+         */
+        Category: "base" | "security" | "optional" | "legacy";
         /** @description A stored client. */
         Client: {
             /**
@@ -1034,6 +1063,19 @@ export interface components {
             /** @description Its goethite version, when last reached. */
             version?: string | null;
         };
+        /** @description A set of recommended lists for a group, in one step. */
+        Preset: {
+            /** @description Whether a new node starts with it. */
+            default: boolean;
+            /** @description Who it is for. */
+            description: string;
+            /** @description A stable identifier, such as `balanced`. */
+            id: string;
+            /** @description Its lists, by ID. */
+            lists: string[];
+            /** @description Its name. */
+            name: string;
+        };
         /**
          * @description How a query reached goethite.
          * @enum {string}
@@ -1112,29 +1154,56 @@ export interface components {
              */
             next?: number | null;
         };
+        /** @description The recommended lists and presets. */
+        Recommended: {
+            /** @description The lists, by category. */
+            lists: components["schemas"]["RecommendedList"][];
+            /** @description The presets. */
+            presets: components["schemas"]["Preset"][];
+        };
         /** @description A filter list goethite recommends. */
         RecommendedList: {
+            /** @description A short label, such as `Minimal` or `Compatibility`. */
+            badge?: string | null;
+            /** @description Its category. */
+            category: components["schemas"]["Category"];
             /** @description Whether a new node starts with it. */
             default: boolean;
-            /** @description What it blocks, and how strictly. */
+            /** @description What it blocks. */
             description: string;
+            /**
+             * @description Lists not to use with it: one includes the other, or they do the
+             *     same job. Switch instead of stacking.
+             */
+            excludes: string[];
             /** @description Its home page. */
             homepage: string;
             /** @description A stable identifier, such as `hagezi-normal`. */
             id: string;
-            /** @description Its license. */
+            /** @description Its license, as the project states it. */
             license: string;
             /** @description Who maintains it. */
             maintainer: string;
             /** @description Its name. */
             name: string;
-            /**
-             * Format: int32
-             * @description About how many rules it has.
-             */
-            rules: number;
+            /** @description When to choose it, or what to know first. */
+            note?: string | null;
+            /** @description One of the lists goethite recommends most in its category. */
+            recommended: boolean;
+            /** @description For optional lists, their topic, such as `Family`. */
+            topic?: string | null;
             /** @description Where goethite downloads it. */
             url: string;
+        };
+        /** @description How big recommended lists say they are, from their headers. */
+        RecommendedSizes: {
+            /**
+             * Format: date-time
+             * @description When this node read them.
+             */
+            fetched_at: string;
+            /** @description The lists whose header states a size; others are left out. */
+            lists: components["schemas"]["StatedSize"][];
         };
         /**
          * @description Recursive resolution: from the root servers down, instead of asking
@@ -1319,6 +1388,16 @@ export interface components {
             list_update_hours?: number;
             /** @description The master switch: when off, nothing is filtered for anyone. */
             protection?: boolean;
+        };
+        /** @description How many entries a list says it has. */
+        StatedSize: {
+            /**
+             * Format: int64
+             * @description The number its header gives.
+             */
+            entries: number;
+            /** @description The list's ID. */
+            id: string;
         };
         /** @description Statistics over a time range. */
         StatsReport: {
@@ -2188,13 +2267,42 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Recommended lists */
+            /** @description Recommended lists and presets */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["RecommendedList"][];
+                    "application/json": components["schemas"]["Recommended"];
+                };
+            };
+        };
+    };
+    recommended_sizes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The sizes */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecommendedSizes"];
+                };
+            };
+            /** @description Turned off on this node */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
                 };
             };
         };

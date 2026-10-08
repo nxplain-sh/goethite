@@ -23,11 +23,20 @@ export const listsQuery = queryOptions({
 	refetchInterval: 30_000,
 })
 
-/** goethite's recommended lists: built in, so fetched once. */
+/** goethite's recommended lists and presets: built in, so fetched once. */
 export const recommendedQuery = queryOptions({
-	queryKey: ['lists', 'recommended'],
+	queryKey: ['recommended'],
 	queryFn: () => call(api.GET('/api/v1/lists/recommended')),
 	staleTime: Number.POSITIVE_INFINITY,
+})
+
+/** How big the recommended lists say they are, as the node read them (it keeps them a day). */
+export const recommendedSizesQuery = queryOptions({
+	queryKey: ['recommended', 'sizes'],
+	queryFn: () => call(api.GET('/api/v1/lists/recommended/sizes')),
+	staleTime: 3_600_000,
+	retry: false,
+	select: (sizes) => new Map(sizes.lists.map((size) => [size.id, size.entries])),
 })
 
 /** The FilterLists directory, as the node fetched it (it keeps it a day). */

@@ -130,8 +130,11 @@ Phase 3's scope shipped in v0.3.0. These items came up along the way.
   (and the systemd test image) lack. `Type=notify-reload` (systemd 253) with `ReloadSignal=SIGHUP`
   needs goethite to report `RELOADING=1` and `READY=1` around a reload.
 - **[P4] Client IDs in the Terraform provider:** `ids` on `goethite_client`, once 0.4.0 is out.
-  Its acceptance tests start fresh nodes, which now begin with the default list in the default
-  group: set `[filter] default_lists = false` in their config when moving them to 0.4.
+  Its acceptance tests start fresh nodes, which now begin with the Balanced preset's three lists
+  in the default group: set `[filter] default_lists = false` in their config when moving them
+  to 0.4.
+- **[later] Presets in the API and TUI:** presets are applied by the web UI, one change at a
+  time; an API call would apply one in a single store transaction, for the TUI and scripts.
 - **[P4] Blocked services in the Terraform provider:** `blocked_services` on `goethite_group`,
   once 0.4.0 is out; its test nodes need `[filter] services = false` (or a `services_file`).
 - **[later] `$dnsrewrite=NXDOMAIN` rules,** which only block: the services catalog's iCloud

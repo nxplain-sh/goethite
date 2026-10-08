@@ -1056,9 +1056,9 @@ mod serving {
     }
 
     /// A new node with no lists in its config file filters with the
-    /// default list, in the default group; once only.
+    /// default preset's lists, in the default group; once only.
     #[test]
-    fn a_new_node_starts_with_the_default_list() {
+    fn a_new_node_starts_with_the_default_lists() {
         let store = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("default_list.redb");
         let _ = std::fs::remove_file(&store);
         let config = format!(
@@ -1070,20 +1070,38 @@ mod serving {
         for start in 0..2 {
             let mut server = Running::start_exact("default_list", &config);
             if start == 0 {
-                server.find_log("filtering with goethite's default list");
+                server.find_log("filtering with a default list");
             }
             let api_addr = field(&server.find_log("API listening"), "address");
             let (_, lists) = api(api_addr, "GET /api/v1/lists HTTP/1.1", "");
             let lists = lists.as_array().unwrap();
-            assert_eq!(lists.len(), 1, "start {start}: {lists:?}");
-            assert_eq!(lists[0]["spec"]["name"], "HaGeZi Multi Normal");
+            let names: Vec<&str> = lists
+                .iter()
+                .map(|list| list["spec"]["name"].as_str().unwrap())
+                .collect();
+            assert_eq!(
+                names,
+                [
+                    "HaGeZi Multi Normal",
+                    "HaGeZi Threat Intelligence Feeds Mini",
+                    "HaGeZi Fake"
+                ],
+                "start {start}"
+            );
             assert_eq!(
                 lists[0]["spec"]["url"],
                 "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/multi.txt"
             );
-            assert_eq!(lists[0]["spec"]["managed_by"], "api");
+            assert!(lists.iter().all(|list| list["spec"]["managed_by"] == "api"));
             let (_, group) = api(api_addr, "GET /api/v1/groups/default HTTP/1.1", "");
-            assert_eq!(group["spec"]["lists"][0]["list"], lists[0]["id"]);
+            let used: Vec<&serde_json::Value> = group["spec"]["lists"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|entry| &entry["list"])
+                .collect();
+            let ids: Vec<&serde_json::Value> = lists.iter().map(|list| &list["id"]).collect();
+            assert_eq!(used, ids);
             server.signal("TERM");
             assert!(server.wait_for_exit().success());
         }

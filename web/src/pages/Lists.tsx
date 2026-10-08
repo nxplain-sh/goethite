@@ -9,9 +9,8 @@ import {
 	ifMatch,
 	type List,
 	type ListStatus,
-	type RecommendedList,
 } from '../api/client'
-import { listsQuery, recommendedQuery, statusQuery } from '../api/queries'
+import { listsQuery, statusQuery } from '../api/queries'
 import {
 	deleteList,
 	groupQuery,
@@ -22,6 +21,7 @@ import {
 	settingsQuery,
 } from '../api/resources'
 import { Editor, Loading, ManagedBadge } from '../components/editor'
+import { RecommendedLists } from './RecommendedLists'
 import { CheckField, SelectField, TextField } from '../components/form'
 import { ErrorNotice } from '../components/ui'
 import { DEFAULT_GROUP, listForm, type ListForm, listSpec } from '../forms/forms'
@@ -93,101 +93,14 @@ export function Lists() {
 					</table>
 				</div>
 			)}
-			<RecommendedLists lists={lists.data} />
+			<RecommendedLists lists={lists.data} states={states} />
 		</div>
-	)
-}
-
-/** goethite's recommended lists, each added in a click. */
-function RecommendedLists({ lists }: { lists: List[] | undefined }) {
-	const recommended = useQuery(recommendedQuery)
-	// Terraform's default group is left to Terraform.
-	const defaultGroup = useQuery(groupQuery(DEFAULT_GROUP))
-	const toDefault = defaultGroup.data !== undefined && defaultGroup.data.spec.managed_by !== 'terraform'
-	const have = new Set((lists ?? []).map((list) => list.spec.url))
-	return (
-		<section className="panel" aria-label="Recommended lists">
-			<h2>Recommended lists</h2>
-			<p className="muted">
-				Ads and trackers, each checked to download and read cleanly. HaGeZi, OISD and AdGuard overlap a
-				lot: one of them is usually enough.{' '}
-				{toDefault ? 'An added list filters the default group at once. ' : ''}
-				Looking for something else? <Link to="/lists/find">Find lists in the FilterLists directory</Link>.
-			</p>
-			<ErrorNotice error={recommended.error} />
-			<table className="table recommended">
-				<tbody>
-					{(recommended.data ?? []).map((item) => (
-						<RecommendedRow key={item.id} item={item} added={have.has(item.url)} toDefault={toDefault} />
-					))}
-				</tbody>
-			</table>
-		</section>
-	)
-}
-
-function RecommendedRow({
-	item,
-	added,
-	toDefault,
-}: {
-	item: RecommendedList
-	added: boolean
-	toDefault: boolean
-}) {
-	const queryClient = useQueryClient()
-	const add = useMutation({
-		mutationFn: async () => {
-			const list = await saveList(undefined, {
-				name: item.name,
-				url: item.url,
-				enabled: true,
-				comment: `From goethite's recommended lists (${item.license}).`,
-				managed_by: 'api',
-			})
-			if (toDefault) await addToDefaultGroup(list.id)
-		},
-		onSettled: async () => {
-			await queryClient.invalidateQueries({ queryKey: ['lists'] })
-			await queryClient.invalidateQueries({ queryKey: ['groups'] })
-			await queryClient.invalidateQueries({ queryKey: ['status'] })
-		},
-	})
-	return (
-		<tr>
-			<td>
-				<strong>{item.name}</strong>
-				<div>{item.description}</div>
-				<div className="muted">
-					{item.maintainer} · {item.license} · about {count(item.rules)} rules ·{' '}
-					<a href={item.homepage} target="_blank" rel="noreferrer noopener">
-						home page
-					</a>
-					{item.default ? ' · new nodes start with it' : ''}
-				</div>
-				<ErrorNotice error={add.error} />
-			</td>
-			<td className="actions-cell">
-				{added || add.isSuccess ? (
-					<span className="badge ok">ADDED</span>
-				) : (
-					<button
-						type="button"
-						className="button small"
-						disabled={add.isPending}
-						aria-label={`Add ${item.name}`}
-						onClick={() => add.mutate()}
-					>
-						Add
-					</button>
-				)}
-			</td>
-		</tr>
 	)
 }
 
 function ListRow({ list, state }: { list: List; state: ListStatus | undefined }) {
 	const problem = state?.error ?? state?.download_error
+	const skipped = (state?.unsupported ?? 0) + (state?.invalid ?? 0)
 	return (
 		<tr>
 			<td>
@@ -197,7 +110,14 @@ function ListRow({ list, state }: { list: List; state: ListStatus | undefined })
 				<ManagedBadge managedBy={list.spec.managed_by} />
 			</td>
 			<td className="name">{list.spec.url ?? list.spec.path}</td>
-			<td className="num">{state?.rules == null ? '–' : count(state.rules)}</td>
+			<td className="num">
+				{state?.rules == null ? '–' : count(state.rules)}
+				{skipped > 0 ? (
+					<div className="muted" title="Lines a DNS server cannot apply, such as cosmetic or path rules">
+						{count(skipped)} skipped
+					</div>
+				) : null}
+			</td>
 			<td>
 				{list.spec.enabled === false ? (
 					<span className="badge">OFF</span>

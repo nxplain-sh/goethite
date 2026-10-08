@@ -156,8 +156,9 @@ goethite opens connections only to:
   [recursion](../recursion/), the **root servers and the authoritative servers** of the names
   looked up, each shown only as much of a name as it needs;
 - the hosts of **downloaded filter lists**, over HTTPS, when lists are refreshed (by default
-  every 24 hours), including the [default list](../filtering/#recommended-and-default-lists) of a
-  new node;
+  every 24 hours), including the [default lists](../filtering/#recommended-lists-and-presets) of
+  a new node; and the hosts of the recommended lists, for the first 8 KiB of each, when someone
+  opens the Lists page, at most once a day (`[filter] directory = false` turns it off);
 - **`adguardteam.github.io`**, over HTTPS, for the [blocked services](../groups/#blocked-services)
   catalog, when lists are refreshed (`[filter] services = false` turns it off, `services_file`
   reads it from a file instead);

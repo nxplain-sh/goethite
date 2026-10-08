@@ -1,6 +1,6 @@
 # ADR 0018: Where filter lists come from
 
-- **Status:** Accepted
+- **Status:** Accepted; the recommended lists are extended by [ADR 0022](0022-recommended-list-catalog.md)
 - **Date:** 2026-10-08
 
 ## Context

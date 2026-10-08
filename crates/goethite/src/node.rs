@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use goethite_api::catalog::{Directory, DirectoryList};
+use goethite_api::recommended::RecommendedSizes;
 use goethite_api::{
     ApiError, BoxFuture, BoxResult, CacheStatus, Change, ClusterRole, ClusterStatus,
     EncryptedStatus, FilterStatus, Forwarded, ForwardedAnswer, ListStatus, QueryLogStatus,
@@ -19,6 +20,7 @@ use crate::cluster::Cluster;
 use crate::control::Control;
 use crate::filterlists::FilterLists;
 use crate::metrics::{self, Metrics};
+use crate::sizes::ListSizes;
 
 /// Everything the API reports on and acts through.
 pub struct Node {
@@ -44,6 +46,8 @@ pub struct Node {
     pub encrypted: Option<EncryptedStatus>,
     /// The FilterLists directory, unless turned off.
     pub filterlists: Option<Arc<FilterLists>>,
+    /// The recommended lists' sizes, unless looking lists up is turned off.
+    pub sizes: Option<Arc<ListSizes>>,
 }
 
 impl Node {
@@ -186,6 +190,19 @@ impl goethite_api::Control for Node {
         self.control
             .services()
             .ok_or_else(goethite_api::services_off)
+    }
+
+    fn recommended_sizes(&self) -> BoxResult<'_, RecommendedSizes> {
+        Box::pin(async move {
+            let sizes = self
+                .sizes
+                .as_ref()
+                .ok_or_else(goethite_api::directory_off)?;
+            sizes
+                .sizes()
+                .await
+                .map_err(|err| ApiError::unavailable(format!("{err:#}")))
+        })
     }
 
     fn apply(&self, change: Change) -> BoxFuture<'_> {

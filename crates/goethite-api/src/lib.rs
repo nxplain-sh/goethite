@@ -24,6 +24,7 @@ mod docs;
 mod error;
 mod handlers;
 mod openapi;
+pub mod recommended;
 mod serve;
 pub mod services;
 mod web;
@@ -129,6 +130,11 @@ pub trait Control: Send + Sync + 'static {
         Box::pin(async { Err(directory_off()) })
     }
 
+    /// How big the recommended lists say they are.
+    fn recommended_sizes(&self) -> BoxResult<'_, recommended::RecommendedSizes> {
+        Box::pin(async { Err(directory_off()) })
+    }
+
     /// The services groups can block.
     ///
     /// # Errors
@@ -171,7 +177,7 @@ pub trait Control: Send + Sync + 'static {
 /// The answer when this node does not use the FilterLists directory.
 pub fn directory_off() -> ApiError {
     ApiError::unavailable(
-        "the FilterLists directory is turned off on this node ([filter] directory in its config file)",
+        "looking lists up is turned off on this node ([filter] directory in its config file)",
     )
 }
 

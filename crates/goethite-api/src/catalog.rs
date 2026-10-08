@@ -1,9 +1,5 @@
-//! Where filter lists come from: the lists goethite recommends, and the
-//! [FilterLists](https://filterlists.com) directory.
-//!
-//! The recommended lists are built in and checked by hand: each downloads
-//! over HTTPS and parses with no invalid lines. One of them is the default
-//! list a new node starts with.
+//! The [FilterLists](https://filterlists.com) directory, for finding filter
+//! lists beyond the ones goethite recommends ([`crate::recommended`]).
 //!
 //! The directory is third-party data, fetched by the node when someone
 //! browses it. Everything here reads it without trusting it: unknown fields
@@ -19,156 +15,6 @@ use std::collections::HashMap;
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
-
-/// A filter list goethite recommends.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ToSchema)]
-pub struct RecommendedList {
-    /// A stable identifier, such as `hagezi-normal`.
-    pub id: &'static str,
-    /// Its name.
-    pub name: &'static str,
-    /// Who maintains it.
-    pub maintainer: &'static str,
-    /// What it blocks, and how strictly.
-    pub description: &'static str,
-    /// Where goethite downloads it.
-    pub url: &'static str,
-    /// Its home page.
-    pub homepage: &'static str,
-    /// Its license.
-    pub license: &'static str,
-    /// About how many rules it has.
-    pub rules: u32,
-    /// Whether a new node starts with it.
-    pub default: bool,
-}
-
-/// The lists goethite recommends: ads and trackers. Rule counts are from
-/// 8 October 2026.
-pub const RECOMMENDED: [RecommendedList; 10] = [
-    RecommendedList {
-        id: "hagezi-light",
-        name: "HaGeZi Multi Light",
-        maintainer: "HaGeZi",
-        description: "Basic protection from ads, trackers, metrics and the most common \
-                      phishing and malware. For devices where nothing may break.",
-        url: "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/light.txt",
-        homepage: "https://github.com/hagezi/dns-blocklists",
-        license: "GPL-3.0",
-        rules: 54_000,
-        default: false,
-    },
-    RecommendedList {
-        id: "hagezi-normal",
-        name: "HaGeZi Multi Normal",
-        maintainer: "HaGeZi",
-        description: "All-round protection from ads, trackers, metrics, telemetry, phishing, \
-                      malware and scams, made for DNS blocking. Rarely breaks anything.",
-        url: "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/multi.txt",
-        homepage: "https://github.com/hagezi/dns-blocklists",
-        license: "GPL-3.0",
-        rules: 159_000,
-        default: true,
-    },
-    RecommendedList {
-        id: "hagezi-pro",
-        name: "HaGeZi Multi Pro",
-        maintainer: "HaGeZi",
-        description: "Extended protection: more trackers and junk than Normal. May \
-                      occasionally block something you want.",
-        url: "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/pro.txt",
-        homepage: "https://github.com/hagezi/dns-blocklists",
-        license: "GPL-3.0",
-        rules: 195_000,
-        default: false,
-    },
-    RecommendedList {
-        id: "hagezi-pro-plus",
-        name: "HaGeZi Multi Pro++",
-        maintainer: "HaGeZi",
-        description: "Aggressive protection, for people who will allow what it breaks.",
-        url: "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/pro.plus.txt",
-        homepage: "https://github.com/hagezi/dns-blocklists",
-        license: "GPL-3.0",
-        rules: 208_000,
-        default: false,
-    },
-    RecommendedList {
-        id: "adguard-dns",
-        name: "AdGuard DNS filter",
-        maintainer: "AdGuard",
-        description: "AdGuard's ad, tracker, social media and mobile ad filters, simplified \
-                      for DNS blocking. What AdGuard Home starts with.",
-        url: "https://adguardteam.github.io/HostlistsRegistry/assets/filter_1.txt",
-        homepage: "https://github.com/AdguardTeam/AdGuardSDNSFilter",
-        license: "GPL-3.0",
-        rules: 179_000,
-        default: false,
-    },
-    RecommendedList {
-        id: "oisd-small",
-        name: "OISD Small",
-        maintainer: "Stephan van Ruth",
-        description: "\"Block. Don't break.\" Ads, trackers and malware, with very few \
-                      false positives.",
-        url: "https://small.oisd.nl/",
-        homepage: "https://oisd.nl",
-        license: "GPL-3.0",
-        rules: 58_000,
-        default: false,
-    },
-    RecommendedList {
-        id: "oisd-big",
-        name: "OISD Big",
-        maintainer: "Stephan van Ruth",
-        description: "OISD's broader list: more ads, trackers, malware and phishing, still \
-                      made not to break things.",
-        url: "https://big.oisd.nl/",
-        homepage: "https://oisd.nl",
-        license: "GPL-3.0",
-        rules: 240_000,
-        default: false,
-    },
-    RecommendedList {
-        id: "stevenblack",
-        name: "Steven Black's Unified Hosts",
-        maintainer: "Steven Black",
-        description: "Adware and malware hosts from several sources, consolidated: what \
-                      Pi-hole starts with.",
-        url: "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts",
-        homepage: "https://github.com/StevenBlack/hosts",
-        license: "MIT",
-        rules: 73_000,
-        default: false,
-    },
-    RecommendedList {
-        id: "adaway",
-        name: "AdAway",
-        maintainer: "AdAway",
-        description: "Mobile ad servers, from the AdAway app for Android. Small.",
-        url: "https://adaway.org/hosts.txt",
-        homepage: "https://adaway.org",
-        license: "CC-BY-3.0",
-        rules: 6_500,
-        default: false,
-    },
-    RecommendedList {
-        id: "peter-lowe",
-        name: "Peter Lowe's Ad and tracking server list",
-        maintainer: "Peter Lowe",
-        description: "A long-running, hand-kept list of ad and tracking servers. Small.",
-        url: "https://pgl.yoyo.org/adservers/serverlist.php?hostformat=adblock&showintro=0&mimetype=plaintext",
-        homepage: "https://pgl.yoyo.org/adservers/",
-        license: "McRae GPL",
-        rules: 7_100,
-        default: false,
-    },
-];
-
-/// The list a new node starts with.
-pub fn default_list() -> Option<&'static RecommendedList> {
-    RECOMMENDED.iter().find(|list| list.default)
-}
 
 /// FilterLists' syntaxes goethite reads: hosts files (localhost IPv4 and
 /// IPv6, and `0`), plain domains, domains with wildcards, and adblock-style
@@ -518,15 +364,5 @@ mod tests {
         )
         .unwrap();
         assert_eq!(bad_home.homepage, None);
-    }
-
-    #[test]
-    fn exactly_one_default_list() {
-        assert_eq!(RECOMMENDED.iter().filter(|list| list.default).count(), 1);
-        assert_eq!(default_list().map(|list| list.id), Some("hagezi-normal"));
-        for list in RECOMMENDED {
-            assert!(list.url.starts_with("https://"), "{}", list.id);
-            assert!(list.name.chars().count() <= 100, "{}", list.id);
-        }
     }
 }
