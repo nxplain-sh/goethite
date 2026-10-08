@@ -100,6 +100,14 @@ user = "goethite"   # an unprivileged user from /etc/passwd
 
 The user needs to read the config and the lists, and to write the `cache_dir`.
 
+## Manage it
+
+goethite's [REST API](../api/) listens on `127.0.0.1:8053`, so on the server itself you can, for
+example, check on it with `curl http://127.0.0.1:8053/api/v1/status`. To manage it from another
+machine, create an admin token with `goethite token`, put the printed hash in the `[api]` table,
+and preferably serve HTTPS with your own certificate. Clients, groups, schedules, lists and rules
+are all managed through the API (see [Clients and groups](../groups/)).
+
 ## Point your network at it
 
 Hand out goethite's address as the DNS server in your router's DHCP settings, or configure it on

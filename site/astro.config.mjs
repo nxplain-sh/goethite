@@ -24,6 +24,8 @@ export default defineConfig({
 				{ label: 'Install on Linux', slug: 'install' },
 				{ label: 'Configuration', slug: 'configuration' },
 				{ label: 'Filtering', slug: 'filtering' },
+				{ label: 'Clients and groups', slug: 'groups' },
+				{ label: 'REST API', slug: 'api' },
 				{ label: 'Security settings', slug: 'security' },
 				{ label: 'API reference', slug: 'api-reference' },
 				{ label: 'Changelog', slug: 'changelog' },

@@ -3,8 +3,6 @@
 //! Counters that change per query are atomics updated by the query observer;
 //! everything else is read from its owner when metrics are scraped.
 
-#![allow(dead_code, reason = "the API serves /metrics in the next commit")]
-
 use std::fmt::Write as _;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};

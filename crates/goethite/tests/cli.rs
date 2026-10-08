@@ -37,6 +37,44 @@ fn prints_its_version() {
 }
 
 #[test]
+fn token_prints_a_token_and_its_hash() {
+    let output = goethite(&["token"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let token = stdout
+        .split_whitespace()
+        .find(|word| word.starts_with("gth_"))
+        .expect("a token");
+    let hash = stdout
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("token_sha256 = "))
+        .expect("a hash line")
+        .trim_matches('"');
+    assert!(
+        hash.parse::<goethite_api::TokenHash>()
+            .unwrap()
+            .matches(token)
+    );
+    assert_ne!(
+        goethite(&["token"]).stdout,
+        stdout.as_bytes(),
+        "a new token each time"
+    );
+}
+
+#[test]
+fn openapi_prints_the_committed_document() {
+    let output = goethite(&["openapi"]);
+    assert!(output.status.success());
+    let committed = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../goethite-api/openapi.json"
+    ))
+    .unwrap();
+    assert_eq!(String::from_utf8(output.stdout).unwrap(), committed);
+}
+
+#[test]
 fn run_requires_a_config() {
     let output = goethite(&["run"]);
     assert!(!output.status.success());
@@ -163,8 +201,14 @@ mod serving {
         /// Starts goethite with `config`, plus a fresh store of its own
         /// unless the config names one.
         fn start_config(test: &str, config: &str) -> Self {
-            let config = if config.contains("[store]") {
+            // No two servers on the API's default port at once.
+            let config = if config.contains("[api]") {
                 config.to_owned()
+            } else {
+                format!("{config}\n[api]\nlisten = \"127.0.0.1:0\"\n")
+            };
+            let config = if config.contains("[store]") {
+                config.clone()
             } else {
                 let store = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{test}.redb"));
                 let _ = std::fs::remove_file(&store);

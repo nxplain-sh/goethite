@@ -1,0 +1,3282 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "goethite API",
+    "description": "Configure and observe a goethite DNS filtering resolver. Every request except `/api/v1/health` needs the admin token as `Authorization: Bearer <token>` once one is configured; until then the API only answers on loopback. Changes are validated, audit-logged and applied at once. Resources have a revision: send it back in `If-Match` to make an update fail if someone else changed the resource in the meantime.",
+    "contact": {
+      "name": "goethite contributors"
+    },
+    "license": {
+      "name": "MIT OR Apache-2.0",
+      "identifier": "MIT OR Apache-2.0"
+    },
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/api/v1/audit": {
+      "get": {
+        "tags": [
+          "audit"
+        ],
+        "summary": "The audit log: every change, newest first.",
+        "operationId": "get_audit",
+        "parameters": [
+          {
+            "name": "before",
+            "in": "query",
+            "description": "Only entries before this ID.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "How many, 1 to 1000 (default 100).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Entries, newest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AuditEntry"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/clients": {
+      "get": {
+        "tags": [
+          "clients"
+        ],
+        "operationId": "list_clients",
+        "responses": {
+          "200": {
+            "description": "All of them, oldest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Client"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid admin token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "clients"
+        ],
+        "operationId": "create_client",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClientSpec"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Client"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "It refers to something that does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "It is not valid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/clients/{id}": {
+      "get": {
+        "tags": [
+          "clients"
+        ],
+        "operationId": "get_client",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "It, with its revision as the ETag",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Client"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such ID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "clients"
+        ],
+        "operationId": "update_client",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "The revision the change is based on",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClientSpec"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Client"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such ID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "It refers to something that does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "It changed since that revision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "It is not valid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "clients"
+        ],
+        "operationId": "delete_client",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "The revision the deletion is based on",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "404": {
+            "description": "No such ID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Something still refers to it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "It changed since that revision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/groups": {
+      "get": {
+        "tags": [
+          "groups"
+        ],
+        "operationId": "list_groups",
+        "responses": {
+          "200": {
+            "description": "All of them, oldest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Group"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid admin token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "groups"
+        ],
+        "operationId": "create_group",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GroupSpec"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Group"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "It refers to something that does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "It is not valid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/groups/{id}": {
+      "get": {
+        "tags": [
+          "groups"
+        ],
+        "operationId": "get_group",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "It, with its revision as the ETag",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Group"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such ID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "groups"
+        ],
+        "operationId": "update_group",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "The revision the change is based on",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GroupSpec"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Group"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such ID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "It refers to something that does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "It changed since that revision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "It is not valid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "groups"
+        ],
+        "operationId": "delete_group",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "The revision the deletion is based on",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "404": {
+            "description": "No such ID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Something still refers to it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "It changed since that revision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/health": {
+      "get": {
+        "tags": [
+          "node"
+        ],
+        "summary": "Whether the API is up. Needs no token.",
+        "operationId": "health",
+        "responses": {
+          "200": {
+            "description": "Up",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/lists": {
+      "get": {
+        "tags": [
+          "lists"
+        ],
+        "operationId": "list_lists",
+        "responses": {
+          "200": {
+            "description": "All of them, oldest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/List"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid admin token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "lists"
+        ],
+        "operationId": "create_list",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ListSpec"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/List"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "It refers to something that does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "It is not valid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/lists/refresh": {
+      "post": {
+        "tags": [
+          "lists"
+        ],
+        "summary": "Downloads every URL list now, in the background. `GET /api/v1/status`\nshows the result.",
+        "operationId": "refresh_lists",
+        "responses": {
+          "202": {
+            "description": "The download started"
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/lists/{id}": {
+      "get": {
+        "tags": [
+          "lists"
+        ],
+        "operationId": "get_list",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "It, with its revision as the ETag",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/List"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such ID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "lists"
+        ],
+        "operationId": "update_list",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "The revision the change is based on",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ListSpec"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/List"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such ID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "It refers to something that does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "It changed since that revision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "It is not valid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "lists"
+        ],
+        "operationId": "delete_list",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "The revision the deletion is based on",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "404": {
+            "description": "No such ID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Something still refers to it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "It changed since that revision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/openapi.json": {
+      "get": {
+        "tags": [
+          "node"
+        ],
+        "summary": "This API's OpenAPI document.",
+        "operationId": "get_openapi",
+        "responses": {
+          "200": {
+            "description": "The OpenAPI 3.1 document",
+            "content": {
+              "application/json": {}
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/pause": {
+      "get": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Whether filtering is paused.",
+        "operationId": "get_pause",
+        "responses": {
+          "200": {
+            "description": "Whether filtering is paused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Pause"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Pauses filtering for everyone for a while. It resumes by itself, and on a\nrestart.",
+        "operationId": "put_pause",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PauseRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Paused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Pause"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Not between 1 second and a week",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Resumes filtering.",
+        "operationId": "delete_pause",
+        "responses": {
+          "200": {
+            "description": "Resumed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Pause"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/querylog": {
+      "get": {
+        "tags": [
+          "querylog"
+        ],
+        "summary": "Searches the query log, newest first. A search looks at no more than\n100,000 entries; follow `next` to continue.",
+        "operationId": "get_querylog",
+        "parameters": [
+          {
+            "name": "before",
+            "in": "query",
+            "description": "Only entries older than this ID: the `next` of the previous page.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "How many entries, 1 to 1000 (default 100).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "client",
+            "in": "query",
+            "description": "Only this client address, client ID or group ID.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "query",
+            "description": "Only names containing this text, ignoring case.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "outcome",
+            "in": "query",
+            "description": "Only this outcome.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/QueryOutcome"
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "description": "Only entries at or after this time (RFC 3339).",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of entries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueryPage"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/rules": {
+      "get": {
+        "tags": [
+          "rules"
+        ],
+        "operationId": "list_rules",
+        "responses": {
+          "200": {
+            "description": "All of them, oldest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Rule"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid admin token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "rules"
+        ],
+        "operationId": "create_rule",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RuleSpec"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Rule"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "It refers to something that does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "It is not valid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/rules/{id}": {
+      "get": {
+        "tags": [
+          "rules"
+        ],
+        "operationId": "get_rule",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "It, with its revision as the ETag",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Rule"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such ID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "rules"
+        ],
+        "operationId": "update_rule",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "The revision the change is based on",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RuleSpec"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Rule"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such ID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "It refers to something that does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "It changed since that revision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "It is not valid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "rules"
+        ],
+        "operationId": "delete_rule",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "The revision the deletion is based on",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "404": {
+            "description": "No such ID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Something still refers to it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "It changed since that revision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/schedules": {
+      "get": {
+        "tags": [
+          "schedules"
+        ],
+        "operationId": "list_schedules",
+        "responses": {
+          "200": {
+            "description": "All of them, oldest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Schedule"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid admin token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "schedules"
+        ],
+        "operationId": "create_schedule",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScheduleSpec"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Schedule"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "It refers to something that does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "It is not valid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/schedules/{id}": {
+      "get": {
+        "tags": [
+          "schedules"
+        ],
+        "operationId": "get_schedule",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "It, with its revision as the ETag",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Schedule"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such ID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "schedules"
+        ],
+        "operationId": "update_schedule",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "The revision the change is based on",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScheduleSpec"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Schedule"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such ID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "It refers to something that does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "It changed since that revision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "It is not valid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "schedules"
+        ],
+        "operationId": "delete_schedule",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "The revision the deletion is based on",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "404": {
+            "description": "No such ID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Something still refers to it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "It changed since that revision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/settings": {
+      "get": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "The filtering settings.",
+        "operationId": "get_settings",
+        "responses": {
+          "200": {
+            "description": "The settings, with their revision as the ETag",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Settings"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Replaces the filtering settings.",
+        "operationId": "put_settings",
+        "parameters": [
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "The revision the change is based on",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SettingsSpec"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Settings"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "They changed since that revision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "They are not valid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/stats": {
+      "get": {
+        "tags": [
+          "querylog"
+        ],
+        "summary": "Counts per hour, and the names and clients asked most.",
+        "operationId": "get_stats",
+        "parameters": [
+          {
+            "name": "hours",
+            "in": "query",
+            "description": "The last this many hours, 1 to 720 (default 24).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The statistics",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsReport"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/status": {
+      "get": {
+        "tags": [
+          "node"
+        ],
+        "summary": "How the node is doing: filter, lists, upstreams, cache, query log.",
+        "operationId": "get_status",
+        "responses": {
+          "200": {
+            "description": "The status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Status"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      }
+    },
+    "/metrics": {
+      "get": {
+        "tags": [
+          "node"
+        ],
+        "summary": "Metrics in the Prometheus text format.",
+        "operationId": "get_metrics",
+        "responses": {
+          "200": {
+            "description": "Prometheus text format",
+            "content": {
+              "text/plain": {}
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Actor": {
+        "type": "object",
+        "description": "Who made a change, and from where.",
+        "required": [
+          "kind"
+        ],
+        "properties": {
+          "address": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The client's IP address, for API requests."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ActorKind",
+            "description": "What kind of actor."
+          }
+        }
+      },
+      "ActorKind": {
+        "type": "string",
+        "description": "Who made a change.",
+        "enum": [
+          "token",
+          "unauthenticated",
+          "cli",
+          "system"
+        ]
+      },
+      "AuditAction": {
+        "type": "string",
+        "description": "What an audit entry records.",
+        "enum": [
+          "create",
+          "update",
+          "delete",
+          "import",
+          "pause",
+          "resume",
+          "refresh"
+        ]
+      },
+      "AuditEntry": {
+        "type": "object",
+        "description": "One entry of the audit log.",
+        "required": [
+          "id",
+          "time",
+          "actor",
+          "action"
+        ],
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/AuditAction",
+            "description": "What."
+          },
+          "actor": {
+            "$ref": "#/components/schemas/Actor",
+            "description": "Who."
+          },
+          "after": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "The resource after the change."
+          },
+          "before": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "The resource before the change."
+          },
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "More about the change, for people."
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Increasing number.",
+            "minimum": 0
+          },
+          "kind": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The kind of resource, if one changed."
+          },
+          "resource": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The resource's ID, if one changed."
+          },
+          "time": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When."
+          }
+        }
+      },
+      "BlockResponseKind": {
+        "type": "string",
+        "description": "How blocked names are answered.",
+        "enum": [
+          "null_ip",
+          "nxdomain",
+          "refused"
+        ]
+      },
+      "CacheStatus": {
+        "type": "object",
+        "description": "The cache.",
+        "required": [
+          "entries",
+          "hits",
+          "misses"
+        ],
+        "properties": {
+          "entries": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Answers in it.",
+            "minimum": 0
+          },
+          "hits": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Lookups answered from it.",
+            "minimum": 0
+          },
+          "misses": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Lookups that were not.",
+            "minimum": 0
+          }
+        }
+      },
+      "Client": {
+        "type": "object",
+        "description": "A stored client.",
+        "required": [
+          "id",
+          "revision",
+          "created_at",
+          "updated_at",
+          "spec"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it was created."
+          },
+          "id": {
+            "type": "string",
+            "description": "The ID, chosen by goethite."
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Counts updates, starting at 1.",
+            "minimum": 0
+          },
+          "spec": {
+            "$ref": "#/components/schemas/ClientSpec",
+            "description": "What it is."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it last changed."
+          }
+        }
+      },
+      "ClientSpec": {
+        "type": "object",
+        "description": "A device or network, identified by its addresses.",
+        "required": [
+          "name",
+          "addresses"
+        ],
+        "properties": {
+          "addresses": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "IP addresses or networks in CIDR notation, such as `192.168.1.23`\nor `192.168.1.0/24`. The longest network containing a query's source\naddress decides which client asked."
+          },
+          "comment": {
+            "type": "string",
+            "description": "Free text."
+          },
+          "group": {
+            "type": "string",
+            "description": "The group's ID."
+          },
+          "managed_by": {
+            "$ref": "#/components/schemas/ManagedBy",
+            "description": "Who manages the client."
+          },
+          "name": {
+            "type": "string",
+            "description": "A name for people."
+          }
+        },
+        "additionalProperties": false
+      },
+      "Counters": {
+        "type": "object",
+        "description": "Counts of queries by outcome.",
+        "required": [
+          "queries",
+          "blocked",
+          "cached",
+          "forwarded",
+          "failed",
+          "safe_search",
+          "local",
+          "rejected",
+          "elapsed_us"
+        ],
+        "properties": {
+          "blocked": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Blocked by the filter.",
+            "minimum": 0
+          },
+          "cached": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Answered from the cache.",
+            "minimum": 0
+          },
+          "elapsed_us": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Total time spent resolving, in microseconds; divide by `queries` for\nthe average.",
+            "minimum": 0
+          },
+          "failed": {
+            "type": "integer",
+            "format": "int64",
+            "description": "No upstream answered.",
+            "minimum": 0
+          },
+          "forwarded": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Answered by an upstream.",
+            "minimum": 0
+          },
+          "local": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Answered from goethite's own records.",
+            "minimum": 0
+          },
+          "queries": {
+            "type": "integer",
+            "format": "int64",
+            "description": "All answered queries.",
+            "minimum": 0
+          },
+          "rejected": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Refused or rejected by policy.",
+            "minimum": 0
+          },
+          "safe_search": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sent to a safe search endpoint.",
+            "minimum": 0
+          }
+        }
+      },
+      "ErrorBody": {
+        "type": "object",
+        "description": "The body of every error response.",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/ErrorDetail",
+            "description": "What went wrong."
+          }
+        }
+      },
+      "ErrorDetail": {
+        "type": "object",
+        "description": "What went wrong.",
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "A stable code: `not_found`, `invalid`, `conflict`,\n`revision_mismatch`, `unauthorized`, `forbidden`, `bad_request`,\n`unavailable` or `internal`."
+          },
+          "message": {
+            "type": "string",
+            "description": "For people."
+          }
+        }
+      },
+      "FilterStatus": {
+        "type": "object",
+        "description": "The compiled filter.",
+        "required": [
+          "rules",
+          "memory_bytes"
+        ],
+        "properties": {
+          "memory_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Bytes of memory the rules take.",
+            "minimum": 0
+          },
+          "rules": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Rules compiled in.",
+            "minimum": 0
+          }
+        }
+      },
+      "Group": {
+        "type": "object",
+        "description": "A stored group.",
+        "required": [
+          "id",
+          "revision",
+          "created_at",
+          "updated_at",
+          "spec"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it was created."
+          },
+          "id": {
+            "type": "string",
+            "description": "The ID, chosen by goethite."
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Counts updates, starting at 1.",
+            "minimum": 0
+          },
+          "spec": {
+            "$ref": "#/components/schemas/GroupSpec",
+            "description": "What it is."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it last changed."
+          }
+        }
+      },
+      "GroupList": {
+        "type": "object",
+        "description": "A list a group uses, always or while a schedule is active.",
+        "required": [
+          "list"
+        ],
+        "properties": {
+          "list": {
+            "type": "string",
+            "description": "The list's ID."
+          },
+          "schedule": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The schedule's ID: the list applies only while the schedule is\nactive. Without one it always applies."
+          }
+        },
+        "additionalProperties": false
+      },
+      "GroupSpec": {
+        "type": "object",
+        "description": "A group of clients with the same filtering.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "comment": {
+            "type": "string",
+            "description": "Free text."
+          },
+          "filtering": {
+            "type": "boolean",
+            "description": "Whether the group's clients are filtered at all."
+          },
+          "lists": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GroupList"
+            },
+            "description": "The lists the group uses. Custom rules always apply while filtering\nis on."
+          },
+          "managed_by": {
+            "$ref": "#/components/schemas/ManagedBy",
+            "description": "Who manages the group."
+          },
+          "name": {
+            "type": "string",
+            "description": "A name for people."
+          },
+          "safe_search": {
+            "type": "boolean",
+            "description": "Whether search engines are sent to their safe endpoints."
+          }
+        },
+        "additionalProperties": false
+      },
+      "Health": {
+        "type": "object",
+        "description": "The answer to a health check.",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "description": "Always `ok`."
+          }
+        }
+      },
+      "HourPoint": {
+        "type": "object",
+        "description": "One hour in a report.",
+        "required": [
+          "start",
+          "counters"
+        ],
+        "properties": {
+          "counters": {
+            "$ref": "#/components/schemas/Counters",
+            "description": "Its counts."
+          },
+          "start": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the hour starts."
+          }
+        }
+      },
+      "List": {
+        "type": "object",
+        "description": "A stored filter list.",
+        "required": [
+          "id",
+          "revision",
+          "created_at",
+          "updated_at",
+          "spec"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it was created."
+          },
+          "id": {
+            "type": "string",
+            "description": "The ID, chosen by goethite."
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Counts updates, starting at 1.",
+            "minimum": 0
+          },
+          "spec": {
+            "$ref": "#/components/schemas/ListSpec",
+            "description": "What it is."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it last changed."
+          }
+        }
+      },
+      "ListSpec": {
+        "type": "object",
+        "description": "A filter list: a file on disk or an `https://` URL.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "comment": {
+            "type": "string",
+            "description": "Free text."
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether the list is used at all."
+          },
+          "managed_by": {
+            "$ref": "#/components/schemas/ManagedBy",
+            "description": "Who manages the list."
+          },
+          "name": {
+            "type": "string",
+            "description": "A name for people."
+          },
+          "path": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The list file: an absolute path on the node."
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where to download the list from: an `https://` URL. Exactly one of\n`url` and `path` is set."
+          }
+        },
+        "additionalProperties": false
+      },
+      "ListStatus": {
+        "type": "object",
+        "description": "One list.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "download_error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the last download failed, if it did."
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it could not be read, if it could not."
+          },
+          "id": {
+            "type": "string",
+            "description": "The list's ID."
+          },
+          "invalid": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Lines that are not valid rules.",
+            "minimum": 0
+          },
+          "last_attempt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When a download was last tried."
+          },
+          "last_success": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When a download last succeeded or found the list unchanged."
+          },
+          "rules": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Rules read from it, if it was read.",
+            "minimum": 0
+          },
+          "unsupported": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Lines with syntax goethite does not support yet.",
+            "minimum": 0
+          }
+        }
+      },
+      "ManagedBy": {
+        "type": "string",
+        "description": "Who manages a resource. Resources managed by Terraform are read-only in\nthe web UI and the TUI, so they do not drift from their definition.",
+        "enum": [
+          "api",
+          "terraform",
+          "config_file"
+        ]
+      },
+      "Pause": {
+        "type": "object",
+        "description": "Whether filtering is paused.",
+        "properties": {
+          "paused_until": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Until when filtering is paused; absent when it is not."
+          }
+        }
+      },
+      "PauseRequest": {
+        "type": "object",
+        "description": "How long to pause filtering.",
+        "required": [
+          "seconds"
+        ],
+        "properties": {
+          "seconds": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Seconds, from 1 to 604,800 (a week).",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "Protocol": {
+        "type": "string",
+        "description": "How a query reached goethite.",
+        "enum": [
+          "udp",
+          "tcp"
+        ]
+      },
+      "QueryEntry": {
+        "type": "object",
+        "description": "One logged query, as the API shows it.",
+        "required": [
+          "id",
+          "time",
+          "client",
+          "protocol",
+          "name",
+          "qtype",
+          "rcode",
+          "outcome",
+          "elapsed_us"
+        ],
+        "properties": {
+          "client": {
+            "type": "string",
+            "description": "The client's address (shortened if the log anonymizes clients)."
+          },
+          "client_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The known client's ID."
+          },
+          "cname": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For a block through a CNAME, the CNAME target."
+          },
+          "elapsed_us": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How long resolving took, in microseconds.",
+            "minimum": 0
+          },
+          "group": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The client's group's ID."
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The entry's ID; entries with lower IDs are older. Use it as the\n`before` cursor to page.",
+            "minimum": 0
+          },
+          "list": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The rule's list ID, or `custom` for custom rules."
+          },
+          "name": {
+            "type": "string",
+            "description": "The name asked for."
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/QueryOutcome",
+            "description": "How the answer came about."
+          },
+          "protocol": {
+            "$ref": "#/components/schemas/Protocol",
+            "description": "How the query arrived."
+          },
+          "qtype": {
+            "type": "string",
+            "description": "The type asked for, such as `A` or `TYPE65`."
+          },
+          "rcode": {
+            "type": "string",
+            "description": "The response code, such as `NOERROR`."
+          },
+          "rule": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The filter rule that applied, in AdGuard syntax."
+          },
+          "time": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the query arrived."
+          },
+          "upstream": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For a forwarded answer, the upstream's address."
+          }
+        }
+      },
+      "QueryLogStatus": {
+        "type": "object",
+        "description": "The query log.",
+        "required": [
+          "enabled",
+          "entries",
+          "dropped"
+        ],
+        "properties": {
+          "dropped": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Entries dropped because the writer could not keep up.",
+            "minimum": 0
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether queries are logged."
+          },
+          "entries": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Entries in it.",
+            "minimum": 0
+          }
+        }
+      },
+      "QueryOutcome": {
+        "type": "string",
+        "description": "How an answer came about.",
+        "enum": [
+          "local",
+          "rejected",
+          "blocked",
+          "safe_search",
+          "cached",
+          "forwarded",
+          "failed"
+        ]
+      },
+      "QueryPage": {
+        "type": "object",
+        "description": "A page of search results.",
+        "required": [
+          "entries"
+        ],
+        "properties": {
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QueryEntry"
+            },
+            "description": "Matching entries, newest first."
+          },
+          "next": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Pass as `before` for the next page; absent at the end of the log.",
+            "minimum": 0
+          }
+        }
+      },
+      "Rule": {
+        "type": "object",
+        "description": "A stored custom rule.",
+        "required": [
+          "id",
+          "revision",
+          "created_at",
+          "updated_at",
+          "spec"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it was created."
+          },
+          "id": {
+            "type": "string",
+            "description": "The ID, chosen by goethite."
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Counts updates, starting at 1.",
+            "minimum": 0
+          },
+          "spec": {
+            "$ref": "#/components/schemas/RuleSpec",
+            "description": "What it is."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it last changed."
+          }
+        }
+      },
+      "RuleSpec": {
+        "type": "object",
+        "description": "A custom filtering rule, in any syntax the filter lists use.",
+        "required": [
+          "rule"
+        ],
+        "properties": {
+          "comment": {
+            "type": "string",
+            "description": "Free text."
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether the rule is used."
+          },
+          "managed_by": {
+            "$ref": "#/components/schemas/ManagedBy",
+            "description": "Who manages the rule."
+          },
+          "rule": {
+            "type": "string",
+            "description": "The rule, such as `||ads.example^` or `@@||good.example^`."
+          }
+        },
+        "additionalProperties": false
+      },
+      "Schedule": {
+        "type": "object",
+        "description": "A stored schedule.",
+        "required": [
+          "id",
+          "revision",
+          "created_at",
+          "updated_at",
+          "spec"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it was created."
+          },
+          "id": {
+            "type": "string",
+            "description": "The ID, chosen by goethite."
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Counts updates, starting at 1.",
+            "minimum": 0
+          },
+          "spec": {
+            "$ref": "#/components/schemas/ScheduleSpec",
+            "description": "What it is."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it last changed."
+          }
+        }
+      },
+      "ScheduleSpec": {
+        "type": "object",
+        "description": "When something applies: weekly time windows in a time zone.",
+        "required": [
+          "name",
+          "windows"
+        ],
+        "properties": {
+          "comment": {
+            "type": "string",
+            "description": "Free text."
+          },
+          "managed_by": {
+            "$ref": "#/components/schemas/ManagedBy",
+            "description": "Who manages the schedule."
+          },
+          "name": {
+            "type": "string",
+            "description": "A name for people."
+          },
+          "time_zone": {
+            "type": "string",
+            "description": "An IANA time zone such as `Europe/Berlin`, or `UTC`."
+          },
+          "windows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Window"
+            },
+            "description": "The windows."
+          }
+        },
+        "additionalProperties": false
+      },
+      "Settings": {
+        "type": "object",
+        "description": "The settings, with their revision.",
+        "required": [
+          "revision",
+          "updated_at",
+          "spec"
+        ],
+        "properties": {
+          "revision": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Counts updates, starting at 1.",
+            "minimum": 0
+          },
+          "spec": {
+            "$ref": "#/components/schemas/SettingsSpec",
+            "description": "The settings."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When they last changed."
+          }
+        }
+      },
+      "SettingsSpec": {
+        "type": "object",
+        "description": "Node-wide filtering settings.",
+        "properties": {
+          "block_response": {
+            "$ref": "#/components/schemas/BlockResponseKind",
+            "description": "How blocked names are answered."
+          },
+          "blocked_ttl": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Time to live of null-IP answers, in seconds, at most 86,400.",
+            "minimum": 0
+          },
+          "list_update_hours": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How often downloaded lists are refreshed, in hours, 1 to 168.",
+            "minimum": 0
+          },
+          "protection": {
+            "type": "boolean",
+            "description": "The master switch: when off, nothing is filtered for anyone."
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsReport": {
+        "type": "object",
+        "description": "Statistics over a time range.",
+        "required": [
+          "from",
+          "to",
+          "totals",
+          "hours",
+          "top_names",
+          "top_blocked",
+          "top_clients"
+        ],
+        "properties": {
+          "from": {
+            "type": "string",
+            "format": "date-time",
+            "description": "The start of the first hour covered."
+          },
+          "hours": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HourPoint"
+            },
+            "description": "Counts per hour, oldest first; hours without queries are left out."
+          },
+          "to": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the report was made."
+          },
+          "top_blocked": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TopEntry"
+            },
+            "description": "The blocked names asked for most."
+          },
+          "top_clients": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TopEntry"
+            },
+            "description": "The clients asking most, by client ID or address."
+          },
+          "top_names": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TopEntry"
+            },
+            "description": "The names asked for most."
+          },
+          "totals": {
+            "$ref": "#/components/schemas/Counters",
+            "description": "Counts over the whole range."
+          }
+        }
+      },
+      "Status": {
+        "type": "object",
+        "description": "How the node is doing.",
+        "required": [
+          "version",
+          "started_at",
+          "protection",
+          "filter",
+          "lists",
+          "upstreams",
+          "query_log"
+        ],
+        "properties": {
+          "cache": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CacheStatus",
+                "description": "The cache, if there is one."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "filter": {
+            "$ref": "#/components/schemas/FilterStatus",
+            "description": "The compiled filter."
+          },
+          "lists": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ListStatus"
+            },
+            "description": "Each list, by ID."
+          },
+          "paused_until": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Until when filtering is paused, if it is."
+          },
+          "protection": {
+            "type": "boolean",
+            "description": "Whether filtering is on in the settings."
+          },
+          "query_log": {
+            "$ref": "#/components/schemas/QueryLogStatus",
+            "description": "The query log."
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When goethite started."
+          },
+          "upstreams": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UpstreamStatus"
+            },
+            "description": "The upstreams, in configured order."
+          },
+          "version": {
+            "type": "string",
+            "description": "The running version."
+          }
+        }
+      },
+      "TopEntry": {
+        "type": "object",
+        "description": "A name or client and how often it was seen.",
+        "required": [
+          "key",
+          "count"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How often, approximately.",
+            "minimum": 0
+          },
+          "key": {
+            "type": "string",
+            "description": "The name, client ID or client address."
+          }
+        }
+      },
+      "UpstreamStatus": {
+        "type": "object",
+        "description": "One upstream.",
+        "required": [
+          "address",
+          "protocol",
+          "healthy",
+          "consecutive_failures"
+        ],
+        "properties": {
+          "address": {
+            "type": "string",
+            "description": "Address and port."
+          },
+          "consecutive_failures": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Failures since it last answered.",
+            "minimum": 0
+          },
+          "healthy": {
+            "type": "boolean",
+            "description": "False while it is skipped after repeated failures."
+          },
+          "protocol": {
+            "type": "string",
+            "description": "`udp`, `tcp`, `tls` or `https`."
+          }
+        }
+      },
+      "Weekday": {
+        "type": "string",
+        "description": "A day of the week.",
+        "enum": [
+          "mon",
+          "tue",
+          "wed",
+          "thu",
+          "fri",
+          "sat",
+          "sun"
+        ]
+      },
+      "Window": {
+        "type": "object",
+        "description": "A weekly time window. `end` before `start` runs past midnight into the\nnext day.",
+        "required": [
+          "days",
+          "start",
+          "end"
+        ],
+        "properties": {
+          "days": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Weekday"
+            },
+            "description": "The days the window starts on."
+          },
+          "end": {
+            "type": "string",
+            "description": "Local end time, `HH:MM` (`24:00` for midnight)."
+          },
+          "start": {
+            "type": "string",
+            "description": "Local start time, `HH:MM`."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "securitySchemes": {
+      "token": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "The admin token printed by `goethite token`."
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "node",
+      "description": "Health, status, metrics"
+    },
+    {
+      "name": "settings",
+      "description": "Filtering settings and pausing"
+    },
+    {
+      "name": "lists",
+      "description": "Filter lists"
+    },
+    {
+      "name": "rules",
+      "description": "Custom filtering rules"
+    },
+    {
+      "name": "groups",
+      "description": "Groups of clients with the same filtering"
+    },
+    {
+      "name": "clients",
+      "description": "Devices and networks, by address"
+    },
+    {
+      "name": "schedules",
+      "description": "Weekly time windows for scheduled lists"
+    },
+    {
+      "name": "querylog",
+      "description": "The query log and statistics"
+    },
+    {
+      "name": "audit",
+      "description": "Every configuration change"
+    }
+  ]
+}

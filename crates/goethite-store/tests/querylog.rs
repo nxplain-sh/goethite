@@ -17,11 +17,12 @@ use goethite_store::{
 use jiff::Timestamp;
 
 fn temp(name: &str) -> PathBuf {
-    std::env::temp_dir().join(format!(
-        "goethite-querylog-{name}-{}-{}.redb",
-        std::process::id(),
-        Timestamp::now().as_nanosecond().unsigned_abs()
-    ))
+    let path = std::env::temp_dir().join(format!(
+        "goethite-querylog-{name}-{}.redb",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&path);
+    path
 }
 
 fn event(name: &str, client: &str, outcome: QueryOutcome) -> LogEvent {

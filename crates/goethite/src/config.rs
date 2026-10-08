@@ -12,6 +12,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
+use goethite_api::TokenHash;
 use goethite_filter::{LineKind, parse_line};
 use goethite_proto::Name;
 use goethite_resolver::{
@@ -56,10 +57,85 @@ pub struct Config {
     /// The `[querylog]` table.
     #[serde(default)]
     pub querylog: QueryLogSection,
+    /// The `[api]` table.
+    #[serde(default)]
+    pub api: ApiSection,
     /// The absolute directory of the config file, which relative paths are
     /// relative to. Set by [`Config::load`].
     #[serde(skip)]
     pub dir: PathBuf,
+}
+
+/// The `[api]` table.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, default)]
+pub struct ApiSection {
+    /// Whether the API (and the web UI) is served.
+    pub enabled: bool,
+    /// Addresses for the API: one, or a list.
+    #[serde(deserialize_with = "listen_addresses")]
+    pub listen: Vec<SocketAddr>,
+    /// The SHA-256 hash of the admin token, from `goethite token`.
+    pub token_sha256: Option<String>,
+    /// The TLS certificate chain (PEM), to serve HTTPS.
+    pub tls_cert: Option<PathBuf>,
+    /// The TLS private key (PEM).
+    pub tls_key: Option<PathBuf>,
+}
+
+impl Default for ApiSection {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            listen: vec![SocketAddr::from((Ipv4Addr::LOCALHOST, 8053))],
+            token_sha256: None,
+            tls_cert: None,
+            tls_key: None,
+        }
+    }
+}
+
+impl ApiSection {
+    /// The token hash, if one is configured.
+    pub fn token(&self) -> Result<Option<TokenHash>> {
+        self.token_sha256
+            .as_deref()
+            .map(|hash| hash.parse().context("api.token_sha256"))
+            .transpose()
+    }
+
+    fn validate(&self) -> Result<()> {
+        if !self.enabled {
+            return Ok(());
+        }
+        if self.listen.is_empty() {
+            bail!("api.listen is empty; give at least one address or set api.enabled = false");
+        }
+        let token = self.token()?;
+        if token.is_none()
+            && let Some(open) = self.listen.iter().find(|addr| !addr.ip().is_loopback())
+        {
+            bail!(
+                "the API would listen on {open} without an admin token; run `goethite token` \
+                 and set api.token_sha256, or listen on loopback only"
+            );
+        }
+        if self.tls_cert.is_some() != self.tls_key.is_some() {
+            bail!("api.tls_cert and api.tls_key go together");
+        }
+        Ok(())
+    }
+
+    fn resolve_paths(&mut self, base: &Path) {
+        for path in [&mut self.tls_cert, &mut self.tls_key]
+            .into_iter()
+            .flatten()
+        {
+            if path.is_relative() {
+                *path = base.join(&*path);
+            }
+        }
+    }
 }
 
 /// The `[querylog]` table.
@@ -813,6 +889,7 @@ impl Config {
             .validate()
             .and_then(|()| config.cache.validate())
             .and_then(|()| config.querylog.validate())
+            .and_then(|()| config.api.validate())
             .and_then(|()| config.filter.validate())
             .and_then(|()| config.security.rebinding_protection().map(drop))
             .with_context(|| format!("invalid config file {}", path.display()))?;
@@ -825,6 +902,7 @@ impl Config {
             .with_context(|| format!("cannot resolve the directory of {}", path.display()))?;
         let dir = config.dir.clone();
         config.filter.resolve_paths(&dir);
+        config.api.resolve_paths(&dir);
         if let Some(store) = &mut config.store.path
             && store.is_relative()
         {
@@ -1080,6 +1158,41 @@ mod tests {
             let err = config.filter.validate().unwrap_err();
             assert!(err.to_string().contains("filter.rules"), "{bad}: {err:#}");
         }
+    }
+
+    #[test]
+    fn api_settings() {
+        let default = Config::parse("").unwrap().api;
+        assert!(default.enabled);
+        assert_eq!(default.listen, ["127.0.0.1:8053".parse().unwrap()]);
+        assert!(default.validate().is_ok());
+        assert_eq!(default.token().unwrap(), None);
+
+        let open = Config::parse("[api]\nlisten = \"0.0.0.0:8053\"")
+            .unwrap()
+            .api;
+        let err = open.validate().unwrap_err().to_string();
+        assert!(err.contains("without an admin token"), "{err}");
+
+        let hash = goethite_api::hash_token("gth_test").to_string();
+        let tokened = Config::parse(&format!(
+            "[api]\nlisten = [\"0.0.0.0:8053\", \"[::]:8053\"]\ntoken_sha256 = \"{hash}\""
+        ))
+        .unwrap()
+        .api;
+        assert!(tokened.validate().is_ok());
+        assert!(tokened.token().unwrap().unwrap().matches("gth_test"));
+
+        for bad in [
+            "token_sha256 = \"short\"",
+            "tls_cert = \"cert.pem\"",
+            "listen = []",
+        ] {
+            let config = Config::parse(&format!("[api]\n{bad}")).unwrap();
+            assert!(config.api.validate().is_err(), "{bad}");
+        }
+        let off = Config::parse("[api]\nenabled = false\nlisten = \"0.0.0.0:1\"").unwrap();
+        assert!(off.api.validate().is_ok());
     }
 
     #[test]

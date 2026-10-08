@@ -40,10 +40,6 @@ pub struct ListStatus {
 }
 
 /// A compiled filter, with what each source is.
-#[allow(
-    dead_code,
-    reason = "the API, in the next commit, reads the list statuses"
-)]
 pub struct Compiled {
     /// The filter.
     pub filter: Arc<Filter>,

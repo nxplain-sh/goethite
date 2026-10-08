@@ -77,6 +77,11 @@ Phase 1's scope shipped in v0.1.0. These items came up along the way; they are c
 
 ## Phase 2: v0.2 control
 
+- **[P2] Scoped API tokens:** read-only tokens (for monitoring) and a Terraform token, beside the
+  single admin token.
+- **[P4] `/api/docs` in the binary** (Scalar, bundled assets, off by default, loopback only), with
+  the full web UI.
+
 - **[P2] Prometheus metrics** endpoint.
 - **[P2] API compatibility checks.** Use oasdiff on the OpenAPI spec for `/api/v1`, and evaluate
   `cargo-semver-checks` if any crate is published.

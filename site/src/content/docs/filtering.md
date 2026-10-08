@@ -33,8 +33,8 @@ and invalid.
 
 ## Configuration
 
-Lists, rules and the filtering settings live in goethite's store, which the API (coming in this
-release series) edits. The `[filter]` table in the config file **seeds the store on the first
+Lists, rules and the filtering settings live in goethite's store, which the
+[REST API](../api/) edits. [Groups](../groups/) decide which lists apply to which clients. The `[filter]` table in the config file **seeds the store on the first
 start**; after that the store is the source of truth. If you edit `[filter]` later, goethite logs
 a warning and keeps the store as it is. To apply your edits, stop goethite and import them:
 

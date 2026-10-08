@@ -6,6 +6,7 @@ mod download;
 mod filters;
 mod lists;
 mod metrics;
+mod node;
 mod observe;
 mod privileges;
 
@@ -17,12 +18,15 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use goethite_api::{Api, ApiConfig, ApiListeners};
 use goethite_resolver::{
     Cache, Forwarder, ForwarderConfig, Policy, PolicyState, Resolver, TlsRoots, test_record,
     tls_client_config,
 };
 use goethite_server::{Listeners, Server};
 use goethite_store::{Actor, Import, Store};
+use jiff::Timestamp;
+use tokio::sync::watch;
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::filter::LevelFilter;
@@ -65,6 +69,11 @@ enum Command {
         #[arg(long, short, value_name = "PATH")]
         config: PathBuf,
     },
+    /// Generate an admin token for the API and print it with the hash that
+    /// goes into the config file.
+    Token,
+    /// Print the API's OpenAPI document.
+    Openapi,
 }
 
 fn main() -> ExitCode {
@@ -74,6 +83,8 @@ fn main() -> ExitCode {
         Command::Run { config } => run(&config),
         Command::CheckConfig { config } => check_config(&config),
         Command::Import { config } => import(&config),
+        Command::Token => token(),
+        Command::Openapi => print(&goethite_api::openapi_json()),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -108,6 +119,17 @@ fn init_logging() {
         .try_init();
 }
 
+/// What is set up while goethite may still be privileged, before any
+/// thread starts.
+struct Prepared {
+    listeners: Listeners,
+    server_config: goethite_server::ServerConfig,
+    api_listeners: Option<ApiListeners>,
+    api_tls: Option<Arc<rustls::ServerConfig>>,
+    store: Arc<Store>,
+    query_log: Arc<goethite_store::QueryLog>,
+}
+
 fn run(config_path: &Path) -> Result<()> {
     info!(
         version = env!("CARGO_PKG_VERSION"),
@@ -115,6 +137,18 @@ fn run(config_path: &Path) -> Result<()> {
         "starting goethite"
     );
     let config = Config::load(config_path)?;
+    let prepared = prepare(&config, config_path)?;
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .context("cannot start the async runtime")?;
+    runtime.block_on(serve(&config, prepared))
+}
+
+/// Binds every socket and reads the API key while the process is still
+/// single-threaded and maybe privileged, drops privileges, then opens the
+/// store as the user goethite runs as, so its files are its own.
+fn prepare(config: &Config, config_path: &Path) -> Result<Prepared> {
     let account = config
         .server
         .user
@@ -122,13 +156,19 @@ fn run(config_path: &Path) -> Result<()> {
         .map(privileges::lookup)
         .transpose()?;
     let server_config = config.server.to_server_config();
-    // Bound while the process is still single-threaded, before the runtime
-    // starts, so privileges can be dropped once the sockets exist.
     let listeners = Listeners::bind(&server_config)?;
+    let api_listeners = config
+        .api
+        .enabled
+        .then(|| ApiListeners::bind(&config.api.listen))
+        .transpose()?;
+    let api_tls = match (&config.api.tls_cert, &config.api.tls_key) {
+        (Some(cert), Some(key)) if config.api.enabled => Some(load_tls(cert, key)?),
+        _ => None,
+    };
     privileges::drop_privileges(account.as_ref())?;
-    // Opened as the user goethite runs as, so the files are its own.
-    let store = Arc::new(open_store(&config)?);
-    seed(&store, &config, config_path)?;
+    let store = Arc::new(open_store(config)?);
+    seed(&store, config, config_path)?;
     let upstream_names = config
         .upstream
         .iter()
@@ -138,58 +178,170 @@ fn run(config_path: &Path) -> Result<()> {
     if !config.querylog.enabled {
         info!("the query log is turned off; statistics are still kept");
     }
-    let metrics = Arc::new(metrics::Metrics::default());
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .context("cannot start the async runtime")?;
-
-    runtime.block_on(async {
-        // Install signal handlers before binding so a signal is never missed.
-        let shutdown = shutdown_signal()?;
-        let upstreams: Vec<_> = config
-            .upstream
-            .iter()
-            .map(config::UpstreamSection::to_upstream)
-            .collect();
-        for upstream in &upstreams {
-            info!(address = %upstream.address, transport = ?upstream.transport, "upstream");
-        }
-        let forwarder = Forwarder::new(ForwarderConfig::new(upstreams))
-            .context("invalid [[upstream]] configuration")?;
-        let cache = Cache::new(config.cache.to_cache_config());
-        info!(max_entries = config.cache.max_entries, "cache");
-        let mut resolver = Resolver::new(vec![test_record()?])
-            .with_cache(cache)
-            .with_forwarder(forwarder);
-        if let Some(protection) = config.security.rebinding_protection()? {
-            resolver = resolver.with_rebinding_protection(protection);
-        } else {
-            info!("DNS rebinding protection is turned off");
-        }
-        let state = Arc::new(PolicyState::new(Policy::none()));
-        resolver = resolver.with_policy(Arc::clone(&state));
-        let resolver = Arc::new(resolver);
-        let control = Control::new(store, state, ListStore::new(config.lists_dir()));
-        // Filter from the first query on, with the lists already on disk.
-        control.rebuild_filter().await;
-        if !control.store().config().settings.spec.protection {
-            info!("filtering is turned off in the settings");
-        }
-        reload_on_hangup(Arc::clone(&control))?;
-        let tls = tls_client_config(&TlsRoots::Bundled, &[b"h2", b"http/1.1"])?;
-        let downloader =
-            download::Downloader::new(Arc::clone(&resolver), tls, filters::MAX_LIST_LEN);
-        control.spawn(downloader);
-        let server = Server::new(listeners, server_config, Arc::clone(&resolver))?.with_observer(
-            Arc::new(observe::Observer {
-                log: Arc::clone(&query_log),
-                metrics: Arc::clone(&metrics),
-            }),
-        );
-        server.run(shutdown).await?;
-        Ok(())
+    Ok(Prepared {
+        listeners,
+        server_config,
+        api_listeners,
+        api_tls,
+        store,
+        query_log,
     })
+}
+
+/// The resolver for `config`, steered by `state`.
+fn resolver(config: &Config, state: &Arc<PolicyState>) -> Result<Resolver> {
+    let upstreams: Vec<_> = config
+        .upstream
+        .iter()
+        .map(config::UpstreamSection::to_upstream)
+        .collect();
+    for upstream in &upstreams {
+        info!(address = %upstream.address, transport = ?upstream.transport, "upstream");
+    }
+    let forwarder = Forwarder::new(ForwarderConfig::new(upstreams))
+        .context("invalid [[upstream]] configuration")?;
+    let cache = Cache::new(config.cache.to_cache_config());
+    info!(max_entries = config.cache.max_entries, "cache");
+    let mut resolver = Resolver::new(vec![test_record()?])
+        .with_cache(cache)
+        .with_forwarder(forwarder)
+        .with_policy(Arc::clone(state));
+    if let Some(protection) = config.security.rebinding_protection()? {
+        resolver = resolver.with_rebinding_protection(protection);
+    } else {
+        info!("DNS rebinding protection is turned off");
+    }
+    Ok(resolver)
+}
+
+/// Runs the DNS server, the control plane and the API until a shutdown
+/// signal.
+async fn serve(config: &Config, prepared: Prepared) -> Result<()> {
+    // One signal stops both the DNS server and the API.
+    let shutdown = shutdown_signal()?;
+    let (stop, stopped) = watch::channel(false);
+    tokio::spawn(async move {
+        shutdown.await;
+        stop.send_replace(true);
+    });
+    let state = Arc::new(PolicyState::new(Policy::none()));
+    let resolver = Arc::new(resolver(config, &state)?);
+    let control = Control::new(prepared.store, state, ListStore::new(config.lists_dir()));
+    // Filter from the first query on, with the lists already on disk.
+    control.rebuild_filter().await;
+    if !control.store().config().settings.spec.protection {
+        info!("filtering is turned off in the settings");
+    }
+    reload_on_hangup(Arc::clone(&control))?;
+    let tls = tls_client_config(&TlsRoots::Bundled, &[b"h2", b"http/1.1"])?;
+    let downloader = download::Downloader::new(Arc::clone(&resolver), tls, filters::MAX_LIST_LEN);
+    control.spawn(downloader);
+    let metrics = Arc::new(metrics::Metrics::default());
+    let server = Server::new(
+        prepared.listeners,
+        prepared.server_config,
+        Arc::clone(&resolver),
+    )?
+    .with_observer(Arc::new(observe::Observer {
+        log: Arc::clone(&prepared.query_log),
+        metrics: Arc::clone(&metrics),
+    }));
+    let api = prepared.api_listeners.map(|listeners| {
+        let node = node::Node {
+            control: Arc::clone(&control),
+            resolver: Arc::clone(&resolver),
+            server: server.stats(),
+            metrics,
+            log: Arc::clone(&prepared.query_log),
+            querylog_enabled: config.querylog.enabled,
+            started: Timestamp::now(),
+        };
+        let api = api(
+            config,
+            &control,
+            &prepared.query_log,
+            node,
+            prepared.api_tls,
+        );
+        tokio::spawn(goethite_api::serve(listeners, api, until(stopped.clone())))
+    });
+    server.run(until(stopped)).await?;
+    if let Some(api) = api {
+        api.await.context("the API task failed")??;
+    }
+    Ok(())
+}
+
+/// Completes once `stopped` turns true.
+async fn until(mut stopped: watch::Receiver<bool>) {
+    let _ = stopped.wait_for(|stop| *stop).await;
+}
+
+/// The API's shared state, with warnings about weak setups.
+fn api(
+    config: &Config,
+    control: &Arc<Control>,
+    log: &Arc<goethite_store::QueryLog>,
+    node: node::Node,
+    tls: Option<Arc<rustls::ServerConfig>>,
+) -> Arc<Api> {
+    let token = config.api.token().ok().flatten();
+    let beyond_loopback = config
+        .api
+        .listen
+        .iter()
+        .any(|addr| !addr.ip().is_loopback());
+    if token.is_none() {
+        warn!("no admin token is configured: any local user can use the API");
+    } else if tls.is_none() && beyond_loopback {
+        warn!("the API is served over plain HTTP beyond loopback: the token can be sniffed");
+    }
+    Arc::new(Api {
+        store: Arc::clone(control.store()),
+        log: Arc::clone(log),
+        control: Arc::new(node),
+        config: ApiConfig { token, tls },
+    })
+}
+
+/// The TLS settings for the API from PEM files.
+fn load_tls(cert: &Path, key: &Path) -> Result<Arc<rustls::ServerConfig>> {
+    use rustls::pki_types::pem::PemObject;
+    use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+
+    let chain = CertificateDer::pem_file_iter(cert)
+        .and_then(Iterator::collect::<Result<Vec<_>, _>>)
+        .with_context(|| format!("cannot read the API certificate {}", cert.display()))?;
+    let key = PrivateKeyDer::from_pem_file(key)
+        .with_context(|| format!("cannot read the API key {}", key.display()))?;
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let mut tls = rustls::ServerConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()?
+        .with_no_client_auth()
+        .with_single_cert(chain, key)
+        .context("the API certificate and key do not fit together")?;
+    tls.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+    Ok(Arc::new(tls))
+}
+
+/// Prints a new admin token and its hash.
+fn token() -> Result<()> {
+    let (token, hash) = goethite_api::generate_token();
+    print(&format!(
+        "Admin token (shown once; keep it secret, it gives full control):\n\n    {token}\n\n\
+         Put its hash in the [api] table of the config file, then restart goethite:\n\n    \
+         token_sha256 = \"{hash}\"\n\n\
+         Clients send the token as `Authorization: Bearer <token>`.\n"
+    ))
+}
+
+/// Writes `text` to standard output: command output, not a log line.
+fn print(text: &str) -> Result<()> {
+    use std::io::Write as _;
+    let mut stdout = std::io::stdout().lock();
+    stdout.write_all(text.as_bytes())?;
+    stdout.flush()?;
+    Ok(())
 }
 
 /// Loads the config, builds the upstreams and compiles the filter lists as

@@ -26,7 +26,6 @@ use crate::filters::{self, CUSTOM_RULES, Compiled, Downloaded, ListStatus};
 use crate::lists::ListStore;
 
 /// The control plane's handle on the data plane.
-#[allow(dead_code, reason = "the API, in the next commit, reads the rest")]
 pub struct Control {
     store: Arc<Store>,
     state: Arc<PolicyState>,
@@ -37,7 +36,6 @@ pub struct Control {
     refresh: Notify,
 }
 
-#[allow(dead_code, reason = "the API, in the next commit, uses the rest")]
 impl Control {
     /// A control plane for `store`, steering `state`, keeping downloaded
     /// lists in `lists`.
