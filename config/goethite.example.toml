@@ -161,7 +161,7 @@ max_entries = 1000000       # the oldest go first; 1,000 to 50,000,000
 anonymize_clients = false   # true keeps only the /24 (IPv4) or /56 (IPv6)
 
 [api]
-# The REST API (/api/v1), its metrics (/metrics) and, later, the web UI.
+# The REST API (/api/v1), its metrics (/metrics) and the web UI (/).
 # Without an admin token it answers loopback only, and refuses to start on
 # any other address. To reach it from the network, run `goethite token`, put
 # the printed hash here, and preferably serve HTTPS with your own
@@ -171,3 +171,4 @@ listen = "127.0.0.1:8053"
 # token_sha256 = "<64 hex digits from `goethite token`>"
 # tls_cert = "/etc/goethite/api.crt"
 # tls_key = "/etc/goethite/api.key"
+web_ui = true

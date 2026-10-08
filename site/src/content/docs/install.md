@@ -9,15 +9,18 @@ development only; see the [quick start](../quick-start/).)
 
 ## Build
 
-Install Rust with [rustup](https://rustup.rs) and a C compiler (`build-essential` on Debian and
-Ubuntu, `gcc` elsewhere), then:
+Install Rust with [rustup](https://rustup.rs), a C compiler (`build-essential` on Debian and
+Ubuntu, `gcc` elsewhere) and Node.js 24 or later (for the web UI only), then:
 
 ```sh
 git clone https://github.com/nxplain-sh/goethite && cd goethite
+(cd web && npm ci --ignore-scripts && npm run build)
 cargo build --release --locked
 ```
 
-The binary is `target/release/goethite`. It has no runtime dependencies beyond the C library.
+The binary is `target/release/goethite`, with the [web UI](../web-ui/) inside. It has no runtime
+dependencies beyond the C library; Node.js is needed only to build. Skip the `web` line to build
+without the web UI.
 
 ## Install
 

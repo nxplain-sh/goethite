@@ -81,6 +81,13 @@ Phase 1's scope shipped in v0.1.0. These items came up along the way; they are c
   single admin token.
 - **[P4] `/api/docs` in the binary** (Scalar, bundled assets, off by default, loopback only), with
   the full web UI.
+- **[P4] Web UI tests.** Component and end-to-end tests (for example Vitest and Playwright) once
+  the UI has screens that change things; the skeleton is checked by the type-checker, the Rust
+  serving tests and a CI job that embeds and fetches it.
+- **[P4] Theme before the first paint.** A stored light/dark choice is applied when the script
+  starts, so it can flash; fixing it needs a CSP hash for a tiny inline script.
+- **[P5] Release builds include the web UI.** The release workflow must build `web/` before
+  `cargo build --release`, reproducibly (pinned Node, `npm ci`).
 
 - **[P2] Prometheus metrics** endpoint.
 - **[P2] API compatibility checks.** Use oasdiff on the OpenAPI spec for `/api/v1`, and evaluate

@@ -53,6 +53,11 @@ checks a config file and its filter lists without starting the server.
 
 While it runs, `cargo run -- tui` opens the terminal UI, and the REST API answers on
 `http://127.0.0.1:8053/api/v1` (see the [API docs](https://nxplain-sh.github.io/goethite/api/)).
+The web UI is at `http://127.0.0.1:8053/` once it is built (Node.js 24+):
+
+```sh
+cd web && npm ci --ignore-scripts && npm run build
+```
 
 ## Repository layout
 
@@ -67,7 +72,7 @@ While it runs, `cargo run -- tui` opens the terminal UI, and the REST API answer
 | `crates/goethite-store`     | Embedded storage for query log, stats and config                        |
 | `crates/goethite-tui`       | Terminal UI that talks to the API                                       |
 | `crates/goethite`           | The binary: CLI, wiring, signal handling                                |
-| `web/`                      | Embedded web UI (placeholder until Phase 2)                             |
+| `web/`                      | Web UI (Vite, React, TanStack), embedded into the binary                |
 | `site/`                     | Project website and docs (Astro Starlight), deployed to GitHub Pages    |
 | `fuzz/`                     | cargo-fuzz targets                                                      |
 | `dist/`                     | Deployment files: the hardened systemd unit                             |

@@ -4,14 +4,19 @@
 //! read by anyone without giving the token away. A token is 32 random bytes,
 //! so its hash cannot be reversed or guessed. Without a token configured,
 //! the API answers loopback clients only.
+//!
+//! Browsers need two more checks, done by [`guard`] for every request: a web
+//! page must not reach the API through DNS rebinding (a hostile name that
+//! resolves to 127.0.0.1) or by sending a cross-site request.
 
 use std::fmt::{self, Write as _};
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 use std::sync::Arc;
 
 use axum::extract::{Request, State};
-use axum::http::header::AUTHORIZATION;
+use axum::http::header::{AUTHORIZATION, HOST, ORIGIN};
+use axum::http::uri::Authority;
 use axum::middleware::Next;
 use axum::response::Response;
 use goethite_store::{Actor, ActorKind};
@@ -144,9 +149,148 @@ pub(crate) async fn authenticate(
     Ok(next.run(request).await)
 }
 
+/// Refuses requests a browser could be tricked into sending.
+///
+/// - **DNS rebinding.** Without an admin token, the API answers only to
+///   loopback names (`localhost`, `127.0.0.1`, `[::1]`), so a page on a
+///   hostile domain that resolves to 127.0.0.1 gets nothing. With a token,
+///   any name works: such a page does not have the token.
+/// - **Cross-site requests.** A request with an `Origin` header must come
+///   from the API's own origin. Browsers send `Origin` with every request
+///   that can change something; programs like curl send none.
+pub(crate) async fn guard(
+    State(api): State<Arc<Api>>,
+    request: Request,
+    next: Next,
+) -> Result<Response, ApiError> {
+    let authority = request
+        .headers()
+        .get(HOST)
+        .and_then(|value| value.to_str().ok())
+        .or_else(|| request.uri().authority().map(Authority::as_str));
+    if api.config.token.is_none() && !authority.is_some_and(is_loopback_authority) {
+        return Err(ApiError::forbidden(
+            "without an admin token, the API only answers requests for localhost, 127.0.0.1 or [::1]",
+        ));
+    }
+    if let Some(origin) = request.headers().get(ORIGIN) {
+        let same = origin
+            .to_str()
+            .ok()
+            .and_then(origin_authority)
+            .zip(authority)
+            .is_some_and(|(origin, authority)| origin.eq_ignore_ascii_case(authority));
+        if !same {
+            return Err(ApiError::forbidden(
+                "requests from other web sites are not accepted",
+            ));
+        }
+    }
+    Ok(next.run(request).await)
+}
+
+/// `host[:port]` from an `Origin` such as `https://dns.example.lan:8053`.
+pub fn origin_authority(origin: &str) -> Option<&str> {
+    origin
+        .strip_prefix("http://")
+        .or_else(|| origin.strip_prefix("https://"))
+        .filter(|rest| !rest.is_empty() && !rest.contains('/'))
+}
+
+/// Whether a `Host` value names this machine: `localhost` (or a name under
+/// `.localhost`, which browsers always resolve to loopback) or a loopback
+/// address, with or without a port.
+pub fn is_loopback_authority(authority: &str) -> bool {
+    let (host, port) = match authority.strip_prefix('[') {
+        Some(rest) => match rest.split_once(']') {
+            Some((host, "")) => (host, None),
+            Some((host, port)) => match port.strip_prefix(':') {
+                Some(port) => (host, Some(port)),
+                None => return false,
+            },
+            None => return false,
+        },
+        None => match authority.split_once(':') {
+            Some((host, port)) => (host, Some(port)),
+            None => (authority, None),
+        },
+    };
+    // A port, if any, is a number: nothing else may follow the name.
+    if port.is_some_and(|port| {
+        port.bytes().any(|b| !b.is_ascii_digit()) || port.parse::<u16>().is_err()
+    }) {
+        return false;
+    }
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        return ip.to_canonical().is_loopback();
+    }
+    let lower = host.to_ascii_lowercase();
+    (lower == "localhost" || lower.ends_with(".localhost"))
+        && lower.split('.').all(|label| {
+            !label.is_empty()
+                && label
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn loopback_authorities() {
+        for good in [
+            "localhost",
+            "localhost:8053",
+            "LOCALHOST:8053",
+            "ui.localhost:5173",
+            "127.0.0.1",
+            "127.0.0.1:8053",
+            "127.1.2.3:8053",
+            "[::1]",
+            "[::1]:8053",
+            "[::ffff:127.0.0.1]:8053",
+        ] {
+            assert!(is_loopback_authority(good), "{good}");
+        }
+        for bad in [
+            "",
+            "goethite.test",
+            "evil.example:8053",
+            "localhost.evil.example",
+            "127.0.0.1.evil.example",
+            "10.0.0.1:8053",
+            "[::2]:8053",
+            "[::1",
+            "[::1]x",
+            "[::1]:",
+            "::1",
+            "localhost:",
+            "localhost:80/x",
+            "localhost:99999",
+            "localhost:+80",
+            "localhost:80:80",
+            "ui/l.localhost:517",
+            "a..localhost",
+            ".localhost",
+            "a_b.localhost",
+        ] {
+            assert!(!is_loopback_authority(bad), "{bad}");
+        }
+    }
+
+    #[test]
+    fn origins() {
+        assert_eq!(
+            origin_authority("http://localhost:8053"),
+            Some("localhost:8053")
+        );
+        assert_eq!(origin_authority("https://dns.lan"), Some("dns.lan"));
+        for bad in ["null", "file://", "http://", "http://a/b", "ftp://a"] {
+            assert_eq!(origin_authority(bad), None, "{bad}");
+        }
+    }
 
     #[test]
     fn tokens_and_hashes() {

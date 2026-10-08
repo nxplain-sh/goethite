@@ -8,14 +8,19 @@
 //! Access: with an admin token configured (only its SHA-256 hash, see
 //! [`hash_token`]), every request except `/api/v1/health` needs
 //! `Authorization: Bearer <token>`; without one, only loopback clients are
-//! answered. Responses carry a strict Content Security Policy and are never
-//! cached; request bodies are limited to 1 MiB and requests to 30 seconds.
+//! answered. Requests a browser could be tricked into sending (DNS
+//! rebinding, cross-site requests) are refused. Responses carry a strict
+//! Content Security Policy and API answers are never cached; request bodies
+//! are limited to 1 MiB and requests to 30 seconds.
+//!
+//! The same listener serves the web UI ([`WebAssets`]) for every other path.
 
 mod auth;
 mod error;
 mod handlers;
 mod openapi;
 mod serve;
+mod web;
 
 use std::future::Future;
 use std::pin::Pin;
@@ -40,6 +45,15 @@ pub use auth::{PeerAddr, TOKEN_PREFIX, TokenHash, TokenHashError, generate_token
 pub use error::{ApiError, ErrorBody, ErrorDetail};
 pub use openapi::{openapi, openapi_json};
 pub use serve::{ApiListeners, MAX_CONNECTIONS, serve};
+pub use web::{EmbeddedWeb, WebAssets};
+
+/// The checks made on every request's `Host`, `Origin` and path, for the
+/// fuzz targets. Not a stable API.
+#[doc(hidden)]
+pub mod fuzzing {
+    pub use crate::auth::{is_loopback_authority, origin_authority};
+    pub use crate::web::is_plain;
+}
 
 /// The largest request body accepted.
 pub const MAX_BODY: usize = 1024 * 1024;
@@ -51,6 +65,8 @@ pub struct ApiConfig {
     pub token: Option<TokenHash>,
     /// HTTPS settings; plain HTTP without them.
     pub tls: Option<Arc<rustls::ServerConfig>>,
+    /// The web UI's files; no web UI without them.
+    pub web: Option<Arc<dyn WebAssets>>,
 }
 
 /// What changed in the store, so the data plane knows what to recompile.
@@ -195,17 +211,17 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The routes, with authentication, limits and security headers.
 pub fn router(api: &Arc<Api>) -> Router {
-    let protected = handlers::routes()
-        .route_layer(middleware::from_fn_with_state(
-            Arc::clone(api),
-            auth::authenticate,
-        ))
-        .with_state(Arc::clone(api));
+    let protected = handlers::routes().route_layer(middleware::from_fn_with_state(
+        Arc::clone(api),
+        auth::authenticate,
+    ));
     Router::new()
         .route("/api/v1/health", axum::routing::get(handlers::health))
         .merge(protected)
-        .fallback(handlers::not_found)
+        .fallback(web::serve)
+        .with_state(Arc::clone(api))
         .layer(DefaultBodyLimit::max(MAX_BODY))
+        .layer(middleware::from_fn_with_state(Arc::clone(api), auth::guard))
         .layer(middleware::from_fn(limit_time))
         .layer(middleware::from_fn(security_headers))
 }
@@ -218,7 +234,8 @@ async fn limit_time(request: Request<axum::body::Body>, next: Next) -> Result<Re
 }
 
 /// Headers every response gets: a strict Content Security Policy, and no
-/// caching, framing, sniffing or referrers.
+/// framing, sniffing or referrers. Responses are not cached unless they say
+/// otherwise (only the web UI's files do).
 async fn security_headers(request: Request<axum::body::Body>, next: Next) -> Response {
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
@@ -232,9 +249,11 @@ async fn security_headers(request: Request<axum::body::Body>, next: Next) -> Res
         (X_CONTENT_TYPE_OPTIONS, "nosniff"),
         (X_FRAME_OPTIONS, "DENY"),
         (REFERRER_POLICY, "no-referrer"),
-        (CACHE_CONTROL, "no-store"),
     ] {
         headers.insert(name, HeaderValue::from_static(value));
     }
+    headers
+        .entry(CACHE_CONTROL)
+        .or_insert(HeaderValue::from_static("no-store"));
     response
 }

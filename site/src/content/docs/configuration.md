@@ -111,10 +111,11 @@ readable by goethite's user only, and only one goethite process can open it at a
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `enabled` | `true` | Whether the REST API and `/metrics` are served. |
+| `enabled` | `true` | Whether the REST API, `/metrics` and the web UI are served. |
 | `listen` | `"127.0.0.1:8053"` | Addresses for the API: one or a list. Any address beyond loopback needs `token_sha256`. |
 | `token_sha256` | unset | The SHA-256 hash of the admin token, as printed by `goethite token`. Without it, only loopback clients are answered, without authentication. |
 | `tls_cert`, `tls_key` | unset | PEM files to serve HTTPS. Read before goethite drops its privileges, so they may be readable by root only. |
+| `web_ui` | `true` | Whether the [web UI](../web-ui/) is served at `/` on the same addresses. |
 
 See [REST API](../api/) for how to use it.
 

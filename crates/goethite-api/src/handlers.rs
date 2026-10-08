@@ -557,11 +557,6 @@ pub(crate) async fn get_metrics(State(api): Shared) -> Response {
         .into_response()
 }
 
-/// Any other path.
-pub(crate) async fn not_found() -> ApiError {
-    ApiError::not_found("there is no such endpoint")
-}
-
 /// Every route that needs authentication.
 pub(crate) fn routes() -> Router<Arc<Api>> {
     Router::new()

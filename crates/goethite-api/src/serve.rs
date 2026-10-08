@@ -90,7 +90,8 @@ pub async fn serve(
     let mut accepting = JoinSet::new();
     for listener in listeners.0 {
         let listener = TcpListener::from_std(listener)?;
-        info!(address = %listener.local_addr()?, scheme, "API listening");
+        let address = listener.local_addr()?;
+        info!(%address, scheme, web_ui = api.config.web.is_some(), "API listening");
         accepting.spawn(accept(
             listener,
             router.clone(),

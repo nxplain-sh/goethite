@@ -81,6 +81,8 @@ pub struct ApiSection {
     pub tls_cert: Option<PathBuf>,
     /// The TLS private key (PEM).
     pub tls_key: Option<PathBuf>,
+    /// Whether the web UI is served next to the API.
+    pub web_ui: bool,
 }
 
 impl Default for ApiSection {
@@ -91,6 +93,7 @@ impl Default for ApiSection {
             token_sha256: None,
             tls_cert: None,
             tls_key: None,
+            web_ui: true,
         }
     }
 }

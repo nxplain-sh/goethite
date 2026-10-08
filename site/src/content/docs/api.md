@@ -43,6 +43,19 @@ curl -H "Authorization: Bearer $GOETHITE_TOKEN" https://dns.example.lan:8053/api
 goethite refuses to listen beyond loopback without a token. Without TLS, the token crosses the
 network in clear text, and goethite logs a warning. Keep the API off the internet either way.
 
+### Browsers
+
+So that web pages cannot use your browser against the API, goethite refuses two kinds of request:
+
+- **Without a token, other names.** Requests must be for `localhost`, `127.0.0.1` or `[::1]`
+  (with any port). This stops DNS rebinding, where a hostile site makes its own name resolve to
+  127.0.0.1. With a token any name works, since such a page does not have the token.
+- **Requests from other sites.** A request with an `Origin` header must come from the API's own
+  address. Browsers add `Origin` to anything that can change something; curl, scripts, the TUI
+  and Terraform send none and are not affected.
+
+Both are answered with `403 forbidden`.
+
 ## Resources
 
 Lists, rules, groups, clients and schedules all work the same way. `POST` a spec to the

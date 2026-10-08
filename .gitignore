@@ -10,6 +10,10 @@
 # Lists downloaded with the example config
 /config/lists/
 
+# Web UI (web/dist is built, then embedded into the binary)
+/web/node_modules/
+/web/dist/
+
 # Website
 /site/node_modules/
 /site/dist/

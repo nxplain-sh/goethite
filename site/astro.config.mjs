@@ -26,6 +26,7 @@ export default defineConfig({
 				{ label: 'Filtering', slug: 'filtering' },
 				{ label: 'Clients and groups', slug: 'groups' },
 				{ label: 'REST API', slug: 'api' },
+				{ label: 'Web UI', slug: 'web-ui' },
 				{ label: 'Terminal UI', slug: 'tui' },
 				{ label: 'Security settings', slug: 'security' },
 				{ label: 'API reference', slug: 'api-reference' },

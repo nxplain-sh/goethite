@@ -1,0 +1,73 @@
+/*
+ * goethite design tokens: neobrutalism (AGENTS.md, "UI design").
+ *
+ * Thick ink borders, hard offset shadows with no blur, no gradients, no
+ * rounding. Every text/background pair below is at least 4.5:1 in both
+ * themes; `--on-*` is the text color for each filled background.
+ *
+ * The theme follows the system unless the page sets data-theme on <html>.
+ */
+
+:root {
+	--bg: #f2ece1;
+	--panel: #fffdf8;
+	--ink: #111111;
+	--muted: #5a5247;
+	--accent: #e8a33d;
+	--on-accent: #111111;
+	--blocked: #a63d22;
+	--on-blocked: #fffdf8;
+	--ok: #1d6b5f;
+	--on-ok: #fffdf8;
+	--cached: #f6dfa8;
+	--on-cached: #111111;
+
+	--border-width: 3px;
+	--border: var(--border-width) solid var(--ink);
+	--shadow: 6px 6px 0 var(--ink);
+	--shadow-small: 3px 3px 0 var(--ink);
+	--shadow-pressed: 1px 1px 0 var(--ink);
+	--focus: 0 0 0 3px var(--panel), 0 0 0 6px var(--ink);
+
+	--font-ui: 'Space Grotesk Variable', system-ui, sans-serif;
+	--font-mono: 'JetBrains Mono Variable', ui-monospace, monospace;
+
+	--space-1: 4px;
+	--space-2: 8px;
+	--space-3: 12px;
+	--space-4: 16px;
+	--space-5: 24px;
+	--space-6: 32px;
+
+	color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+	:root:not([data-theme='light']) {
+		--bg: #15120e;
+		--panel: #211c16;
+		--ink: #f2ece1;
+		--muted: #a89e8e;
+		--blocked: #e06a4b;
+		--on-blocked: #111111;
+		--ok: #5cc2b0;
+		--on-ok: #111111;
+		--cached: #3a2e1a;
+		--on-cached: #f2ece1;
+		color-scheme: dark;
+	}
+}
+
+:root[data-theme='dark'] {
+	--bg: #15120e;
+	--panel: #211c16;
+	--ink: #f2ece1;
+	--muted: #a89e8e;
+	--blocked: #e06a4b;
+	--on-blocked: #111111;
+	--ok: #5cc2b0;
+	--on-ok: #111111;
+	--cached: #3a2e1a;
+	--on-cached: #f2ece1;
+	color-scheme: dark;
+}

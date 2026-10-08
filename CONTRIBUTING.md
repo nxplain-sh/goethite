@@ -12,7 +12,8 @@ agents alike.
 - Supply-chain tools: `cargo install --locked cargo-deny cargo-audit`
 - Fuzzing: `cargo install --locked cargo-fuzz`
 - `dig` (from bind-utils / dnsutils) for manual checks
-- Node.js 22.19 or newer, only if you work on the website in `site/` (CI uses Node 24)
+- Node.js 22.19 or newer, only if you work on the web UI in `web/` or the website in `site/`
+  (CI uses Node 24)
 
 ## Build, test, lint
 
@@ -70,6 +71,7 @@ Every parser gets a fuzz target. Targets live in `fuzz/fuzz_targets/` and use
 | `parse_cidr`   | Parses text as a client network. On success, the network's display must parse back to the same network, which contains its own address. |
 | `parse_list`   | Parses and compiles text as a filter list. For every parsed rule's name, its parent and a child, the compiled filter must agree with the rule-by-rule reference. |
 | `parse_name`   | Parses text as a domain name. On success, the name's display must parse back to the same name. |
+| `request_checks` | Runs the API's `Host`, `Origin` and web UI path checks on text. A `Host` taken for loopback must name this machine with at most a numeric port; an accepted path must not leave the UI's folder. |
 
 Seeds are committed in `fuzz/seeds/<target>/`, and `crates/goethite-proto/tests/fuzz_seeds.rs`
 checks that each one still behaves the way its name says. The working corpus (`fuzz/corpus/`) and
@@ -117,7 +119,13 @@ After changing the API, regenerate it and commit the result:
 GOETHITE_UPDATE_OPENAPI=1 cargo test -p goethite-api --test openapi
 ```
 
-CI fails if the committed document does not match the code. It also compares the document with
+Then regenerate the web UI's typed client and fix whatever the type-check reports:
+
+```sh
+cd web && npm run api && npm run check
+```
+
+CI fails if the committed document or client does not match the code. It also compares the document with
 the base branch's, using [oasdiff](https://github.com/oasdiff/oasdiff), and fails on breaking
 changes to `/api/v1`, such as a removed endpoint or field, or a new required field. If a breaking
 change is intended (before 1.0 that is possible, and it goes in the changelog), add the
@@ -162,6 +170,20 @@ The full list is in [`AGENTS.md`](AGENTS.md). The short version:
   [`docs/BACKLOG.md`](docs/BACKLOG.md).
 - Docs ship with features. A feature is not done until its docs page is updated.
 
+## Web UI
+
+The web UI lives in `web/` (Vite, React, TypeScript strict, TanStack Router/Query/Table/Virtual);
+see [`web/README.md`](web/README.md). `npm run build` type-checks, builds to `web/dist` and checks
+the size budget. Release builds of goethite embed `web/dist`; debug builds read it from disk.
+
+```sh
+cd web
+npm ci --ignore-scripts
+npm run build      # or `npm run dev` against a node on 127.0.0.1:8053
+```
+
+The page runs under a strict CSP: no inline scripts or styles, no `eval`, nothing from CDNs.
+
 ## Website
 
 The project site lives in `site/` (Astro Starlight) and deploys to GitHub Pages from `main` via
@@ -191,6 +213,7 @@ Two one-time settings on `nxplain-sh/goethite` that the repository cannot set it
 - [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings` passes
 - [ ] `cargo test --workspace --all-features` passes
 - [ ] `cargo deny check` passes. Any new dependency is justified in the PR description.
+- [ ] Web UI changes: `npm run build` in `web/` passes (type-check, build, size budget)
 - [ ] Parser changes: the fuzz target was run for at least 60 seconds without findings
 - [ ] No new `unwrap`/`expect`/panicking indexing on untrusted data
 - [ ] Public items are documented. User-facing changes update `site/` or the README.

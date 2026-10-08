@@ -95,6 +95,21 @@ The same queries work over TCP:
 dig @127.0.0.1 -p 15353 +tcp example.com
 ```
 
+## Watch it
+
+The [terminal UI](../tui/) shows the dashboard, the query log and the filter lists:
+
+```sh
+cargo run -- tui
+```
+
+The [web UI](../web-ui/) shows the same in a browser at `http://127.0.0.1:8053/`. It is built
+separately with Node.js 24 or later; build it once, before or while goethite runs:
+
+```sh
+cd web && npm ci --ignore-scripts && npm run build
+```
+
 ## Stop it
 
 Press <kbd>Ctrl</kbd>+<kbd>C</kbd> (or send `SIGTERM`). goethite stops accepting new queries,

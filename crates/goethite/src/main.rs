@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use goethite_api::{Api, ApiConfig, ApiListeners};
+use goethite_api::{Api, ApiConfig, ApiListeners, EmbeddedWeb, WebAssets};
 use goethite_resolver::{
     Cache, Forwarder, ForwarderConfig, Policy, PolicyState, Resolver, TlsRoots, test_record,
     tls_client_config,
@@ -323,11 +323,20 @@ fn api(
     } else if tls.is_none() && beyond_loopback {
         warn!("the API is served over plain HTTP beyond loopback: the token can be sniffed");
     }
+    let web = if config.api.web_ui {
+        let web = EmbeddedWeb::get();
+        if web.is_none() {
+            info!("this build has no web UI: build web/ before goethite to include it");
+        }
+        web.map(|web| Arc::new(web) as Arc<dyn WebAssets>)
+    } else {
+        None
+    };
     Arc::new(Api {
         store: Arc::clone(control.store()),
         log: Arc::clone(log),
         control: Arc::new(node),
-        config: ApiConfig { token, tls },
+        config: ApiConfig { token, tls, web },
     })
 }
 

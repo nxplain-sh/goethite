@@ -71,6 +71,7 @@ async fn talks_to_the_api() {
         config: ApiConfig {
             token: Some(hash),
             tls: None,
+            web: None,
         },
     });
     let listeners = ApiListeners::bind(&["127.0.0.1:0".parse().unwrap()]).unwrap();

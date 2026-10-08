@@ -9,6 +9,7 @@
     reason = "test helpers; the no-panic rules cover non-test code"
 )]
 
+use std::borrow::Cow;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -17,7 +18,7 @@ use std::time::SystemTime;
 
 use goethite_api::{
     Api, ApiConfig, ApiListeners, BoxFuture, Change, Control, FilterStatus, QueryLogStatus, Status,
-    generate_token,
+    WebAssets, generate_token,
 };
 use goethite_store::{QueryLogConfig, Store};
 use http_body_util::{BodyExt, Full};
@@ -82,12 +83,30 @@ impl Control for FakeControl {
     }
 }
 
+/// A web UI of three files.
+#[derive(Debug)]
+struct FakeWeb;
+
+impl WebAssets for FakeWeb {
+    fn file(&self, path: &str) -> Option<Cow<'static, [u8]>> {
+        let data: &'static [u8] = match path {
+            "index.html" => b"<!doctype html><title>goethite</title>",
+            "assets/app-1234.js" => b"console.log(1)",
+            "favicon.svg" => b"<svg/>",
+            _ => return None,
+        };
+        Some(Cow::Borrowed(data))
+    }
+}
+
 struct Server {
     addr: SocketAddr,
     control: Arc<FakeControl>,
     stop: Option<oneshot::Sender<()>>,
     path: PathBuf,
     token: Option<String>,
+    /// The Host header sent.
+    host: String,
 }
 
 impl Drop for Server {
@@ -100,6 +119,10 @@ impl Drop for Server {
 }
 
 fn start(with_token: bool) -> Server {
+    start_with(with_token, None)
+}
+
+fn start_with(with_token: bool, web: Option<Arc<dyn WebAssets>>) -> Server {
     static NEXT: AtomicU32 = AtomicU32::new(0);
     let path = std::env::temp_dir().join(format!(
         "goethite-api-{}-{}.redb",
@@ -120,6 +143,7 @@ fn start(with_token: bool) -> Server {
         config: ApiConfig {
             token: with_token.then_some(hash),
             tls: None,
+            web,
         },
     });
     let listeners = ApiListeners::bind(&["127.0.0.1:0".parse().unwrap()]).unwrap();
@@ -134,6 +158,7 @@ fn start(with_token: bool) -> Server {
         stop: Some(stop),
         path,
         token: with_token.then_some(token),
+        host: format!("localhost:{}", addr.port()),
     }
 }
 
@@ -169,7 +194,7 @@ impl Server {
         let mut request = Request::builder()
             .method(method)
             .uri(path)
-            .header("host", "goethite.test");
+            .header("host", self.host.as_str());
         if let Some(token) = &self.token {
             request = request.header("authorization", format!("Bearer {token}"));
         }
@@ -508,4 +533,151 @@ async fn responses_carry_security_headers() {
             HeaderValue::from_static("DENY")
         );
     }
+}
+
+#[tokio::test]
+async fn serves_the_web_ui_without_shadowing_the_api() {
+    let server = start_with(true, Some(Arc::new(FakeWeb)));
+    let mut anonymous = start_with(true, Some(Arc::new(FakeWeb)));
+    anonymous.token = None;
+
+    // The UI's files need no token; deep links get index.html.
+    for path in [
+        "/",
+        "/index.html",
+        "/querylog?name=ads",
+        "/a/deep/link",
+        "/..%2f..%2fetc",
+    ] {
+        let page = anonymous.get(path).await;
+        assert_eq!(page.status, StatusCode::OK, "{path}");
+        assert_eq!(
+            page.text, "<!doctype html><title>goethite</title>",
+            "{path}"
+        );
+        assert_eq!(page.headers["content-type"], "text/html; charset=utf-8");
+        assert_eq!(page.headers["cache-control"], "no-cache");
+        assert!(page.headers.contains_key("content-security-policy"));
+    }
+    let script = anonymous.get("/assets/app-1234.js").await;
+    assert_eq!(script.status, StatusCode::OK);
+    assert_eq!(
+        script.headers["content-type"],
+        "text/javascript; charset=utf-8"
+    );
+    assert_eq!(
+        script.headers["cache-control"],
+        "public, max-age=31536000, immutable"
+    );
+    assert_eq!(
+        anonymous.get("/favicon.svg").await.headers["content-type"],
+        "image/svg+xml"
+    );
+    let head = anonymous.send(Method::HEAD, "/", None, &[]).await;
+    assert_eq!(head.status, StatusCode::OK);
+
+    // Missing assets and API paths are JSON 404s, never the page.
+    for path in ["/assets/gone-9999.js", "/api", "/api/", "/api/v2/anything"] {
+        let missing = anonymous.get(path).await;
+        assert_eq!(missing.status, StatusCode::NOT_FOUND, "{path}");
+        assert_eq!(missing.body["error"]["code"], "not_found", "{path}");
+        assert_eq!(missing.headers["cache-control"], "no-store");
+    }
+    let posted = anonymous.send(Method::POST, "/", None, &[]).await;
+    assert_eq!(posted.status, StatusCode::NOT_FOUND);
+
+    // The API itself still needs the token.
+    assert_eq!(
+        anonymous.get("/api/v1/status").await.status,
+        StatusCode::UNAUTHORIZED
+    );
+    let status = server.get("/api/v1/status").await;
+    assert_eq!(status.status, StatusCode::OK);
+    assert_eq!(status.headers["cache-control"], "no-store");
+}
+
+#[tokio::test]
+async fn browsers_cannot_be_turned_against_the_api() {
+    // Without a token: loopback names only, so DNS rebinding finds nothing.
+    let mut server = start_with(false, Some(Arc::new(FakeWeb)));
+    let port = server.addr.port();
+    for host in [
+        format!("localhost:{port}"),
+        format!("127.0.0.1:{port}"),
+        format!("[::1]:{port}"),
+        "ui.localhost".to_owned(),
+    ] {
+        server.host = host.clone();
+        assert_eq!(
+            server.get("/api/v1/status").await.status,
+            StatusCode::OK,
+            "{host}"
+        );
+    }
+    for host in [
+        "rebound.example",
+        "rebound.example:8053",
+        "127.0.0.1.rebound.example",
+    ] {
+        server.host = host.to_owned();
+        for path in ["/api/v1/status", "/", "/api/v1/health"] {
+            let refused = server.get(path).await;
+            assert_eq!(refused.status, StatusCode::FORBIDDEN, "{host} {path}");
+            assert_eq!(refused.body["error"]["code"], "forbidden");
+        }
+    }
+    server.host = format!("localhost:{port}");
+
+    // Cross-site requests are refused; same-origin ones and those without
+    // an Origin (curl, the TUI) are not.
+    for origin in ["http://evil.example", "null", "http://localhost:1"] {
+        let refused = server
+            .send(
+                Method::POST,
+                "/api/v1/lists/refresh",
+                None,
+                &[("origin", origin)],
+            )
+            .await;
+        assert_eq!(refused.status, StatusCode::FORBIDDEN, "{origin}");
+    }
+    assert_eq!(*server.control.refreshed.lock().unwrap(), 0);
+    let same = format!("http://localhost:{port}");
+    let accepted = server
+        .send(
+            Method::POST,
+            "/api/v1/lists/refresh",
+            None,
+            &[("origin", &same)],
+        )
+        .await;
+    assert_eq!(accepted.status, StatusCode::ACCEPTED);
+    let accepted = server
+        .send(Method::POST, "/api/v1/lists/refresh", None, &[])
+        .await;
+    assert_eq!(accepted.status, StatusCode::ACCEPTED);
+
+    // With a token any name works (a rebinding page has no token), but the
+    // origin check stays.
+    let mut server = start(true);
+    server.host = "dns.example.lan:8053".to_owned();
+    assert_eq!(server.get("/api/v1/status").await.status, StatusCode::OK);
+    let refused = server
+        .send(
+            Method::GET,
+            "/api/v1/status",
+            None,
+            &[("origin", "https://evil.example")],
+        )
+        .await;
+    assert_eq!(refused.status, StatusCode::FORBIDDEN);
+    let accepted = server
+        .send(
+            Method::GET,
+            "/api/v1/status",
+            None,
+            &[("origin", "https://DNS.example.lan:8053")],
+        )
+        .await;
+    assert_eq!(accepted.status, StatusCode::OK);
 }
