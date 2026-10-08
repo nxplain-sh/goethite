@@ -795,7 +795,7 @@ dependencies = [
 
 [[package]]
 name = "goethite"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -830,7 +830,7 @@ dependencies = [
 
 [[package]]
 name = "goethite-api"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "axum",
  "goethite-store",
@@ -854,7 +854,7 @@ dependencies = [
 
 [[package]]
 name = "goethite-cluster"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "axum",
  "goethite-api",
@@ -879,7 +879,7 @@ dependencies = [
 
 [[package]]
 name = "goethite-filter"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "criterion",
  "fst",
@@ -890,7 +890,7 @@ dependencies = [
 
 [[package]]
 name = "goethite-proto"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "hickory-proto",
  "proptest",
@@ -899,7 +899,7 @@ dependencies = [
 
 [[package]]
 name = "goethite-resolver"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "arc-swap",
  "criterion",
@@ -920,7 +920,7 @@ dependencies = [
 
 [[package]]
 name = "goethite-server"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "goethite-proto",
  "goethite-resolver",
@@ -933,7 +933,7 @@ dependencies = [
 
 [[package]]
 name = "goethite-store"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "goethite-filter",
  "goethite-proto",
@@ -951,7 +951,7 @@ dependencies = [
 
 [[package]]
 name = "goethite-tui"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "goethite-api",
  "goethite-store",

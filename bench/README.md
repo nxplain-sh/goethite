@@ -129,3 +129,18 @@ cheaper is in the [backlog](../docs/BACKLOG.md).
 The first v0.2.0 run was worse (p99 1.6 ms at 50,000 q/s, 140,000 q/s flat out, 5.7% of log
 entries dropped): the log writer waited on its queue, so every query had to wake it with a
 system call. It now empties the queue every 50 ms instead and is never woken by queries.
+
+2026-10-08, v0.3.0 against v0.2.0 (commit `f9805ff`), same VM and command, each with its own
+example config, interleaved in the same session (load average 5 to 6 on the Mac). v0.3.0 puts
+every filter check behind a guard that catches a panic (fail-open), and the metrics observer
+looks out for the health-check name:
+
+| Offered load | Version | p50 | p90 | p99 | p99.9 |
+| --- | --- | --- | --- | --- | --- |
+| 50,000 q/s, 3 rounds | v0.2.0 | 34–43 µs | 62–123 µs | 111–927 µs | 1.0–4.6 ms |
+| | v0.3.0 | 33–34 µs | 61–63 µs | 127–263 µs | 1.2–2.6 ms |
+| 100,000 q/s, 2 rounds | v0.2.0 | 99–109 µs | 319–335 µs | 607–799 µs | 1.7–2.0 ms |
+| | v0.3.0 | 97–99 µs | 263–271 µs | 607–655 µs | 1.6–1.7 ms |
+
+No query was lost. The two versions are within each other's noise (the first round at 50,000
+q/s ran while the host was busiest), and the p99 stays under a millisecond at 100,000 q/s.

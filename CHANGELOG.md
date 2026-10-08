@@ -7,6 +7,10 @@ configuration format.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-08
+
+Phase 3, v0.3 high availability.
+
 ### Added
 
 - **Two-node clusters.** A `[cluster]` table makes a node the primary or the replica of a pair.
@@ -40,12 +44,9 @@ configuration format.
   only from the configured peer on the same link, and interoperates with keepalived. It runs
   with `CAP_NET_ADMIN` only once its sockets are open; the DNS server still runs with no
   capabilities, and binds the floating IP before holding it (`IP_FREEBIND`).
-
-### Fixed
-
-- A log line that could not be written, because nothing read goethite's standard error any more,
-  made goethite panic: at startup it exited, and later the task that logged died, which could
-  leave goethite unable to stop on SIGTERM. Lost log lines are now ignored.
+- **Chaos tests** (`tests/chaos/`): two nodes and a client in network namespaces, with upgrades,
+  crashes, a partition and a corrupt filter list under load; run weekly and on demand in CI.
+- Fuzz targets `parse_vrrp` and `parse_netlink`.
 
 ### Changed
 
@@ -53,6 +54,25 @@ configuration format.
   (`x-extensible-enum`): new values (such as `replication` and `replicate`) can appear without a
   new API version, so clients should show unknown values as they are. Audit entries can name the
   cluster `node` a change came from.
+- New config tables: `[cluster]` and `[vrrp]`, and `on_failure` in `[filter]`.
+
+### Fixed
+
+- A log line that could not be written, because nothing read goethite's standard error any more,
+  made goethite panic: at startup it exited, and later the task that logged died, which could
+  leave goethite unable to stop on SIGTERM. Lost log lines are now ignored.
+
+### Security
+
+- The cluster channel is TLS 1.3 with certificates in both directions from the cluster's own CA;
+  each node accepts only its configured peer's name. Copied configurations are validated as a
+  whole, versioned and audit-logged.
+- The floating IP's privileges live in their own process and unit
+  (`systemd-analyze security` 1.9); the DNS server's unit stays at 1.7.
+- Two `unsafe` blocks, as `AGENTS.md` allows with a written justification, each in one function
+  with a `SAFETY` comment: taking the sockets systemd passes by number (the binary), and the
+  link-layer address for gratuitous ARP (`goethite-cluster`). The parsing and resolving crates
+  still forbid `unsafe`.
 
 ## [0.2.0] - 2026-10-08
 
@@ -151,6 +171,7 @@ production on Linux. It is pre-alpha software: try it, but do not rely on it yet
   criterion benchmarks, a dnsperf script, and CI with clippy, tests on amd64 and arm64,
   cargo-deny and cargo-audit.
 
-[Unreleased]: https://github.com/nxplain-sh/goethite/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/nxplain-sh/goethite/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/nxplain-sh/goethite/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/nxplain-sh/goethite/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/nxplain-sh/goethite/releases/tag/v0.1.0

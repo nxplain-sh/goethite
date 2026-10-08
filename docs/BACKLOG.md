@@ -95,6 +95,8 @@ releases.
 
 ## Phase 3: v0.3 HA
 
+Phase 3's scope shipped in v0.3.0. These items came up along the way.
+
 - **[P4] An IPv6 floating IP:** VRRPv3 over IPv6 (link-local sources, `ff02::12`), with
   unsolicited neighbor advertisements instead of gratuitous ARP, and `IPV6_FREEBIND`.
 - **[P4] Several floating IPs per pair,** for example one per VLAN, or a second address so each

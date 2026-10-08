@@ -415,7 +415,7 @@ dependencies = [
 
 [[package]]
 name = "goethite-api"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "axum",
  "goethite-store",
@@ -439,7 +439,7 @@ dependencies = [
 
 [[package]]
 name = "goethite-cluster"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "axum",
  "goethite-store",
@@ -462,7 +462,7 @@ dependencies = [
 
 [[package]]
 name = "goethite-filter"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "fst",
  "goethite-proto",
@@ -484,7 +484,7 @@ dependencies = [
 
 [[package]]
 name = "goethite-proto"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "hickory-proto",
  "thiserror",
@@ -492,7 +492,7 @@ dependencies = [
 
 [[package]]
 name = "goethite-resolver"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "arc-swap",
  "goethite-filter",
@@ -511,7 +511,7 @@ dependencies = [
 
 [[package]]
 name = "goethite-store"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "goethite-filter",
  "goethite-proto",
