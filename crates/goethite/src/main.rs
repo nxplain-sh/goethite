@@ -5,6 +5,8 @@ mod control;
 mod download;
 mod filters;
 mod lists;
+mod metrics;
+mod observe;
 mod privileges;
 
 use std::future::Future;
@@ -127,6 +129,16 @@ fn run(config_path: &Path) -> Result<()> {
     // Opened as the user goethite runs as, so the files are its own.
     let store = Arc::new(open_store(&config)?);
     seed(&store, &config, config_path)?;
+    let upstream_names = config
+        .upstream
+        .iter()
+        .map(|upstream| upstream.to_upstream().address.to_string())
+        .collect();
+    let query_log = store.start_query_log(config.querylog.to_config(), upstream_names)?;
+    if !config.querylog.enabled {
+        info!("the query log is turned off; statistics are still kept");
+    }
+    let metrics = Arc::new(metrics::Metrics::default());
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -169,7 +181,12 @@ fn run(config_path: &Path) -> Result<()> {
         let downloader =
             download::Downloader::new(Arc::clone(&resolver), tls, filters::MAX_LIST_LEN);
         control.spawn(downloader);
-        let server = Server::new(listeners, server_config, Arc::clone(&resolver))?;
+        let server = Server::new(listeners, server_config, Arc::clone(&resolver))?.with_observer(
+            Arc::new(observe::Observer {
+                log: Arc::clone(&query_log),
+                metrics: Arc::clone(&metrics),
+            }),
+        );
         server.run(shutdown).await?;
         Ok(())
     })

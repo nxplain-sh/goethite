@@ -149,3 +149,13 @@ private_domains = ["lan", "home.arpa", "internal", "local"]
 # (/var/lib/goethite with the unit in dist/systemd), otherwise the directory
 # of this file. Only one goethite process can use it at a time.
 # path = "/var/lib/goethite/goethite.redb"
+
+[querylog]
+# Every answered query is logged with the client's address, the name, how it
+# was answered and the rule that blocked it, if one did. Statistics (counts
+# per hour and the names and clients asked most) are kept for 30 days whether
+# or not the log is on. These are the defaults.
+enabled = true
+retention_days = 7          # 1 to 365
+max_entries = 1000000       # the oldest go first; 1,000 to 50,000,000
+anonymize_clients = false   # true keeps only the /24 (IPv4) or /56 (IPv6)

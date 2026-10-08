@@ -13,6 +13,7 @@ cargo-fuzz = true
 goethite-filter = { path = "../crates/goethite-filter" }
 goethite-proto = { path = "../crates/goethite-proto" }
 goethite-resolver = { path = "../crates/goethite-resolver" }
+goethite-store = { path = "../crates/goethite-store" }
 libfuzzer-sys = "0.4.13"
 
 # Fuzz targets need nightly and libFuzzer, so they are their own workspace
@@ -23,6 +24,13 @@ members = ["."]
 [[bin]]
 name = "decode_query"
 path = "fuzz_targets/decode_query.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "decode_query_record"
+path = "fuzz_targets/decode_query_record.rs"
 test = false
 doc = false
 bench = false

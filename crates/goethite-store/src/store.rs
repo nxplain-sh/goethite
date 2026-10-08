@@ -391,6 +391,11 @@ impl Store {
         &self.path
     }
 
+    /// The database, for the query log and statistics tables.
+    pub(crate) fn database(&self) -> &Database {
+        &self.db
+    }
+
     /// The current configuration.
     pub fn config(&self) -> Arc<ConfigSnapshot> {
         Arc::clone(&self.config.read().unwrap_or_else(PoisonError::into_inner))

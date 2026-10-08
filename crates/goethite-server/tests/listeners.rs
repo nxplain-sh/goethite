@@ -14,7 +14,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use goethite_resolver::{Forwarder, ForwarderConfig, Resolver, UpstreamConfig, test_record};
-use goethite_server::{Listeners, RateLimitConfig, Server, ServerConfig, ServerError};
+use goethite_server::{Listeners, RateLimitConfig, Server, ServerConfig, ServerError, ServerStats};
 use hickory_proto::op::{Edns, Message, MessageType, OpCode, Query, ResponseCode};
 use hickory_proto::rr::{Name, RData, RecordType, rdata::A};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -28,6 +28,7 @@ const WAIT: Duration = Duration::from_secs(5);
 struct Running {
     udp: SocketAddr,
     tcp: SocketAddr,
+    stats: std::sync::Arc<ServerStats>,
     stop: oneshot::Sender<()>,
     task: JoinHandle<Result<(), ServerError>>,
 }
@@ -49,6 +50,7 @@ fn start_resolving(config: impl FnOnce(&mut ServerConfig), resolver: Resolver) -
     let server = Server::bind(server_config, std::sync::Arc::new(resolver)).unwrap();
     let udp = server.udp_local_addrs().unwrap()[0];
     let tcp = server.tcp_local_addrs().unwrap()[0];
+    let stats = server.stats();
     let (stop, stopped) = oneshot::channel::<()>();
     let task = tokio::spawn(server.run(async {
         let _ = stopped.await;
@@ -56,6 +58,7 @@ fn start_resolving(config: impl FnOnce(&mut ServerConfig), resolver: Resolver) -
     Running {
         udp,
         tcp,
+        stats,
         stop,
         task,
     }
@@ -444,6 +447,10 @@ async fn rate_limited_udp_clients_are_told_to_use_tcp() {
     assert!(limited.metadata.truncation, "TC is set");
     assert_eq!(limited.answers, vec![]);
     assert_eq!(limited.queries.len(), 1, "the question is echoed");
+    let counted =
+        |counter: &std::sync::atomic::AtomicU64| counter.load(std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(counted(&server.stats.rate_limited), 1);
+    assert_eq!(counted(&server.stats.rate_limit_slips), 1);
 
     // TCP is not rate limited.
     let mut stream = TcpStream::connect(server.tcp).await.unwrap();

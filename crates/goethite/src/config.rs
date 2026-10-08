@@ -22,7 +22,8 @@ use goethite_server::{
     MAX_LISTEN_ADDRESSES, MAX_RATE_LIMITED_CLIENTS, MAX_UDP_SOCKETS, RateLimitConfig, ServerConfig,
 };
 use goethite_store::{
-    BlockResponseKind, Import, ListSpec, ManagedBy, RuleSpec, SettingsSpec, model::MAX_NAME_LEN,
+    BlockResponseKind, Import, ListSpec, ManagedBy, QueryLogConfig, RuleSpec, SettingsSpec,
+    model::MAX_NAME_LEN,
 };
 use serde::de::{self, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer};
@@ -52,10 +53,63 @@ pub struct Config {
     /// The `[store]` table.
     #[serde(default)]
     pub store: StoreSection,
+    /// The `[querylog]` table.
+    #[serde(default)]
+    pub querylog: QueryLogSection,
     /// The absolute directory of the config file, which relative paths are
     /// relative to. Set by [`Config::load`].
     #[serde(skip)]
     pub dir: PathBuf,
+}
+
+/// The `[querylog]` table.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, default)]
+pub struct QueryLogSection {
+    /// Whether queries are logged. Statistics are kept either way.
+    pub enabled: bool,
+    /// How long entries are kept, in days.
+    pub retention_days: u32,
+    /// The most entries kept.
+    pub max_entries: u64,
+    /// Whether client addresses are shortened to /24 or /56.
+    pub anonymize_clients: bool,
+}
+
+impl Default for QueryLogSection {
+    fn default() -> Self {
+        let defaults = QueryLogConfig::default();
+        Self {
+            enabled: defaults.enabled,
+            retention_days: 7,
+            max_entries: defaults.max_entries,
+            anonymize_clients: defaults.anonymize,
+        }
+    }
+}
+
+impl QueryLogSection {
+    fn validate(&self) -> Result<()> {
+        if !(1..=365).contains(&self.retention_days) {
+            bail!("querylog.retention_days must be between 1 and 365");
+        }
+        if !(1_000..=50_000_000).contains(&self.max_entries) {
+            bail!("querylog.max_entries must be between 1000 and 50000000");
+        }
+        Ok(())
+    }
+
+    /// The store's view of this table.
+    pub fn to_config(&self) -> QueryLogConfig {
+        QueryLogConfig {
+            enabled: self.enabled,
+            retention: std::time::Duration::from_hours(
+                u64::from(self.retention_days).saturating_mul(24),
+            ),
+            max_entries: self.max_entries,
+            anonymize: self.anonymize_clients,
+        }
+    }
 }
 
 /// The `[store]` table.
@@ -758,6 +812,7 @@ impl Config {
             .server
             .validate()
             .and_then(|()| config.cache.validate())
+            .and_then(|()| config.querylog.validate())
             .and_then(|()| config.filter.validate())
             .and_then(|()| config.security.rebinding_protection().map(drop))
             .with_context(|| format!("invalid config file {}", path.display()))?;
@@ -1024,6 +1079,28 @@ mod tests {
             let config = Config::parse(&format!("[filter]\n{bad}")).unwrap();
             let err = config.filter.validate().unwrap_err();
             assert!(err.to_string().contains("filter.rules"), "{bad}: {err:#}");
+        }
+    }
+
+    #[test]
+    fn querylog_settings() {
+        let config = Config::parse("").unwrap().querylog;
+        assert_eq!(config.to_config(), QueryLogConfig::default());
+        let custom = Config::parse(
+            "[querylog]\nenabled = false\nretention_days = 30\nanonymize_clients = true",
+        )
+        .unwrap()
+        .querylog;
+        let store = custom.to_config();
+        assert!(!store.enabled && store.anonymize);
+        assert_eq!(store.retention, std::time::Duration::from_hours(720));
+        for bad in [
+            "retention_days = 0",
+            "retention_days = 366",
+            "max_entries = 10",
+        ] {
+            let config = Config::parse(&format!("[querylog]\n{bad}")).unwrap();
+            assert!(config.querylog.validate().is_err(), "{bad}");
         }
     }
 

@@ -17,6 +17,7 @@ use std::future::Future;
 use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime};
 
 use goethite_proto::{
@@ -155,6 +156,30 @@ pub struct QueryEvent<'a> {
     pub elapsed: Duration,
 }
 
+/// Counts of queries and connections the listeners turned away, for
+/// metrics.
+#[derive(Debug, Default)]
+pub struct ServerStats {
+    /// UDP queries over the rate limit.
+    pub rate_limited: AtomicU64,
+    /// Truncated answers sent to rate-limited clients.
+    pub rate_limit_slips: AtomicU64,
+    /// UDP queries dropped because too many were in flight.
+    pub udp_overloaded: AtomicU64,
+    /// UDP datagrams too large to be a query.
+    pub udp_oversized: AtomicU64,
+    /// TCP connections closed because all slots were taken.
+    pub tcp_refused: AtomicU64,
+    /// TCP connections closed because their client had too many.
+    pub tcp_refused_per_client: AtomicU64,
+}
+
+impl ServerStats {
+    fn count(counter: &AtomicU64) {
+        counter.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
 /// The sockets of one listen address, registered with tokio.
 struct Address {
     udp: Vec<UdpSocket>,
@@ -166,6 +191,7 @@ pub struct Server {
     addresses: Vec<Address>,
     engine: Arc<Engine>,
     config: ServerConfig,
+    stats: Arc<ServerStats>,
 }
 
 impl Server {
@@ -225,7 +251,13 @@ impl Server {
             addresses,
             engine,
             config,
+            stats: Arc::default(),
         })
+    }
+
+    /// Counts of what the listeners turned away.
+    pub fn stats(&self) -> Arc<ServerStats> {
+        Arc::clone(&self.stats)
     }
 
     /// Reports every answered query to `observer`.
@@ -284,6 +316,7 @@ impl Server {
             )),
             tcp_clients: ClientConnections::new(config.max_tcp_connections_per_client),
             config: config.clone(),
+            stats: self.stats,
         });
         if shared.rate_limiter.is_none() {
             info!("udp rate limiting is turned off");
@@ -364,6 +397,7 @@ struct Shared {
     rate_limiter: Option<RateLimiter>,
     tcp_slots: Arc<Semaphore>,
     tcp_clients: Arc<ClientConnections>,
+    stats: Arc<ServerStats>,
 }
 
 /// Decodes, resolves and encodes; shared by every listener.
@@ -474,6 +508,7 @@ async fn serve_udp(socket: UdpSocket, shared: Arc<Shared>, mut stop: watch::Rece
         };
         let Some(wire) = buf.get(..len).filter(|_| len <= MAX_UDP_QUERY_LEN) else {
             debug!(%peer, "dropped oversized udp datagram");
+            ServerStats::count(&shared.stats.udp_oversized);
             continue;
         };
         if let Some(limiter) = &shared.rate_limiter
@@ -483,15 +518,18 @@ async fn serve_udp(socket: UdpSocket, shared: Arc<Shared>, mut stop: watch::Rece
             if first {
                 debug!(%peer, %network, "client is over the udp rate limit");
             }
+            ServerStats::count(&shared.stats.rate_limited);
             slip.clear();
             // Sent without waiting: if the socket is busy, dropping is fine.
             if send && shared.engine.truncated(wire, &mut slip) {
                 let _ = socket.try_send_to(&slip, peer);
+                ServerStats::count(&shared.stats.rate_limit_slips);
             }
             continue;
         }
         let Ok(permit) = Arc::clone(&shared.udp_slots).try_acquire_owned() else {
             debug!(%peer, "too many udp queries in flight, dropping");
+            ServerStats::count(&shared.stats.udp_overloaded);
             continue;
         };
         let wire = wire.to_vec();
@@ -545,10 +583,12 @@ async fn serve_tcp(listener: TcpListener, shared: Arc<Shared>, mut stop: watch::
                 };
                 let Ok(permit) = Arc::clone(&shared.tcp_slots).try_acquire_owned() else {
                     debug!(%peer, "tcp connection limit reached, closing connection");
+                    ServerStats::count(&shared.stats.tcp_refused);
                     continue;
                 };
                 let Some(client) = shared.tcp_clients.try_acquire(peer.ip()) else {
                     debug!(%peer, "per-client tcp connection limit reached, closing connection");
+                    ServerStats::count(&shared.stats.tcp_refused_per_client);
                     continue;
                 };
                 connections.spawn(serve_tcp_connection(

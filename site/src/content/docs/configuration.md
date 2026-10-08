@@ -107,6 +107,25 @@ The state directory is systemd's `StateDirectory` (`/var/lib/goethite` with the
 [shipped unit](../install/)) or, without it, the config file's directory. The file is created
 readable by goethite's user only, and only one goethite process can open it at a time.
 
+## `[querylog]`
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | `true` | Whether answered queries are logged. Statistics are kept either way. |
+| `retention_days` | `7` | How long entries are kept, 1 to 365 days. |
+| `max_entries` | `1000000` | The most entries kept, 1,000 to 50,000,000; the oldest go first. |
+| `anonymize_clients` | `false` | Keep only the /24 of IPv4 and the /56 of IPv6 client addresses, in the log and in the statistics. |
+
+Each entry records when, the client's address (and its known client and group), the protocol, the
+name and type asked for, the response code, how the answer came about (cached, forwarded and from
+which upstream, blocked and by which rule and list, and so on) and how long it took. A busy home
+network logs tens of thousands of queries a day, which takes a few megabytes. Hourly statistics,
+with the 100 names, blocked names and clients seen most each hour, are kept for 30 days.
+
+Logging never slows answers down: queries are queued, and if the writer falls behind, entries are
+dropped and counted (`goethite_querylog_dropped_total` in the metrics) rather than delaying
+anyone.
+
 ## `[security]`
 
 | Key | Default | Meaning |
