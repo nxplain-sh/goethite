@@ -121,6 +121,8 @@ Phase 3's scope shipped in v0.3.0. These items came up along the way.
   (and the systemd test image) lack. `Type=notify-reload` (systemd 253) with `ReloadSignal=SIGHUP`
   needs goethite to report `RELOADING=1` and `READY=1` around a reload.
 - **[P4] Client IDs in the Terraform provider:** `ids` on `goethite_client`, once 0.4.0 is out.
+  Its acceptance tests start fresh nodes, which now begin with the default list in the default
+  group: set `[filter] default_lists = false` in their config when moving them to 0.4.
 - **[P5] Access control beyond client IDs:** allowed and blocked client networks for every
   transport, and per-client query rate limits for DoT and DoH, which are not rate limited today
   (only connection-limited).

@@ -5,6 +5,7 @@ mod cluster;
 mod config;
 mod control;
 mod download;
+mod filterlists;
 mod filters;
 mod handoff;
 mod lists;
@@ -32,7 +33,9 @@ use goethite_resolver::{
     Cache, Forwarder, ForwarderConfig, Policy, PolicyState, Resolver, health_record, test_record,
 };
 use goethite_server::Server;
-use goethite_store::{Actor, Import, Store};
+use goethite_store::{
+    Actor, DEFAULT_GROUP, Group, GroupList, Import, List, ListSpec, ManagedBy, Store,
+};
 use jiff::Timestamp;
 use tokio::sync::watch;
 use tracing::{error, info, warn};
@@ -739,6 +742,9 @@ fn seed(store: &Store, config: &Config, config_path: &Path) -> Result<()> {
             let summary = store
                 .import(import, &Actor::system())
                 .context("cannot import [filter] into the store")?;
+            if config.filter.default_lists && config.filter.list.is_empty() {
+                add_default_list(store)?;
+            }
             store.set_meta(IMPORTED_FILTER, &print)?;
             info!(
                 lists = summary.lists_added,
@@ -753,6 +759,41 @@ fn seed(store: &Store, config: &Config, config_path: &Path) -> Result<()> {
         ),
         Some(_) => {}
     }
+    Ok(())
+}
+
+/// Adds goethite's default list to a new store, used by the default group.
+/// It is an ordinary list: the API, the UIs or Terraform may change or
+/// remove it, and `goethite import` leaves it alone.
+fn add_default_list(store: &Store) -> Result<()> {
+    let Some(default) = goethite_api::catalog::default_list() else {
+        return Ok(());
+    };
+    let actor = Actor::system();
+    let list = store.create::<List>(
+        ListSpec {
+            name: default.name.to_owned(),
+            url: Some(default.url.to_owned()),
+            path: None,
+            enabled: true,
+            comment: "goethite's default list: keep it, replace it or add others.".to_owned(),
+            managed_by: ManagedBy::Api,
+        },
+        &actor,
+    )?;
+    let group = store
+        .get::<Group>(DEFAULT_GROUP)
+        .context("the default group is missing")?;
+    let mut spec = group.spec;
+    spec.lists.push(GroupList {
+        list: list.id,
+        schedule: None,
+    });
+    store.update::<Group>(DEFAULT_GROUP, spec, Some(group.revision), &actor)?;
+    info!(
+        list = default.name,
+        "a new store: filtering with goethite's default list"
+    );
     Ok(())
 }
 

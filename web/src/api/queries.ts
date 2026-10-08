@@ -23,6 +23,31 @@ export const listsQuery = queryOptions({
 	refetchInterval: 30_000,
 })
 
+/** goethite's recommended lists: built in, so fetched once. */
+export const recommendedQuery = queryOptions({
+	queryKey: ['lists', 'recommended'],
+	queryFn: () => call(api.GET('/api/v1/lists/recommended')),
+	staleTime: Number.POSITIVE_INFINITY,
+})
+
+/** The FilterLists directory, as the node fetched it (it keeps it a day). */
+export const directoryQuery = queryOptions({
+	queryKey: ['directory'],
+	queryFn: () => call(api.GET('/api/v1/lists/directory')),
+	staleTime: 3_600_000,
+	retry: false,
+})
+
+/** One list's details from the FilterLists directory. */
+export const directoryListQuery = (id: number) =>
+	queryOptions({
+		queryKey: ['directory', id],
+		queryFn: () =>
+			call(api.GET('/api/v1/lists/directory/{id}', { params: { path: { id } } })),
+		staleTime: 3_600_000,
+		retry: false,
+	})
+
 export const clientsQuery = queryOptions({
 	queryKey: ['clients'],
 	queryFn: () => call(api.GET('/api/v1/clients')),

@@ -105,6 +105,8 @@ API.
 | `rules` | `[]` | Rules written into the config, at most 10,000. Each must be a supported rule; anything else is an error. |
 | `cache_dir` | `lists` in the state directory | Where downloaded lists are kept. Relative paths are relative to the config file. This one is read on every start. |
 | `update_hours` | `24` | How often downloaded lists are refreshed, 1 to 168 hours, with up to 10% random delay. |
+| `default_lists` | `true` | Whether a new node with no `[[filter.list]]` starts with goethite's [default list](../filtering/#recommended-and-default-lists), HaGeZi Multi Normal, in the default group. Only the first start of a new store looks at it. |
+| `directory` | `true` | Whether the web UI can search the [FilterLists directory](../filtering/#finding-more-lists). This node fetches it, only when someone browses it. A node setting, never copied into the store. |
 | `on_failure` | `"open"` | What to do when filtering fails: `"open"` keeps resolving (unfiltered if need be) and reports it, `"closed"` refuses to start or answers SERVFAIL. A node setting, never copied into the store. See [Security](../security/#when-filtering-fails). |
 
 ### `[[filter.list]]`

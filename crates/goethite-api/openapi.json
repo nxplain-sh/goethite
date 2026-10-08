@@ -941,6 +941,120 @@
         ]
       }
     },
+    "/api/v1/lists/directory": {
+      "get": {
+        "tags": [
+          "lists"
+        ],
+        "summary": "The FilterLists directory (filterlists.com): the lists goethite can\nread, allowlists left out. The node fetches it when asked, and keeps it\nfor a day.",
+        "operationId": "get_directory",
+        "responses": {
+          "200": {
+            "description": "The directory",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Directory"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Turned off on this node, or FilterLists cannot be reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/lists/directory/{id}": {
+      "get": {
+        "tags": [
+          "lists"
+        ],
+        "summary": "A list's details from the FilterLists directory, with its `https://`\naddresses. Licenses and descriptions are FilterLists' and may be out of\ndate.",
+        "operationId": "get_directory_list",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The list's FilterLists ID",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DirectoryList"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Turned off on this node, or FilterLists cannot be reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/lists/recommended": {
+      "get": {
+        "tags": [
+          "lists"
+        ],
+        "summary": "The filter lists goethite recommends: ads and trackers, each checked\nto download and parse. The one marked `default` is what a new node\nstarts with.",
+        "operationId": "recommended_lists",
+        "responses": {
+          "200": {
+            "description": "Recommended lists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RecommendedList"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      }
+    },
     "/api/v1/lists/refresh": {
       "post": {
         "tags": [
@@ -2587,6 +2701,137 @@
           }
         }
       },
+      "Directory": {
+        "type": "object",
+        "description": "The FilterLists directory, as far as goethite can use it.",
+        "required": [
+          "fetched_at",
+          "lists"
+        ],
+        "properties": {
+          "fetched_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When this node fetched it."
+          },
+          "lists": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DirectoryEntry"
+            },
+            "description": "Lists in syntaxes goethite reads, allowlists left out, by name."
+          }
+        }
+      },
+      "DirectoryEntry": {
+        "type": "object",
+        "description": "A list in the FilterLists directory that goethite can use.",
+        "required": [
+          "id",
+          "name",
+          "description",
+          "tags",
+          "syntaxes"
+        ],
+        "properties": {
+          "description": {
+            "type": "string",
+            "description": "What it is for."
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Its FilterLists ID.",
+            "minimum": 0
+          },
+          "license": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its license, as FilterLists records it."
+          },
+          "name": {
+            "type": "string",
+            "description": "Its name."
+          },
+          "syntaxes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Its formats, such as `Domains`."
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Topics, such as `ads` or `malware`."
+          }
+        }
+      },
+      "DirectoryList": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/DirectoryEntry",
+            "description": "The list."
+          },
+          {
+            "type": "object",
+            "required": [
+              "urls",
+              "usable"
+            ],
+            "properties": {
+              "homepage": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Its home page."
+              },
+              "urls": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/DirectoryUrl"
+                },
+                "description": "Its `https://` addresses: main ones first, mirrors after."
+              },
+              "usable": {
+                "type": "boolean",
+                "description": "Whether goethite can use it: a readable syntax, not an allowlist."
+              }
+            }
+          }
+        ],
+        "description": "A list's details from the directory, with its addresses."
+      },
+      "DirectoryUrl": {
+        "type": "object",
+        "description": "One address of a list.",
+        "required": [
+          "url",
+          "segment",
+          "mirror"
+        ],
+        "properties": {
+          "mirror": {
+            "type": "boolean",
+            "description": "Whether it is a mirror of another address."
+          },
+          "segment": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Which part of the list it is, for lists in several parts (from 1).",
+            "minimum": 0
+          },
+          "url": {
+            "type": "string",
+            "description": "The address; always `https://`."
+          }
+        }
+      },
       "EncryptedStatus": {
         "type": "object",
         "description": "How clients reach this node over DNS over TLS, HTTPS and QUIC.",
@@ -3232,6 +3477,61 @@
             "format": "int64",
             "description": "Pass as `before` for the next page; absent at the end of the log.",
             "minimum": 0
+          }
+        }
+      },
+      "RecommendedList": {
+        "type": "object",
+        "description": "A filter list goethite recommends.",
+        "required": [
+          "id",
+          "name",
+          "maintainer",
+          "description",
+          "url",
+          "homepage",
+          "license",
+          "rules",
+          "default"
+        ],
+        "properties": {
+          "default": {
+            "type": "boolean",
+            "description": "Whether a new node starts with it."
+          },
+          "description": {
+            "type": "string",
+            "description": "What it blocks, and how strictly."
+          },
+          "homepage": {
+            "type": "string",
+            "description": "Its home page."
+          },
+          "id": {
+            "type": "string",
+            "description": "A stable identifier, such as `hagezi-normal`."
+          },
+          "license": {
+            "type": "string",
+            "description": "Its license."
+          },
+          "maintainer": {
+            "type": "string",
+            "description": "Who maintains it."
+          },
+          "name": {
+            "type": "string",
+            "description": "Its name."
+          },
+          "rules": {
+            "type": "integer",
+            "format": "int32",
+            "description": "About how many rules it has.",
+            "minimum": 0
+          },
+          "url": {
+            "type": "string",
+            "description": "Where goethite downloads it."
           }
         }
       },

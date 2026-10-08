@@ -18,6 +18,7 @@
 #![forbid(unsafe_code)]
 
 mod auth;
+pub mod catalog;
 mod cluster;
 mod docs;
 mod error;
@@ -116,6 +117,17 @@ pub trait Control: Send + Sync + 'static {
         None
     }
 
+    /// The FilterLists directory, as far as goethite can use it.
+    fn directory(&self) -> BoxResult<'_, catalog::Directory> {
+        Box::pin(async { Err(directory_off()) })
+    }
+
+    /// A list's details from the FilterLists directory.
+    fn directory_list(&self, id: u64) -> BoxResult<'_, catalog::DirectoryList> {
+        let _ = id;
+        Box::pin(async { Err(directory_off()) })
+    }
+
     /// Where configuration changes made through this node go.
     fn writes(&self) -> Writes {
         Writes::Local
@@ -144,6 +156,13 @@ pub trait Control: Send + Sync + 'static {
         let _ = (role, force, actor);
         Box::pin(async { Err(ApiError::not_found("this node is not in a cluster")) })
     }
+}
+
+/// The answer when this node does not use the FilterLists directory.
+pub fn directory_off() -> ApiError {
+    ApiError::unavailable(
+        "the FilterLists directory is turned off on this node ([filter] directory in its config file)",
+    )
 }
 
 /// How the node is doing.

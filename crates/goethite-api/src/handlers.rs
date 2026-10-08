@@ -34,6 +34,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
+use crate::catalog::{self, Directory, DirectoryList, RecommendedList};
 use crate::error::{ApiError, ApiJson, ErrorBody};
 use crate::{Api, Change, Status};
 
@@ -595,6 +596,49 @@ pub(crate) async fn get_metrics(State(api): Shared) -> Response {
         .into_response()
 }
 
+/// The filter lists goethite recommends: ads and trackers, each checked
+/// to download and parse. The one marked `default` is what a new node
+/// starts with.
+#[utoipa::path(get, path = "/api/v1/lists/recommended", tag = "lists",
+    responses((status = 200, description = "Recommended lists", body = [RecommendedList])),
+    security(("token" = [])))]
+pub(crate) async fn recommended_lists() -> Json<&'static [RecommendedList]> {
+    Json(&catalog::RECOMMENDED)
+}
+
+/// The FilterLists directory (filterlists.com): the lists goethite can
+/// read, allowlists left out. The node fetches it when asked, and keeps it
+/// for a day.
+#[utoipa::path(get, path = "/api/v1/lists/directory", tag = "lists",
+    responses(
+        (status = 200, description = "The directory", body = Directory),
+        (status = 503, description = "Turned off on this node, or FilterLists cannot be reached", body = ErrorBody),
+    ),
+    security(("token" = [])))]
+pub(crate) async fn get_directory(State(api): Shared) -> Result<Json<Directory>, ApiError> {
+    Ok(Json(api.control.directory().await?))
+}
+
+/// A list's details from the FilterLists directory, with its `https://`
+/// addresses. Licenses and descriptions are FilterLists' and may be out of
+/// date.
+#[utoipa::path(get, path = "/api/v1/lists/directory/{id}", tag = "lists",
+    params(("id" = u64, Path, description = "The list's FilterLists ID")),
+    responses(
+        (status = 200, description = "The list", body = DirectoryList),
+        (status = 503, description = "Turned off on this node, or FilterLists cannot be reached", body = ErrorBody),
+    ),
+    security(("token" = [])))]
+pub(crate) async fn get_directory_list(
+    State(api): Shared,
+    Path(id): Path<String>,
+) -> Result<Json<DirectoryList>, ApiError> {
+    let id = id
+        .parse::<u64>()
+        .map_err(|_| ApiError::bad_request("a FilterLists ID is a number"))?;
+    Ok(Json(api.control.directory_list(id).await?))
+}
+
 /// Every route that needs authentication.
 pub(crate) fn routes() -> Router<Arc<Api>> {
     Router::new()
@@ -606,6 +650,9 @@ pub(crate) fn routes() -> Router<Arc<Api>> {
         )
         .route("/api/v1/lists", get(list_lists).post(create_list))
         .route("/api/v1/lists/refresh", post(refresh_lists))
+        .route("/api/v1/lists/recommended", get(recommended_lists))
+        .route("/api/v1/lists/directory", get(get_directory))
+        .route("/api/v1/lists/directory/{id}", get(get_directory_list))
         .route(
             "/api/v1/lists/{id}",
             get(get_list).put(update_list).delete(delete_list),

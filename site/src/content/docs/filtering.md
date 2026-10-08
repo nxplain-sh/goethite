@@ -76,6 +76,33 @@ the name does not exist; `refused` refuses the query.
 Blocking applies before the cache, so a name that becomes blocked is blocked at once even if its
 answer is cached. Local names such as `goethite.test` are answered before filtering.
 
+## Recommended and default lists
+
+goethite recommends ten lists for ads and trackers, each checked to download and read cleanly:
+HaGeZi Multi Light, Normal, Pro and Pro++, the AdGuard DNS filter, OISD Small and Big, Steven
+Black's Unified Hosts, AdAway and Peter Lowe's list. The [web UI](../web-ui/) shows them on the
+Lists page with what each blocks, its license and its size, and adds one in a click, used by the
+default group at once (`GET /api/v1/lists/recommended` lists them for scripts). HaGeZi, OISD and
+AdGuard overlap a lot: one of them is usually enough.
+
+A **new node** starts with HaGeZi Multi Normal in its default group: all-round protection from
+ads, trackers, telemetry, phishing and malware, made for DNS blocking, rarely breaking anything.
+It is an ordinary list, to keep, replace or remove. A config file that lists its own
+`[[filter.list]]` entries, or sets `default_lists = false` in `[filter]`, starts without it;
+nodes that already have a store are never changed.
+
+## Finding more lists
+
+The Lists page's **Find lists** searches the [FilterLists](https://filterlists.com) directory:
+the 1,100 or so lists goethite can read (hosts files, domain lists, adblock-style domain rules),
+by name, description and topic. Allowlists are left out, since goethite would block their
+domains. Adding a list opens the usual form, filled in, so you check it before it filters anyone.
+
+goethite's node fetches the directory from `api.filterlists.com` when someone opens the page, not
+the browser, and keeps it for a day. Names, descriptions and licenses come from FilterLists and
+its contributors and may be out of date: check a list's home page. `directory = false` in
+`[filter]` turns the directory off.
+
 ## Downloaded lists
 
 Lists with a `url` are downloaded at startup and then every `update_hours`, with up to 10% random

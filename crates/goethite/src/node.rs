@@ -3,10 +3,11 @@
 use std::sync::Arc;
 use std::time::SystemTime;
 
+use goethite_api::catalog::{Directory, DirectoryList};
 use goethite_api::{
-    BoxFuture, BoxResult, CacheStatus, Change, ClusterRole, ClusterStatus, EncryptedStatus,
-    FilterStatus, Forwarded, ForwardedAnswer, ListStatus, QueryLogStatus, Status, UpstreamStatus,
-    Writes,
+    ApiError, BoxFuture, BoxResult, CacheStatus, Change, ClusterRole, ClusterStatus,
+    EncryptedStatus, FilterStatus, Forwarded, ForwardedAnswer, ListStatus, QueryLogStatus, Status,
+    UpstreamStatus, Writes,
 };
 use goethite_resolver::{Resolver, Transport};
 use goethite_server::ServerStats;
@@ -16,6 +17,7 @@ use tracing::warn;
 
 use crate::cluster::Cluster;
 use crate::control::Control;
+use crate::filterlists::FilterLists;
 use crate::metrics::{self, Metrics};
 
 /// Everything the API reports on and acts through.
@@ -40,6 +42,8 @@ pub struct Node {
     pub store_problem: Option<String>,
     /// DNS over TLS and HTTPS, if they are served.
     pub encrypted: Option<EncryptedStatus>,
+    /// The FilterLists directory, unless turned off.
+    pub filterlists: Option<Arc<FilterLists>>,
 }
 
 impl Node {
@@ -139,6 +143,32 @@ impl goethite_api::Control for Node {
         }
     }
 
+    fn directory(&self) -> BoxResult<'_, Directory> {
+        Box::pin(async move {
+            let filterlists = self
+                .filterlists
+                .as_ref()
+                .ok_or_else(goethite_api::directory_off)?;
+            filterlists
+                .directory()
+                .await
+                .map_err(|err| ApiError::unavailable(format!("FilterLists: {err:#}")))
+        })
+    }
+
+    fn directory_list(&self, id: u64) -> BoxResult<'_, DirectoryList> {
+        Box::pin(async move {
+            let filterlists = self
+                .filterlists
+                .as_ref()
+                .ok_or_else(goethite_api::directory_off)?;
+            filterlists
+                .list(id)
+                .await
+                .map_err(|err| ApiError::unavailable(format!("FilterLists: {err:#}")))
+        })
+    }
+
     fn apply(&self, change: Change) -> BoxFuture<'_> {
         Box::pin(async move {
             match change {
@@ -178,9 +208,7 @@ impl goethite_api::Control for Node {
         Box::pin(async move {
             match &self.cluster {
                 Some(cluster) => cluster.forward(forwarded).await,
-                None => Err(goethite_api::ApiError::not_found(
-                    "this node is not in a cluster",
-                )),
+                None => Err(ApiError::not_found("this node is not in a cluster")),
             }
         })
     }
@@ -189,9 +217,7 @@ impl goethite_api::Control for Node {
         Box::pin(async move {
             match &self.cluster {
                 Some(cluster) => cluster.peer_stats(hours).await,
-                None => Err(goethite_api::ApiError::not_found(
-                    "this node is not in a cluster",
-                )),
+                None => Err(ApiError::not_found("this node is not in a cluster")),
             }
         })
     }
@@ -205,9 +231,7 @@ impl goethite_api::Control for Node {
         Box::pin(async move {
             match &self.cluster {
                 Some(cluster) => cluster.set_role(role, force, actor).await,
-                None => Err(goethite_api::ApiError::not_found(
-                    "this node is not in a cluster",
-                )),
+                None => Err(ApiError::not_found("this node is not in a cluster")),
             }
         })
     }

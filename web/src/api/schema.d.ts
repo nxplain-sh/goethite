@@ -192,6 +192,69 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/lists/directory": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The FilterLists directory (filterlists.com): the lists goethite can
+         *     read, allowlists left out. The node fetches it when asked, and keeps it
+         *     for a day.
+         */
+        get: operations["get_directory"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lists/directory/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A list's details from the FilterLists directory, with its `https://`
+         *     addresses. Licenses and descriptions are FilterLists' and may be out of
+         *     date.
+         */
+        get: operations["get_directory_list"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lists/recommended": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The filter lists goethite recommends: ads and trackers, each checked
+         *     to download and parse. The one marked `default` is what a new node
+         *     starts with.
+         */
+        get: operations["recommended_lists"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/lists/refresh": {
         parameters: {
             query?: never;
@@ -648,6 +711,55 @@ export interface components {
              */
             safe_search: number;
         };
+        /** @description The FilterLists directory, as far as goethite can use it. */
+        Directory: {
+            /**
+             * Format: date-time
+             * @description When this node fetched it.
+             */
+            fetched_at: string;
+            /** @description Lists in syntaxes goethite reads, allowlists left out, by name. */
+            lists: components["schemas"]["DirectoryEntry"][];
+        };
+        /** @description A list in the FilterLists directory that goethite can use. */
+        DirectoryEntry: {
+            /** @description What it is for. */
+            description: string;
+            /**
+             * Format: int64
+             * @description Its FilterLists ID.
+             */
+            id: number;
+            /** @description Its license, as FilterLists records it. */
+            license?: string | null;
+            /** @description Its name. */
+            name: string;
+            /** @description Its formats, such as `Domains`. */
+            syntaxes: string[];
+            /** @description Topics, such as `ads` or `malware`. */
+            tags: string[];
+        };
+        /** @description A list's details from the directory, with its addresses. */
+        DirectoryList: components["schemas"]["DirectoryEntry"] & {
+            /** @description Its home page. */
+            homepage?: string | null;
+            /** @description Its `https://` addresses: main ones first, mirrors after. */
+            urls: components["schemas"]["DirectoryUrl"][];
+            /** @description Whether goethite can use it: a readable syntax, not an allowlist. */
+            usable: boolean;
+        };
+        /** @description One address of a list. */
+        DirectoryUrl: {
+            /** @description Whether it is a mirror of another address. */
+            mirror: boolean;
+            /**
+             * Format: int32
+             * @description Which part of the list it is, for lists in several parts (from 1).
+             */
+            segment: number;
+            /** @description The address; always `https://`. */
+            url: string;
+        };
         /** @description How clients reach this node over DNS over TLS, HTTPS and QUIC. */
         EncryptedStatus: {
             /**
@@ -952,6 +1064,30 @@ export interface components {
              * @description Pass as `before` for the next page; absent at the end of the log.
              */
             next?: number | null;
+        };
+        /** @description A filter list goethite recommends. */
+        RecommendedList: {
+            /** @description Whether a new node starts with it. */
+            default: boolean;
+            /** @description What it blocks, and how strictly. */
+            description: string;
+            /** @description Its home page. */
+            homepage: string;
+            /** @description A stable identifier, such as `hagezi-normal`. */
+            id: string;
+            /** @description Its license. */
+            license: string;
+            /** @description Who maintains it. */
+            maintainer: string;
+            /** @description Its name. */
+            name: string;
+            /**
+             * Format: int32
+             * @description About how many rules it has.
+             */
+            rules: number;
+            /** @description Where goethite downloads it. */
+            url: string;
         };
         /** @description How to change a node's role. */
         RoleChange: {
@@ -1854,6 +1990,87 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    get_directory: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The directory */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Directory"];
+                };
+            };
+            /** @description Turned off on this node, or FilterLists cannot be reached */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    get_directory_list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The list's FilterLists ID */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The list */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DirectoryList"];
+                };
+            };
+            /** @description Turned off on this node, or FilterLists cannot be reached */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    recommended_lists: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Recommended lists */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecommendedList"][];
                 };
             };
         };

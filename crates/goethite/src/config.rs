@@ -503,6 +503,13 @@ pub struct FilterSection {
     /// What to do when filtering fails. A node setting: it is not
     /// copied into the store.
     pub on_failure: OnFailure,
+    /// Whether a new node starts with goethite's default list (HaGeZi
+    /// Multi Normal) when this table names no lists. Only the first start
+    /// of a new store looks at it.
+    pub default_lists: bool,
+    /// Whether the API offers the FilterLists directory (filterlists.com)
+    /// for finding lists: the node fetches it when someone browses it.
+    pub directory: bool,
 }
 
 /// What to do when filtering fails: the store cannot be opened, the filter
@@ -538,6 +545,8 @@ impl Default for FilterSection {
             cache_dir: None,
             update_hours: 24,
             on_failure: OnFailure::Open,
+            default_lists: true,
+            directory: true,
         }
     }
 }

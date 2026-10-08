@@ -382,3 +382,93 @@ test('the dashboard: a range, its queries, a bar and a quick rule', async ({ pag
 	// The chart ran under the strict Content Security Policy throughout.
 	expect(problems).toEqual([])
 })
+
+/** Takes `list` out of the default group and deletes it, behind the UI's back. */
+async function removeList(request: APIRequestContext, list: string) {
+	const group = await apiCall(request, 'GET', '/api/v1/groups/default')
+	await apiCall(request, 'PUT', '/api/v1/groups/default', {
+		...group.spec,
+		lists: group.spec.lists.filter((entry: { list: string }) => entry.list !== list),
+	})
+	await apiCall(request, 'DELETE', `/api/v1/lists/${list}`)
+}
+
+test('adds a recommended list to the default group in a click', async ({ page, request }) => {
+	await page.getByRole('link', { name: 'Lists', exact: true }).click()
+	const recommended = page.getByRole('region', { name: 'Recommended lists' })
+	await expect(recommended).toContainText('new nodes start with it')
+	await recommended.getByRole('button', { name: 'Add OISD Small' }).click()
+	const row = recommended.getByRole('row').filter({ hasText: 'OISD Small' })
+	await expect(row).toContainText('ADDED')
+	await expect(page.getByRole('row').filter({ hasText: 'https://small.oisd.nl/' })).toBeVisible()
+
+	const lists: { id: string; spec: { url?: string } }[] = await apiCall(request, 'GET', '/api/v1/lists')
+	const oisd = lists.find((list) => list.spec.url === 'https://small.oisd.nl/')
+	expect(oisd).toBeDefined()
+	const group = await apiCall(request, 'GET', '/api/v1/groups/default')
+	expect(group.spec.lists.map((entry: { list: string }) => entry.list)).toContain(oisd?.id)
+	await removeList(request, oisd?.id ?? '')
+})
+
+test('says when the FilterLists directory is turned off', async ({ page }) => {
+	await page.goto('/lists/find')
+	await expect(page.getByRole('alert')).toContainText('[filter] directory')
+})
+
+test('finds a list in the FilterLists directory, and adds it after checking', async ({ page, request }) => {
+	// The node's answers, as if it had asked FilterLists.
+	await page.route('**/api/v1/lists/directory', (route) =>
+		route.fulfill({
+			json: {
+				fetched_at: '2026-10-08T12:00:00Z',
+				lists: [
+					{ id: 77, name: 'E2E Trackers', description: 'Tracking domains.', tags: ['privacy'], syntaxes: ['Domains'], license: 'MIT' },
+					{ id: 78, name: 'E2E Ads', description: 'Ad servers.', tags: ['ads'], syntaxes: ['Hosts (localhost IPv4)'] },
+					{ id: 79, name: 'E2E Two parts', description: 'Big.', tags: ['ads'], syntaxes: ['Domains'] },
+				],
+			},
+		}),
+	)
+	await page.route('**/api/v1/lists/directory/77', (route) =>
+		route.fulfill({
+			json: {
+				id: 77,
+				name: 'E2E Trackers',
+				description: 'Tracking domains.',
+				tags: ['privacy'],
+				syntaxes: ['Domains'],
+				license: 'MIT',
+				homepage: 'https://lists.example',
+				urls: [
+					{ url: 'https://lists.example/trackers.txt', segment: 1, mirror: false },
+					{ url: 'https://mirror.example/trackers.txt', segment: 1, mirror: true },
+				],
+				usable: true,
+			},
+		}),
+	)
+	await page.goto('/lists/find')
+	await expect(page.getByRole('status')).toContainText('3 of 3 lists')
+	await page.getByLabel('Topic').selectOption('privacy')
+	await expect(page.getByRole('status')).toContainText('1 of 3 lists')
+	await page.getByLabel('Topic').selectOption('')
+	await page.getByLabel('Name or description').fill('ad servers')
+	await expect(page.getByRole('status')).toContainText('1 of 3 lists')
+	await page.getByLabel('Name or description').fill('')
+
+	await page.getByRole('button', { name: 'Show E2E Trackers' }).click()
+	await expect(page.getByText('(mirror)')).toBeVisible()
+	await page.getByRole('link', { name: 'Add https://lists.example/trackers.txt' }).click()
+
+	// The usual form, filled in, to check before saving.
+	await expect(page.getByLabel('Name')).toHaveValue('E2E Trackers')
+	await expect(page.getByLabel('URL')).toHaveValue('https://lists.example/trackers.txt')
+	await expect(page.getByLabel('Comment')).toHaveValue('From the FilterLists directory (list 77).')
+	await page.getByRole('button', { name: 'Create' }).click()
+	await expect(page.getByRole('row').filter({ hasText: 'https://lists.example/trackers.txt' })).toBeVisible()
+
+	const lists: { id: string; spec: { url?: string } }[] = await apiCall(request, 'GET', '/api/v1/lists')
+	const added = lists.find((list) => list.spec.url === 'https://lists.example/trackers.txt')
+	expect(added).toBeDefined()
+	await removeList(request, added?.id ?? '')
+})

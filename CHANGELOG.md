@@ -38,6 +38,14 @@ configuration format.
 - Web UI tests: Vitest for the forms' logic, and Playwright end-to-end tests against a real
   goethite, in CI.
 
+- **Recommended and default filter lists**: ten lists for ads and trackers, each checked, added
+  from the Lists page in a click (`GET /api/v1/lists/recommended`). A new node starts with
+  HaGeZi Multi Normal in its default group, unless its config file names lists or sets
+  `[filter] default_lists = false`; existing nodes do not change.
+- **Find lists in the FilterLists directory** (filterlists.com) from the Lists page: the node
+  fetches the directory when someone browses it, keeps it a day, and shows only the lists
+  goethite can read, allowlists left out. `GET /api/v1/lists/directory`;
+  `[filter] directory = false` turns it off.
 - **An interactive dashboard**: 24 hours, 7 days or 30 days; tiles, top names and clients and the
   chart's bars open the query log filtered to them; the chart (now TanStack Charts) shows each
   bar's counts on hover or keyboard focus; a top blocked name can be allowed, and a top name

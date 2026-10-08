@@ -148,6 +148,22 @@ DNS server's, with netlink and packet sockets allowed and nothing writable;
   shorten client addresses to their /24 and /56 (`anonymize_clients = true`) or be turned off. The
   store file is readable by goethite's user only.
 
+## Connections goethite makes
+
+goethite opens connections only to:
+
+- the **upstream resolvers** in `[[upstream]]`, for the queries it forwards;
+- the hosts of **downloaded filter lists**, over HTTPS, when lists are refreshed (by default
+  every 24 hours), including the [default list](../filtering/#recommended-and-default-lists) of a
+  new node;
+- **`api.filterlists.com`**, over HTTPS, only when someone opens Find lists in the web UI, at
+  most once a day ([FilterLists directory](../filtering/#finding-more-lists); `[filter]
+  directory = false` turns it off);
+- its **cluster peer**, if it has one.
+
+Names are resolved through goethite's own upstreams. The web UI's pages talk to goethite only;
+links to list home pages open in a new tab.
+
 ## When filtering fails
 
 goethite answers every query on your network, so by default a failure in filtering never stops

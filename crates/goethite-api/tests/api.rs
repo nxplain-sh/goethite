@@ -471,6 +471,43 @@ async fn bad_requests_get_json_errors() {
 }
 
 #[tokio::test]
+async fn recommended_lists_and_a_directory_turned_off() {
+    let server = start(false);
+    let recommended = server.get("/api/v1/lists/recommended").await;
+    assert_eq!(recommended.status, StatusCode::OK);
+    let lists = recommended.body.as_array().unwrap();
+    assert_eq!(lists.len(), goethite_api::catalog::RECOMMENDED.len());
+    let defaults: Vec<&str> = lists
+        .iter()
+        .filter(|list| list["default"] == true)
+        .filter_map(|list| list["id"].as_str())
+        .collect();
+    assert_eq!(defaults, ["hagezi-normal"]);
+    assert!(
+        lists
+            .iter()
+            .all(|list| list["url"].as_str().unwrap().starts_with("https://"))
+    );
+
+    // A node that does not offer the directory says why.
+    for path in ["/api/v1/lists/directory", "/api/v1/lists/directory/2594"] {
+        let off = server.get(path).await;
+        assert_eq!(off.status, StatusCode::SERVICE_UNAVAILABLE, "{path}");
+        assert_eq!(off.body["error"]["code"], "unavailable");
+        assert!(
+            off.body["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("[filter] directory"),
+            "{}",
+            off.text
+        );
+    }
+    let bad = server.get("/api/v1/lists/directory/not-a-number").await;
+    assert_eq!(bad.status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn the_token_is_required_once_configured() {
     let mut server = start(true);
     let token = server.token.clone().unwrap();

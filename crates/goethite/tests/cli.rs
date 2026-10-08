@@ -224,8 +224,20 @@ mod serving {
         }
 
         /// Starts goethite with `config`, plus a fresh store of its own
-        /// unless the config names one.
+        /// unless the config names one, and without the default list,
+        /// which it would try to download.
         fn start_config(test: &str, config: &str) -> Self {
+            let config = if config.contains("[filter]\n") {
+                config.replacen("[filter]\n", "[filter]\ndefault_lists = false\n", 1)
+            } else {
+                format!("{config}\n[filter]\ndefault_lists = false\n")
+            };
+            Self::start_exact(test, &config)
+        }
+
+        /// Starts goethite with `config` as it is, plus a store and the API
+        /// on an ephemeral port unless the config names them.
+        fn start_exact(test: &str, config: &str) -> Self {
             // No two servers on the API's default port at once.
             let config = if config.contains("[api]") {
                 config.to_owned()
@@ -932,6 +944,41 @@ mod serving {
 
         server.signal("TERM");
         assert!(server.wait_for_exit().success());
+    }
+
+    /// A new node with no lists in its config file filters with the
+    /// default list, in the default group; once only.
+    #[test]
+    fn a_new_node_starts_with_the_default_list() {
+        let store = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("default_list.redb");
+        let _ = std::fs::remove_file(&store);
+        let config = format!(
+            "[server]\nlisten = \"127.0.0.1:0\"\n\n[[upstream]]\naddress = \"{}\"\n\n\
+             [store]\npath = {:?}\n",
+            upstream(),
+            store.display().to_string()
+        );
+        for start in 0..2 {
+            let mut server = Running::start_exact("default_list", &config);
+            if start == 0 {
+                server.find_log("filtering with goethite's default list");
+            }
+            let api_addr = field(&server.find_log("API listening"), "address");
+            let (_, lists) = api(api_addr, "GET /api/v1/lists HTTP/1.1", "");
+            let lists = lists.as_array().unwrap();
+            assert_eq!(lists.len(), 1, "start {start}: {lists:?}");
+            assert_eq!(lists[0]["spec"]["name"], "HaGeZi Multi Normal");
+            assert_eq!(
+                lists[0]["spec"]["url"],
+                "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/multi.txt"
+            );
+            assert_eq!(lists[0]["spec"]["managed_by"], "api");
+            let (_, group) = api(api_addr, "GET /api/v1/groups/default HTTP/1.1", "");
+            assert_eq!(group["spec"]["lists"][0]["list"], lists[0]["id"]);
+            server.signal("TERM");
+            assert!(server.wait_for_exit().success());
+        }
+        let _ = std::fs::remove_file(&store);
     }
 
     #[test]

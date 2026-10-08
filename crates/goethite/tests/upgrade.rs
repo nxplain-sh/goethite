@@ -228,7 +228,7 @@ fn setup(name: &str) -> (PathBuf, PathBuf) {
     std::fs::write(
         &config,
         "[server]\nlisten = \"127.0.0.1:0\"\n\n[[upstream]]\naddress = \"192.0.2.1\"\n\n\
-         [api]\nlisten = \"127.0.0.1:0\"\n",
+         [filter]\ndefault_lists = false\n\n[api]\nlisten = \"127.0.0.1:0\"\n",
     )
     .unwrap();
     (dir, config)

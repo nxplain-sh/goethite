@@ -579,6 +579,51 @@ a.stat:focus-visible {
 	gap: var(--space-2);
 }
 
+/* Recommended lists and the FilterLists directory. */
+.table.recommended td {
+	padding-top: var(--space-2);
+	padding-bottom: var(--space-2);
+}
+
+.table.recommended td > div + div {
+	margin-top: var(--space-1);
+}
+
+.directory {
+	display: grid;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.directory li {
+	padding: var(--space-3) 0;
+	border-bottom: 1px solid var(--muted);
+}
+
+.directory li p {
+	margin: var(--space-1) 0 0;
+}
+
+.directory-head {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--space-2);
+}
+
+.directory-head .button {
+	margin-left: auto;
+}
+
+.directory-description {
+	max-width: 80ch;
+}
+
+.directory .subform {
+	margin-top: var(--space-3);
+}
+
 /* Filters set from elsewhere, on the query log. */
 .chips {
 	display: flex;

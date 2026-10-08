@@ -25,6 +25,7 @@ use crate::certs::Served;
 use crate::cluster::{self, Cluster};
 use crate::config::{Config, OnFailure};
 use crate::control::Control;
+use crate::filterlists::FilterLists;
 use crate::lists::ListStore;
 use crate::metrics::Metrics;
 use crate::secrets::Secrets;
@@ -141,6 +142,7 @@ impl ControlPlane {
             (None, _) => None,
         };
         let tls = tls_client_config(&TlsRoots::Bundled, &[b"h2", b"http/1.1"])?;
+        let filterlists = filterlists(config, data, &tls);
         let downloader =
             download::Downloader::new(Arc::clone(&data.resolver), tls, filters::MAX_LIST_LEN);
         control.spawn(downloader, &mut tasks, &stopped);
@@ -155,6 +157,7 @@ impl ControlPlane {
             store_problem,
             cluster: cluster.clone(),
             encrypted: encrypted_status(config),
+            filterlists,
         };
         let api_tls = api_cert
             .as_ref()
@@ -269,4 +272,18 @@ fn encrypted_status(config: &Config) -> Option<goethite_api::EncryptedStatus> {
             doh: server.doh.iter().map(ToString::to_string).collect(),
             doq: server.doq.iter().map(ToString::to_string).collect(),
         })
+}
+
+/// The FilterLists directory, unless `[filter] directory` turns it off.
+fn filterlists(
+    config: &Config,
+    data: &DataPlane,
+    tls: &Arc<rustls::ClientConfig>,
+) -> Option<Arc<FilterLists>> {
+    config.filter.directory.then(|| {
+        Arc::new(FilterLists::new(
+            Arc::clone(&data.resolver),
+            Arc::clone(tls),
+        ))
+    })
 }

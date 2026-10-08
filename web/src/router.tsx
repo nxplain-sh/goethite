@@ -104,6 +104,7 @@ const groups = () => import('./pages/Groups')
 const clients = () => import('./pages/Clients')
 const schedules = () => import('./pages/Schedules')
 const ListEditor = lazyRouteComponent(lists, 'ListEditor')
+const FindLists = lazyRouteComponent(() => import('./pages/FindLists'), 'FindLists')
 const RuleEditor = lazyRouteComponent(rules, 'RuleEditor')
 const GroupEditor = lazyRouteComponent(groups, 'GroupEditor')
 const ClientEditor = lazyRouteComponent(clients, 'ClientEditor')
@@ -115,11 +116,32 @@ const listsRoute = createRoute({
 	component: lazyRouteComponent(lists, 'Lists'),
 })
 
+const findListsRoute = createRoute({
+	getParentRoute: () => appRoute,
+	path: '/lists/find',
+	component: FindLists,
+})
+
+/** What a new list starts with, such as a list found in the directory. */
+export interface ListDraft {
+	name?: string | undefined
+	url?: string | undefined
+	comment?: string | undefined
+}
+
 const listEditorRoute = createRoute({
 	getParentRoute: () => appRoute,
 	path: '/lists/$id',
+	validateSearch: (search: Record<string, unknown>): ListDraft => {
+		const url = search['url']
+		return {
+			name: text(search['name'])?.slice(0, 100),
+			url: typeof url === 'string' && url.startsWith('https://') && url.length <= 2048 ? url : undefined,
+			comment: text(search['comment']),
+		}
+	},
 	component: function ListEditorPage() {
-		return <ListEditor id={listEditorRoute.useParams().id} />
+		return <ListEditor id={listEditorRoute.useParams().id} draft={listEditorRoute.useSearch()} />
 	},
 })
 
@@ -197,6 +219,7 @@ const routeTree = rootRoute.addChildren([
 		dashboardRoute,
 		queryLogRoute,
 		listsRoute,
+		findListsRoute,
 		listEditorRoute,
 		rulesRoute,
 		ruleEditorRoute,

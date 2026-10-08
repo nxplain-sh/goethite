@@ -35,6 +35,11 @@ doq = "127.0.0.1:${DOQ_PORT}"
 [[upstream]]
 address = "192.0.2.1"
 
+[filter]
+# Offline: no default list to download, no FilterLists directory to ask.
+default_lists = false
+directory = false
+
 [api]
 listen = "127.0.0.1:${API_PORT}"
 token_sha256 = "${hash}"

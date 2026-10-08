@@ -45,7 +45,8 @@ the network; otherwise the token crosses it in clear text.
   to remove. Searches are part of the address, so they can be bookmarked.
 - **Lists**: every filter list with its rule count and any problem, and a button to download
   them all again now. A new list can join the default group at once, so it filters straight
-  away.
+  away. [Recommended lists](../filtering/#recommended-and-default-lists) add in a click, and
+  **Find lists** searches the [FilterLists directory](../filtering/#finding-more-lists).
 - **Rules**: custom rules, added from the top of the page, filtered as you type, turned on and
   off in place. goethite explains a rule it cannot use.
 - **Groups**: which lists filter a group's clients, each always or during a schedule, and safe

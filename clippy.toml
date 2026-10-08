@@ -4,5 +4,5 @@ allow-expect-in-tests = true
 allow-indexing-slicing-in-tests = true
 allow-panic-in-tests = true
 
-# Protocol acronyms that `clippy::doc_markdown` would otherwise want in backticks.
-doc-valid-idents = ["DoH", "DoT", "DoQ", "ODoH", "DNSSEC", "EDNS", "OpenAPI", "TanStack", "AdGuard", ".."]
+# Acronyms and names that `clippy::doc_markdown` would otherwise want in backticks.
+doc-valid-idents = ["DoH", "DoT", "DoQ", "ODoH", "DNSSEC", "EDNS", "OpenAPI", "TanStack", "AdGuard", "FilterLists", "HaGeZi", ".."]
