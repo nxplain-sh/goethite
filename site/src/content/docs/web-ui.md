@@ -73,8 +73,9 @@ schedule or a group can only go once nothing uses it.
 Every answer carries a text label (`BLOCKED`, `CACHED`, `FORWARDED` and so on), so nothing
 depends on color alone. The UI has one theme, light.
 
-In the bottom right corner of every page, the sign-in page included, **Docs** opens this
-documentation and **API docs** the [API reference](#api-reference), both in a new tab. The API
+In the top bar of every page, beside Settings, **Docs** opens this documentation and **API docs**
+the [API reference](#api-reference), both in a new tab; the sign-in page has them under its form.
+On narrow screens the top bar shows only their icons, a book and braces. The API
 reference is the node's own (for its exact version) when it serves one, which it does only to
 a browser on the same machine; otherwise it is the one on this site.
 

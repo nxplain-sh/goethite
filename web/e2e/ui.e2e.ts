@@ -623,7 +623,8 @@ test('the leak test sees which lookups reach goethite', async ({ page }) => {
 })
 
 test('every page links to the docs and the API reference', async ({ page }) => {
-	const links = page.getByRole('navigation', { name: 'Documentation' })
+	// In the top bar, beside Settings.
+	const links = page.getByRole('banner').getByRole('navigation', { name: 'Documentation' })
 	await expect(links.getByRole('link', { name: 'Docs', exact: true })).toHaveAttribute(
 		'href',
 		'https://nxplain-sh.github.io/goethite/',
@@ -633,18 +634,17 @@ test('every page links to the docs and the API reference', async ({ page }) => {
 	const apiDocs = links.getByRole('link', { name: 'API docs', exact: true })
 	await expect(apiDocs).toHaveAttribute('href', '/api/docs')
 	await expect(apiDocs).toHaveAttribute('target', '_blank')
-	const box = await links.boundingBox()
-	const viewport = page.viewportSize()
-	expect(box !== null && viewport !== null).toBe(true)
-	if (box !== null && viewport !== null) {
-		expect(box.x + box.width).toBeGreaterThan(viewport.width - 40)
-		expect(box.y + box.height).toBeGreaterThan(viewport.height - 40)
-	}
+	// On a phone, icons only, under the same names.
+	await page.setViewportSize({ width: 390, height: 844 })
+	await expect(apiDocs).toBeVisible()
+	await expect(apiDocs.getByText('API docs')).toBeHidden()
+	await page.setViewportSize({ width: 1280, height: 720 })
+
 	await page.getByRole('button', { name: 'Sign out' }).click()
 	await expect(page).toHaveURL(/\/login/)
-	// Signed out, the node's status is unknown: the site's reference.
-	await expect(links.getByRole('link', { name: 'API docs', exact: true })).toHaveAttribute(
-		'href',
-		'https://nxplain-sh.github.io/goethite/api-reference/',
-	)
+	// Under the sign-in form. Signed out, the node's status is unknown: the
+	// site's reference.
+	await expect(
+		page.getByRole('navigation', { name: 'Documentation' }).getByRole('link', { name: 'API docs', exact: true }),
+	).toHaveAttribute('href', 'https://nxplain-sh.github.io/goethite/api-reference/')
 })

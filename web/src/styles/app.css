@@ -66,109 +66,79 @@ code,
 	max-width: 1280px;
 	margin: 0 auto;
 	padding: var(--space-4);
-	/* Room below the last panel for the documentation links. */
-	padding-bottom: calc(var(--space-6) * 2 + var(--space-4));
 	display: grid;
 	gap: var(--space-5);
 }
 
-/* Documentation links: one joined button in the bottom right corner of every page. */
+/* Documentation links: a joined pair in the top bar, pressing like its buttons. */
 
-.docs-dock {
-	position: fixed;
-	right: var(--space-4);
-	bottom: var(--space-4);
-	z-index: 10;
+.docs-links {
 	display: flex;
 	border: var(--border);
 	background: var(--panel);
-	box-shadow: var(--shadow);
+	box-shadow: var(--shadow-small);
 	transition:
 		transform 60ms,
 		box-shadow 60ms;
 }
 
-.docs-dock:hover {
-	transform: translate(2px, 2px);
-	box-shadow: 4px 4px 0 var(--ink);
+.docs-links:hover {
+	transform: translate(1px, 1px);
+	box-shadow: 2px 2px 0 var(--ink);
 }
 
-.docs-dock:has(.docs-dock-link:active) {
-	transform: translate(5px, 5px);
+.docs-links:has(a:active) {
+	transform: translate(2px, 2px);
 	box-shadow: var(--shadow-pressed);
 }
 
-.docs-dock-link {
+.docs-links a {
 	display: inline-flex;
 	align-items: center;
 	gap: var(--space-2);
-	padding: var(--space-2) var(--space-3);
-	background: var(--panel);
+	padding: var(--space-1) var(--space-3);
+	font-size: 0.9rem;
+	font-weight: 700;
+	white-space: nowrap;
 	color: var(--ink);
 	text-decoration: none;
 }
 
-.docs-dock-link + .docs-dock-link {
+.docs-links a + a {
 	border-left: var(--border);
 }
 
-.docs-dock-link:hover {
+.docs-links a:hover {
 	background: var(--cached);
 }
 
-.docs-dock-link.primary {
-	background: var(--accent);
-	color: var(--on-accent);
-}
-
-.docs-dock-link.primary:hover {
-	background: var(--accent-strong);
-}
-
-.docs-dock-link:focus-visible {
+.docs-links a:focus-visible {
 	outline: none;
 	box-shadow: inset 0 0 0 3px var(--ink);
 }
 
-.docs-dock-icon {
+.docs-links svg {
 	flex: none;
 }
 
-.docs-dock-text {
-	display: grid;
-	line-height: 1.1;
-}
-
-.docs-dock-label {
-	font-weight: 700;
-	white-space: nowrap;
-}
-
-.docs-dock-hint {
-	font-family: var(--font-mono);
-	font-size: 0.7rem;
-	color: var(--muted);
-	white-space: nowrap;
-}
-
-.docs-dock-link.primary .docs-dock-hint {
-	color: var(--on-accent);
-}
-
-@media (max-width: 380px) {
-	.docs-dock-hint {
+/* Where the top bar is tight, the icons say it; the links keep their names
+   for screen readers. The sign-in page has room for the labels. */
+@media (max-width: 960px) {
+	.topbar .docs-links .docs-label,
+	.topbar .docs-links .docs-out {
 		display: none;
 	}
-}
 
-@media (prefers-reduced-motion: reduce) {
-	.docs-dock,
-	.docs-dock:hover,
-	.docs-dock:has(.docs-dock-link:active) {
-		transition: none;
-		transform: none;
+	.topbar .docs-links a {
+		padding: var(--space-1) var(--space-2);
 	}
 }
+
+.login .docs-links {
+	width: fit-content;
+	margin-top: var(--space-5);
+}
+
 
 .topbar {
 	display: flex;

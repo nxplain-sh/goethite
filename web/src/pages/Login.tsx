@@ -4,6 +4,7 @@ import { type FormEvent, useState } from 'react'
 
 import { ApiError, api, call, describe } from '../api/client'
 import { clearToken, looksLikeToken, safeRedirect, setToken } from '../auth'
+import { DocsLinks } from '../components/DocsLinks'
 
 /** Asks for the admin token. */
 export function Login({ redirect }: { redirect: string | undefined }) {
@@ -75,6 +76,7 @@ export function Login({ redirect }: { redirect: string | undefined }) {
 					</p>
 				</form>
 			</section>
+			<DocsLinks />
 		</main>
 	)
 }

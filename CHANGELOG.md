@@ -29,8 +29,8 @@ configuration format.
   Special-use names and private reverse zones are answered without asking anyone. The query log
   shows the server that answered, and the status API, metrics, web UI and TUI show recursion's
   counters.
-- The web UI links to the documentation and the API reference from the bottom right corner of
-  every page; the API reference is the node's own when it serves one to the browser.
+- The web UI links to the documentation and the API reference from the top bar of every page and
+  the sign-in page; the API reference is the node's own when it serves one to the browser.
   `/api/v1/status` says whether it does (`api_docs`).
 - **DNS leak test**: the web UI's Leak test page has the browser look up names only goethite
   answers, and says whether this device's lookups reach goethite (all, some or none), over which

@@ -4,6 +4,7 @@ import { Link, Outlet, useNavigate } from '@tanstack/react-router'
 import { clearToken, currentToken } from '../auth'
 import { api, call } from '../api/client'
 import { statusQuery } from '../api/queries'
+import { DocsLinks } from './DocsLinks'
 import { ClusterBadges, ErrorNotice, ProtectionBadge } from './ui'
 
 /** How long the pause button pauses filtering. */
@@ -58,6 +59,7 @@ export function Shell() {
 				<Link to="/settings" className="button small">
 					Settings
 				</Link>
+				<DocsLinks />
 				{currentToken() === null ? null : (
 					<button
 						type="button"

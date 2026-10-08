@@ -11,7 +11,6 @@ import {
 import { OUTCOMES } from './api/client'
 import type { LogSearch } from './api/queries'
 import { safeRedirect } from './auth'
-import { DocsLinks } from './components/DocsLinks'
 import { Shell } from './components/Shell'
 import { Dashboard, RANGES, type RangeId } from './pages/Dashboard'
 import { Login } from './pages/Login'
@@ -55,17 +54,8 @@ function NotFound() {
 	)
 }
 
-function Root() {
-	return (
-		<>
-			<Outlet />
-			<DocsLinks />
-		</>
-	)
-}
-
 const rootRoute = createRootRouteWithContext<{ queryClient: QueryClient }>()({
-	component: Root,
+	component: Outlet,
 	notFoundComponent: NotFound,
 })
 
