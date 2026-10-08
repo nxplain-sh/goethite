@@ -19,7 +19,7 @@ use goethite_resolver::{
 use goethite_store::{BlockResponseKind, ConfigSnapshot, Store};
 use jiff::Timestamp;
 use tokio::sync::Notify;
-use tracing::{error, warn};
+use tracing::{error, info, warn};
 
 use crate::download::Downloader;
 use crate::filters::{self, CUSTOM_RULES, Compiled, Downloaded, ListStatus};
@@ -87,6 +87,13 @@ impl Control {
             }
         }
         self.rebuild_policy();
+        // Only now does the new filter answer queries.
+        let filter = &self.compiled().filter;
+        info!(
+            rules = filter.rule_count(),
+            memory_kib = filter.memory_bytes() / 1024,
+            "filter ready"
+        );
     }
 
     /// Recompiles the policy around the current filter, after groups,

@@ -114,11 +114,6 @@ pub fn compile(config: &ConfigSnapshot, lists: &ListStore) -> Result<Compiled> {
         statuses.insert(list.id.clone(), status);
     }
     let filter = builder.build().context("cannot compile the filter")?;
-    info!(
-        rules = filter.rule_count(),
-        memory_kib = filter.memory_bytes() / 1024,
-        "filter ready"
-    );
     Ok(Compiled {
         filter: Arc::new(filter),
         source_ids,
