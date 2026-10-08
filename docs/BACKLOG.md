@@ -15,8 +15,6 @@ Phase 1's scope shipped in v0.1.0. These items came up along the way; they are c
 - **[P2] Users from the name service switch.** `server.user` is looked up in `/etc/passwd`
   only; accept a numeric `uid:gid` for users that live in LDAP or systemd-homed.
 - **[P1] Config hot reload** via `arc-swap`, without dropping queries.
-- **[P1] `bench/` directory** with criterion benches and dnsperf/resperf scripts, ahead of the
-  first performance claim.
 - **[P1, perf] Zero-allocation fast-path decoder** behind `DnsCodec`
   (see [ADR 0001](adr/0001-hickory-proto-behind-trait.md)). Only with a criterion bench that shows
   the win.
@@ -58,8 +56,6 @@ Phase 1's scope shipped in v0.1.0. These items came up along the way; they are c
 - **[later] Regular-expression rules.** They cannot live in the FST; they would need a separate,
   bounded matcher (e.g. a size-limited `regex-automata` DFA) run only after the FST.
 - **[P1] Re-read the config file on SIGHUP**, not only the filter lists.
-- **[P2] List status in the API:** last download time, result, rule counts and the reason a
-  download was rejected, and a way to trigger an update now.
 - **[later] Signed or hash-pinned lists**, for list sources that publish signatures.
 - **[P1] Name parsing for filter lists.** `Name::from_str` only accepts host-style names (no
   escapes, no wildcards). Filter syntax needs wildcards and may need RFC 1035 escapes; extend the
@@ -71,11 +67,13 @@ Phase 1's scope shipped in v0.1.0. These items came up along the way; they are c
   bound to `0.0.0.0` or `[::]` answers from the address the kernel picks, which may not be the one
   the query was sent to. Needs `IP_PKTINFO` / `IPV6_RECVPKTINFO`; until then, list specific
   addresses on multihomed hosts.
-- **[P2] Rate limiting exemptions for trusted networks** (beyond loopback), and rate limiting
-  statistics in metrics.
+- **[P2] Rate limiting exemptions for trusted networks** (beyond loopback).
 - **[P3] Binding the floating IP before it is assigned** (`IP_FREEBIND`), for VRRP backups.
 
 ## Phase 2: v0.2 control
+
+Phase 2's scope shipped in v0.2.0. The `[P2]` items left in this file are candidates for 0.2.x
+releases.
 
 - **[P2] Scoped API tokens:** read-only tokens (for monitoring) and a Terraform token, beside the
   single admin token.
@@ -88,10 +86,12 @@ Phase 1's scope shipped in v0.1.0. These items came up along the way; they are c
   starts, so it can flash; fixing it needs a CSP hash for a tiny inline script.
 - **[P5] Release builds include the web UI.** The release workflow must build `web/` before
   `cargo build --release`, reproducibly (pinned Node, `npm ci`).
-
-- **[P2] Prometheus metrics** endpoint.
-- **[P2] API compatibility checks.** Use oasdiff on the OpenAPI spec for `/api/v1`, and evaluate
-  `cargo-semver-checks` if any crate is published.
+- **[P3] Query log writer priority and cost.** The writer thread competes with the DNS workers
+  for CPU when the node is saturated. Lower its priority (it needs `setpriority`, which the
+  systemd unit's `~@resources` filter refuses), and cut its per-entry allocations (names, IDs and
+  rule text are turned into `String`s for every stored entry), with a criterion bench.
+- **[P5] `cargo-semver-checks`** if any crate is published (the HTTP API is already checked
+  with oasdiff).
 - **[P2] JSON log format option** (for example `--log-format json`) for log shippers.
 
 ## Phase 4: v0.4

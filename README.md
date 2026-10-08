@@ -10,13 +10,16 @@ zero-downtime upgrades. It is named after the iron-oxide mineral that is a main 
 
 ## Status
 
-**Pre-alpha, v0.1.0.** goethite forwards queries to the upstream resolvers you
+**Pre-alpha, v0.2.0.** goethite forwards queries to the upstream resolvers you
 configure, over DNS over TLS, DNS over HTTPS or plain DNS, with failover; caches the answers; and
 blocks names from hosts files, domain lists and AdGuard-style rules, from local files or downloaded
-and refreshed over HTTPS. It protects against DNS rebinding, rate limits clients, drops its
-privileges after binding port 53, and ships a hardened systemd unit
-([`dist/systemd/`](dist/systemd/goethite.service)). See the roadmap
-in [`AGENTS.md`](AGENTS.md#roadmap-respect-the-order).
+and refreshed over HTTPS. Clients can be put in groups with their own lists, schedules and safe
+search, and blocking sees through CNAME cloaking. It keeps a query log and statistics, exports
+Prometheus metrics, and is managed through a REST API (with an OpenAPI description), a terminal
+UI and the start of a web UI; every change is audit-logged. It protects against DNS rebinding,
+rate limits clients, drops its privileges after binding port 53, and ships a hardened systemd unit
+([`dist/systemd/`](dist/systemd/goethite.service)). See the
+[changelog](CHANGELOG.md) and the roadmap in [`AGENTS.md`](AGENTS.md#roadmap-respect-the-order).
 
 ## Quick start (development)
 

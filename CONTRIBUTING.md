@@ -1,6 +1,6 @@
 # Contributing to goethite
 
-Thanks for your interest. goethite is pre-alpha (Phase 0). Read [`AGENTS.md`](AGENTS.md) first: it
+Thanks for your interest. goethite is pre-alpha. Read [`AGENTS.md`](AGENTS.md) first: it
 defines the architecture, security rules, conventions and roadmap, and it binds humans and coding
 agents alike.
 

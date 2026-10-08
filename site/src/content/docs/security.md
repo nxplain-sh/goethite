@@ -1,6 +1,6 @@
 ---
 title: Security settings
-description: DNS rebinding protection, rate limiting, connection limits and privilege dropping.
+description: DNS rebinding protection, rate limiting, connection limits, privilege dropping, and the API.
 ---
 
 goethite is built to be safe by default: the protections on this page are on unless you turn them
@@ -114,3 +114,20 @@ Either way, goethite then empties its capability sets and sets `no_new_privs`, s
 privileges again, even by running a program. The filter lists and their `cache_dir` must be
 readable, and the `cache_dir` writable, by the user goethite runs as. Dropping privileges is
 supported on Linux; on other platforms, which are for development only, `server.user` is an error.
+
+## The API, the web UI and the logs
+
+- **Admin token.** Without one, the [REST API](../api/) answers loopback only and refuses to listen
+  anywhere else. The config holds only the token's SHA-256 hash. Beyond loopback, serve HTTPS
+  (`tls_cert`, `tls_key`); over plain HTTP goethite warns that the token can be sniffed.
+- **Browsers.** The API refuses requests from other web sites and, without a token, requests that
+  do not name this machine, so pages you visit cannot use your browser against it (including by
+  DNS rebinding). The [web UI](../web-ui/) runs under a strict Content Security Policy and keeps
+  the token in its browser tab only. `[api] web_ui = false` turns it off.
+- **Limits.** At most 64 API connections, 10 seconds for the TLS handshake and headers, 1 MiB
+  request bodies and 30 seconds per request.
+- **Audit log.** Every change to lists, rules, groups, clients, schedules and settings is recorded
+  with who made it, from where, and the before and after (`GET /api/v1/audit`).
+- **Query privacy.** The [query log](../configuration/#querylog) keeps 7 days by default, can
+  shorten client addresses to their /24 and /56 (`anonymize_clients = true`) or be turned off. The
+  store file is readable by goethite's user only.
