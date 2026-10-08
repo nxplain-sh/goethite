@@ -829,6 +829,7 @@ mod tests {
             },
             cluster: None,
             encrypted: None,
+            api_docs: false,
             problems: Vec::new(),
         }
     }

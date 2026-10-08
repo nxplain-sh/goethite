@@ -83,6 +83,7 @@ impl Control for FakeControl {
             },
             cluster: None,
             encrypted: None,
+            api_docs: false,
             problems: Vec::new(),
         }
     }
@@ -1023,8 +1024,11 @@ async fn api_reference_is_off_unless_turned_on() {
     ] {
         assert_eq!(off.get(path).await.status, StatusCode::NOT_FOUND, "{path}");
     }
+    // The status says so, for the web UI's link.
+    assert_eq!(off.get("/api/v1/status").await.body["api_docs"], false);
 
     let mut on = start_with_docs(true, None, Some(Arc::new(FakeDocs)));
+    assert_eq!(on.get("/api/v1/status").await.body["api_docs"], true);
     // The docs need no token; the rest of the API still does.
     on.token = None;
     assert_eq!(

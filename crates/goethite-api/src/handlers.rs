@@ -326,7 +326,9 @@ pub(crate) async fn health() -> Json<Health> {
     responses((status = 200, description = "The status", body = Status)),
     security(("token" = [])))]
 pub(crate) async fn get_status(State(api): Shared) -> Json<Status> {
-    Json(api.control.status())
+    let mut status = api.control.status();
+    status.api_docs = api.config.docs.is_some();
+    Json(status)
 }
 
 /// The filtering settings.

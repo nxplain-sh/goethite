@@ -43,6 +43,7 @@ impl Control for Idle {
             },
             cluster: None,
             encrypted: None,
+            api_docs: false,
             problems: Vec::new(),
         }
     }

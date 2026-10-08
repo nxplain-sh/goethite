@@ -232,6 +232,10 @@ pub struct Status {
     /// DNS over TLS, HTTPS and QUIC, if this node serves them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub encrypted: Option<EncryptedStatus>,
+    /// Whether this node serves its API reference at `/api/docs` (to
+    /// loopback clients only).
+    #[serde(default)]
+    pub api_docs: bool,
     /// What is wrong with this node, in words, such as filtering running
     /// without its store. Empty when all is well.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

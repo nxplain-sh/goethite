@@ -4470,6 +4470,10 @@
           "query_log"
         ],
         "properties": {
+          "api_docs": {
+            "type": "boolean",
+            "description": "Whether this node serves its API reference at `/api/docs` (to\nloopback clients only)."
+          },
           "cache": {
             "oneOf": [
               {

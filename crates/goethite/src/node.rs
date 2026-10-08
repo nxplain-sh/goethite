@@ -163,6 +163,8 @@ impl goethite_api::Control for Node {
             },
             cluster: self.cluster.as_ref().map(|cluster| cluster.status()),
             encrypted: self.encrypted.clone(),
+            // Filled in by the API, which knows whether it serves them.
+            api_docs: false,
             problems: self.problems(),
         }
     }

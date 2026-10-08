@@ -1557,6 +1557,11 @@ export interface components {
         };
         /** @description How the node is doing. */
         Status: {
+            /**
+             * @description Whether this node serves its API reference at `/api/docs` (to
+             *     loopback clients only).
+             */
+            api_docs?: boolean;
             cache?: components["schemas"]["CacheStatus"] | null;
             cluster?: components["schemas"]["ClusterStatus"] | null;
             encrypted?: components["schemas"]["EncryptedStatus"] | null;

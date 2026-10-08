@@ -66,8 +66,25 @@ code,
 	max-width: 1280px;
 	margin: 0 auto;
 	padding: var(--space-4);
+	/* Room below the last panel for the documentation links. */
+	padding-bottom: calc(var(--space-6) * 2 + var(--space-4));
 	display: grid;
 	gap: var(--space-5);
+}
+
+/* Documentation links, in the bottom right corner of every page. */
+
+.docs-links {
+	position: fixed;
+	right: var(--space-4);
+	bottom: var(--space-4);
+	z-index: 10;
+	display: flex;
+	gap: var(--space-2);
+}
+
+.docs-links a {
+	text-decoration: none;
 }
 
 .topbar {

@@ -621,3 +621,30 @@ test('the leak test sees which lookups reach goethite', async ({ page }) => {
 	await recent.getByRole('button', { name: 'Show' }).last().click()
 	await expect(result).toContainText('8 of 8 lookups reached goethite')
 })
+
+test('every page links to the docs and the API reference', async ({ page }) => {
+	const links = page.getByRole('navigation', { name: 'Documentation' })
+	await expect(links.getByRole('link', { name: 'Docs', exact: true })).toHaveAttribute(
+		'href',
+		'https://nxplain-sh.github.io/goethite/',
+	)
+	// This node serves its API reference ([api] docs), and the browser is on
+	// loopback: the link is the node's own.
+	const apiDocs = links.getByRole('link', { name: 'API docs', exact: true })
+	await expect(apiDocs).toHaveAttribute('href', '/api/docs')
+	await expect(apiDocs).toHaveAttribute('target', '_blank')
+	const box = await links.boundingBox()
+	const viewport = page.viewportSize()
+	expect(box !== null && viewport !== null).toBe(true)
+	if (box !== null && viewport !== null) {
+		expect(box.x + box.width).toBeGreaterThan(viewport.width - 40)
+		expect(box.y + box.height).toBeGreaterThan(viewport.height - 40)
+	}
+	await page.getByRole('button', { name: 'Sign out' }).click()
+	await expect(page).toHaveURL(/\/login/)
+	// Signed out, the node's status is unknown: the site's reference.
+	await expect(links.getByRole('link', { name: 'API docs', exact: true })).toHaveAttribute(
+		'href',
+		'https://nxplain-sh.github.io/goethite/api-reference/',
+	)
+})
