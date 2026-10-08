@@ -62,15 +62,55 @@ impl Running {
     }
 
     fn wait_for_log(&mut self, needle: &str) -> String {
-        loop {
-            let line = self
-                .lines
-                .recv_timeout(WAIT)
-                .unwrap_or_else(|_| panic!("no log line with {needle:?}; log: {:#?}", self.log));
+        let [line] = self.wait_for_logs([needle]);
+        line
+    }
+
+    /// A line with each of `needles`, in whatever order they come: tasks
+    /// that start together log in any order.
+    fn wait_for_logs<const N: usize>(&mut self, needles: [&str; N]) -> [String; N] {
+        let mut found: [Option<String>; N] = std::array::from_fn(|_| None);
+        while found.iter().any(Option::is_none) {
+            let line = self.lines.recv_timeout(WAIT).unwrap_or_else(|_| {
+                panic!("no log line with each of {needles:?}; log: {:#?}", self.log)
+            });
             self.log.push(line.clone());
-            if line.contains(needle) {
-                return line;
+            for (needle, slot) in needles.iter().zip(&mut found) {
+                if slot.is_none() && line.contains(needle) {
+                    *slot = Some(line.clone());
+                }
             }
+        }
+        found.map(Option::unwrap)
+    }
+
+    /// The DNS and API addresses, once both listen.
+    fn addresses(&mut self) -> (SocketAddr, SocketAddr) {
+        let [dns, api] = self.wait_for_logs(["listening udp=", "API listening"]);
+        (
+            field(&dns, "udp").parse().unwrap(),
+            field(&api, "address").parse().unwrap(),
+        )
+    }
+}
+
+/// A failed test must not leave goethite running: it would also hold the
+/// test's output open, and `cargo test` would wait for it.
+impl Drop for Running {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// Kills the process the upgrade started, if the test fails before it is
+/// stopped.
+struct Stray(u32);
+
+impl Drop for Stray {
+    fn drop(&mut self) {
+        if process_exists(self.0) {
+            signal("KILL", self.0);
         }
     }
 }
@@ -202,12 +242,7 @@ fn process_exists(pid: u32) -> bool {
 fn an_upgrade_loses_no_query() {
     let (_dir, config) = setup("upgrade");
     let mut old = Running::start(&config);
-    let udp: SocketAddr = field(&old.wait_for_log("listening udp="), "udp")
-        .parse()
-        .unwrap();
-    let api: SocketAddr = field(&old.wait_for_log("API listening"), "address")
-        .parse()
-        .unwrap();
+    let (udp, api) = old.addresses();
     let (status, rule) = http(
         api,
         "POST",
@@ -221,6 +256,7 @@ fn an_upgrade_loses_no_query() {
     signal("USR2", old.child.id());
     let started = old.wait_for_log("started the new goethite");
     let new_pid: u32 = field(&started, "pid").parse().unwrap();
+    let _stray = Stray(new_pid);
     old.wait_for_log("answering in place of the previous goethite");
     let exited = Instant::now();
     let status = loop {
@@ -253,12 +289,7 @@ fn an_upgrade_loses_no_query() {
 fn a_failed_upgrade_changes_nothing() {
     let (_dir, config) = setup("upgrade_fails");
     let mut old = Running::start(&config);
-    let udp: SocketAddr = field(&old.wait_for_log("listening udp="), "udp")
-        .parse()
-        .unwrap();
-    let api: SocketAddr = field(&old.wait_for_log("API listening"), "address")
-        .parse()
-        .unwrap();
+    let (udp, api) = old.addresses();
     // A second listen address: the new process cannot have a socket for it.
     let text = std::fs::read_to_string(&config).unwrap();
     std::fs::write(
