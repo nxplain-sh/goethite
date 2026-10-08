@@ -475,6 +475,119 @@ async fn doh_refuses_what_is_not_a_dns_query() {
 }
 
 #[tokio::test]
+async fn odoh_target_answers_over_http1_and_http2() {
+    use goethite_server::odoh::client::{parse_configs, seal_query};
+
+    let server = start_with(|config| config.odoh = true);
+    for http2 in [false, true] {
+        let (mut http, _connection) = Http::connect(&server, "dns.example", http2).await;
+        let configs = http.send(get("/.well-known/odohconfigs")).await;
+        assert_eq!(configs.status, StatusCode::OK);
+        assert_eq!(
+            configs.headers.get("content-type").unwrap(),
+            "application/octet-stream"
+        );
+        let config = parse_configs(&configs.body).unwrap();
+
+        let (wire, pending) = seal_query(&config, &query(9, "goethite.test."), 16).unwrap();
+        let answer = http
+            .send(post(
+                "/dns-query",
+                "application/oblivious-dns-message",
+                wire,
+            ))
+            .await;
+        assert_eq!(answer.status, StatusCode::OK);
+        assert_eq!(
+            answer.headers.get("content-type").unwrap(),
+            "application/oblivious-dns-message"
+        );
+        assert_eq!(
+            answer.headers.get("cache-control").unwrap(),
+            "no-cache, no-store"
+        );
+        let message = Message::from_vec(&pending.open(&answer.body).unwrap()).unwrap();
+        assert_test_answer(&message, 9);
+        assert_eq!(server.seen.last(), (Transport::Oblivious, None));
+
+        // A client may name itself in the target path.
+        let (wire, pending) = seal_query(&config, &query(10, "goethite.test."), 0).unwrap();
+        let answer = http
+            .send(post(
+                "/dns-query/tv",
+                "application/oblivious-dns-message",
+                wire,
+            ))
+            .await;
+        pending.open(&answer.body).unwrap();
+        assert_eq!(
+            server.seen.last(),
+            (Transport::Oblivious, Some("cl_tv".to_owned()))
+        );
+
+        // A key the target does not have: 401, so the client fetches the
+        // configuration again. Anything else wrong: 400.
+        let (mut wire, _) = seal_query(&config, &query(11, "goethite.test."), 0).unwrap();
+        wire[3] ^= 1;
+        let refused = http
+            .send(post(
+                "/dns-query",
+                "application/oblivious-dns-message",
+                wire,
+            ))
+            .await;
+        assert_eq!(refused.status, StatusCode::UNAUTHORIZED);
+        let refused = http
+            .send(post(
+                "/dns-query",
+                "application/oblivious-dns-message",
+                b"garbage".to_vec(),
+            ))
+            .await;
+        assert_eq!(refused.status, StatusCode::BAD_REQUEST);
+        let (wire, _) = seal_query(&config, b"not DNS", 0).unwrap();
+        let refused = http
+            .send(post(
+                "/dns-query",
+                "application/oblivious-dns-message",
+                wire,
+            ))
+            .await;
+        assert_eq!(refused.status, StatusCode::BAD_REQUEST);
+    }
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn odoh_is_off_unless_asked_for() {
+    use goethite_server::odoh::client::{parse_configs, seal_query};
+
+    let target = start_with(|config| config.odoh = true);
+    let (mut http, _connection) = Http::connect(&target, "dns.example", true).await;
+    let config = parse_configs(&http.send(get("/.well-known/odohconfigs")).await.body).unwrap();
+    target.shutdown().await;
+
+    let server = start();
+    let (mut http, _connection) = Http::connect(&server, "dns.example", true).await;
+    assert_eq!(
+        http.send(get("/.well-known/odohconfigs")).await.status,
+        StatusCode::NOT_FOUND
+    );
+    let (wire, _) = seal_query(&config, &query(0, "goethite.test."), 0).unwrap();
+    assert_eq!(
+        http.send(post(
+            "/dns-query",
+            "application/oblivious-dns-message",
+            wire
+        ))
+        .await
+        .status,
+        StatusCode::UNSUPPORTED_MEDIA_TYPE
+    );
+    server.shutdown().await;
+}
+
+#[tokio::test]
 async fn idle_doh_connections_are_closed() {
     let server = start_with(|config| config.tls_idle_timeout = Duration::from_millis(300));
     for http2 in [false, true] {

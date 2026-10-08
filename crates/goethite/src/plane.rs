@@ -272,6 +272,7 @@ fn encrypted_status(config: &Config) -> Option<goethite_api::EncryptedStatus> {
             dot: server.dot.iter().map(ToString::to_string).collect(),
             doh: server.doh.iter().map(ToString::to_string).collect(),
             doq: server.doq.iter().map(ToString::to_string).collect(),
+            odoh: server.odoh,
         })
 }
 

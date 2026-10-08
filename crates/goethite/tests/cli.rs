@@ -856,6 +856,72 @@ mod serving {
         (status, serde_json::from_slice(&body).unwrap_or_default())
     }
 
+    /// An Oblivious DoH target: keys at the well-known path, encrypted
+    /// queries and answers at `/dns-query`, logged as `odoh`.
+    #[test]
+    fn serves_oblivious_doh() {
+        use goethite_server::odoh::client::{parse_configs, seal_query};
+
+        let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+        let (cert, key) = (dir.join("odoh.crt"), dir.join("odoh.key"));
+        write_certificate(&cert, &key);
+        let config = format!(
+            "[server]\nlisten = \"127.0.0.1:0\"\n\n[server.tls]\ncert = {:?}\nkey = {:?}\n\
+             doh = \"127.0.0.1:0\"\nodoh = true\n\n[[upstream]]\naddress = \"{}\"\n",
+            cert.display().to_string(),
+            key.display().to_string(),
+            upstream()
+        );
+        let mut server = Running::start_config("oblivious_doh", &config);
+        let doh = field(&server.find_log("DNS over HTTPS listening"), "address");
+        let api_addr = field(&server.find_log("API listening"), "address");
+        server.find_log("Oblivious DoH target");
+
+        let mut stream = tls(doh, "dns.example", b"http/1.1");
+        let (status, _, configs) = request(
+            &mut stream,
+            "dns.example",
+            "GET /.well-known/odohconfigs HTTP/1.1",
+            b"",
+        );
+        assert_eq!(status, 200);
+        let target = parse_configs(&configs).unwrap();
+        let (wire, pending) = seal_query(&target, &query("example.com."), 32).unwrap();
+        let mut stream = tls(doh, "dns.example", b"http/1.1");
+        let (status, headers, body) = request(
+            &mut stream,
+            "dns.example",
+            "POST /dns-query HTTP/1.1\r\nContent-Type: application/oblivious-dns-message",
+            &wire,
+        );
+        assert_eq!(status, 200);
+        assert!(headers.contains(&(
+            "content-type".into(),
+            "application/oblivious-dns-message".into()
+        )));
+        let answer = Message::from_vec(&pending.open(&body).unwrap()).unwrap();
+        assert_eq!(
+            answer.answers[0].data,
+            RData::A(A(Ipv4Addr::new(192, 0, 2, 53)))
+        );
+
+        let (_, status) = api(api_addr, "GET /api/v1/status HTTP/1.1", "");
+        assert_eq!(status["encrypted"]["odoh"], true);
+        let mut logged = serde_json::Value::Null;
+        for _ in 0..100 {
+            let (_, page) = api(api_addr, "GET /api/v1/querylog HTTP/1.1", "");
+            if let Some(entry) = page["entries"].as_array().and_then(|e| e.first()) {
+                logged = entry.clone();
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert_eq!(logged["protocol"], "odoh", "{logged}");
+        assert_eq!(logged["name"], "example.com.");
+        server.signal("TERM");
+        assert!(server.wait_for_exit().success());
+    }
+
     #[test]
     fn serves_dns_over_tls_and_https_with_client_ids() {
         let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));

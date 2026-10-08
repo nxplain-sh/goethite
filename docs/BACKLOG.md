@@ -103,6 +103,10 @@ Phase 3's scope shipped in v0.3.0. These items came up along the way.
 ## Phase 4: v0.4
 
 - **[P4] EDNS padding (RFC 7830 / RFC 8467)** for DoT, DoH and DoQ, both server and upstream.
+- **[later] Oblivious DoH upstreams:** goethite's own queries to an upstream through an ODoH
+  proxy, so the upstream does not learn the network's address. And being a proxy itself.
+- **[later] ODoH configurations in DNS:** an `HTTPS` record carrying the target's key, so
+  clients need not fetch `/.well-known/odohconfigs`.
 - **[P4] DoQ address validation tokens.** Every new DoQ connection costs a Retry round trip;
   NEW_TOKEN tokens would let returning clients skip it, but quinn keeps their replay protection
   in its `bloom` feature (another dependency).

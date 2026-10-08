@@ -99,11 +99,21 @@ pub enum Protocol {
     Doh,
     /// DNS over QUIC (RFC 9250).
     Doq,
+    /// Oblivious DNS over HTTPS (RFC 9230), through a proxy: the client's
+    /// address is the proxy's.
+    Odoh,
 }
 
 impl Protocol {
     /// Every protocol, for metrics.
-    pub const ALL: [Self; 5] = [Self::Udp, Self::Tcp, Self::Dot, Self::Doh, Self::Doq];
+    pub const ALL: [Self; 6] = [
+        Self::Udp,
+        Self::Tcp,
+        Self::Dot,
+        Self::Doh,
+        Self::Doq,
+        Self::Odoh,
+    ];
 
     fn code(self) -> u8 {
         match self {
@@ -112,6 +122,7 @@ impl Protocol {
             Self::Dot => 2,
             Self::Doh => 3,
             Self::Doq => 4,
+            Self::Odoh => 5,
         }
     }
 
@@ -122,6 +133,7 @@ impl Protocol {
             2 => Self::Dot,
             3 => Self::Doh,
             4 => Self::Doq,
+            5 => Self::Odoh,
             _ => return None,
         })
     }
@@ -134,6 +146,7 @@ impl Protocol {
             Self::Dot => "dot",
             Self::Doh => "doh",
             Self::Doq => "doq",
+            Self::Odoh => "odoh",
         }
     }
 }

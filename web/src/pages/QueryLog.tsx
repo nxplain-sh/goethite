@@ -33,6 +33,7 @@ const PROTOCOL_LABEL: Record<QueryEntry['protocol'], string> = {
 	dot: 'DoT',
 	doh: 'DoH',
 	doq: 'DoQ',
+	odoh: 'ODoH',
 }
 
 /** A known client's name over its address; just the address otherwise. Encrypted queries say so. */

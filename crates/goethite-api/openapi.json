@@ -2919,6 +2919,10 @@
             },
             "description": "The addresses DNS over TLS is served on."
           },
+          "odoh": {
+            "type": "boolean",
+            "description": "Whether the DNS over HTTPS addresses are also an Oblivious DoH\ntarget (RFC 9230): queries at `/dns-query`, keys at\n`/.well-known/odohconfigs`."
+          },
           "server_name": {
             "type": [
               "string",
@@ -3376,7 +3380,8 @@
           "tcp",
           "dot",
           "doh",
-          "doq"
+          "doq",
+          "odoh"
         ]
       },
       "QueryEntry": {

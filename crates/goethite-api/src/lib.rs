@@ -292,6 +292,11 @@ pub struct EncryptedStatus {
     pub doh: Vec<String>,
     /// The addresses DNS over QUIC is served on.
     pub doq: Vec<String>,
+    /// Whether the DNS over HTTPS addresses are also an Oblivious DoH
+    /// target (RFC 9230): queries at `/dns-query`, keys at
+    /// `/.well-known/odohconfigs`.
+    #[serde(default)]
+    pub odoh: bool,
 }
 
 /// The query log.

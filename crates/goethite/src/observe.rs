@@ -61,6 +61,7 @@ impl QueryObserver for Observer {
             Transport::Tls => Protocol::Dot,
             Transport::Https => Protocol::Doh,
             Transport::Quic => Protocol::Doq,
+            Transport::Oblivious => Protocol::Odoh,
         };
         self.metrics.observe(outcome, protocol, event.elapsed);
         if outcome == QueryOutcome::Local && event.query.question.name == self.health {

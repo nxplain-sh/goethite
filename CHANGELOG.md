@@ -22,6 +22,11 @@ configuration format.
   the server name. A client's address is checked with a QUIC Retry before its connection counts
   against the connection limits, which it shares with TCP, DoT and DoH; 0-RTT is refused. DoQ
   sockets are handed over on upgrades too.
+- **Oblivious DNS over HTTPS** (RFC 9230), as a target: `odoh = true` in `[server.tls]` answers
+  encrypted queries a proxy forwards at `/dns-query`, and serves the public key at
+  `/.well-known/odohconfigs`. Keys are kept in memory only and rotated daily; the previous key is
+  accepted for a day. Queries are logged and counted as `odoh`; `/api/v1/status` says whether
+  ODoH is on, and the client editor shows the target address.
 - `require_client_id` in `[server.tls]` answers only encrypted queries with a known client ID, for
   listeners reachable from the internet.
 - The query log and metrics tell `dot`, `doh` and `doq` apart from `udp` and `tcp`; the web UI's query

@@ -139,6 +139,8 @@ test('puts a client in a group that uses a list during a schedule', async ({ pag
 	await expect(use).toContainText(`https://dns.example:${DOH_PORT}/dns-query/e2e-tablet`)
 	await expect(use).toContainText(`e2e-tablet.dns.example (port ${DOT_PORT})`)
 	await expect(use).toContainText(`quic://e2e-tablet.dns.example:${DOQ_PORT}`)
+	await expect(use.getByText('Oblivious DoH target')).toBeVisible()
+	await expect(use).toContainText('the device is anonymous')
 	await page.getByLabel('Group').selectOption({ label: 'E2E kids' })
 	await page.getByRole('button', { name: 'Create' }).click()
 	const client = page.getByRole('row').filter({ hasText: 'E2E tablet' })

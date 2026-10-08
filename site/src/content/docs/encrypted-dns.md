@@ -1,10 +1,10 @@
 ---
 title: Encrypted DNS
-description: Serve DNS over TLS, HTTPS and QUIC, and tell devices apart by client ID wherever they are.
+description: Serve DNS over TLS, HTTPS and QUIC, and Oblivious DoH, and tell devices apart by client ID wherever they are.
 ---
 
 goethite answers DNS over TLS (DoT, RFC 7858), DNS over HTTPS (DoH, RFC 8484) and DNS over QUIC
-(DoQ, RFC 9250) beside plain DNS. Encrypted DNS keeps queries private on networks you do not
+(DoQ, RFC 9250) beside plain DNS, and can be an [Oblivious DoH](#oblivious-doh) target (RFC 9230). Encrypted DNS keeps queries private on networks you do not
 control, and with a **client ID** a phone keeps its own filtering when it is away from home.
 
 ## Set it up
@@ -109,6 +109,38 @@ password: over DoT and DoQ it travels unencrypted in the TLS server name, so any
 can see it. Over DoH the ID in the path is encrypted. Treat `require_client_id` as keeping casual users
 out, and use a firewall or VPN where that is not enough.
 
+## Oblivious DoH
+
+With Oblivious DNS over HTTPS (ODoH, RFC 9230), a client encrypts its query to the resolver's
+public key and sends it through a **proxy** run by someone else: the proxy sees who asks but not
+what, and goethite, the **target**, sees what but not who. Turn it on for the DoH addresses:
+
+```toml
+[server.tls]
+doh = ["0.0.0.0:443", "[::]:443"]
+odoh = true
+```
+
+Clients then use `https://dns.example/dns-query` as the target, through a proxy of their
+choice, and fetch goethite's public key from `https://dns.example/.well-known/odohconfigs`. The
+web UI's client editor shows the target address with a client ID.
+
+- **Who asks.** goethite sees the proxy's address, so ODoH queries are filtered and logged as the
+  proxy is, as `ODoH` in the query log. A client that wants its own filtering can name itself in
+  the target path (`/dns-query/anna-phone`), which tells goethite who it is.
+- **Keys.** goethite makes its key when it starts, replaces it every day and accepts the previous
+  one for another day. Keys are kept in memory only, never on disk, so traffic recorded today
+  cannot be decrypted with a key stolen later. After a restart, an upgrade or a move to the
+  other node of a pair, a client's next query gets HTTP 401 and the client fetches the new key,
+  as RFC 9230 provides.
+- **Suite.** X25519, HKDF-SHA256 and AES-128-GCM, the one every ODoH implementation supports.
+  goethite's implementation matches Cloudflare's test vectors and works with its client.
+- **Limits.** ODoH messages are at most 65,572 bytes; answers are padded to a multiple of 468
+  bytes so their length says less, and are never cacheable. All of a proxy's queries share the
+  per-client connection limit; over HTTP/2 a proxy can send 64 at once on each connection.
+
+goethite is not a proxy, and does not send its own upstream queries over ODoH.
+
 ## Limits
 
 Encrypted connections count against the same limits as TCP: `max_tcp_connections` (256) in total
@@ -125,7 +157,7 @@ refused, so queries cannot be replayed. Phones may move between networks without
 
 The metrics count failed handshakes (`goethite_tls_handshake_failures_total`) and DoH requests
 answered with an HTTP error (`goethite_https_rejected_total`), and queries by protocol (`dot`,
-`doh`, `doq`) in `goethite_queries_total`.
+`doh`, `doq`, `odoh`) in `goethite_queries_total`.
 
 An [upgrade](../install/#upgrade) keeps every listener. DoT and DoH connections stay with the old process
 until their queries are answered; DoQ connections, which share one UDP socket with the new

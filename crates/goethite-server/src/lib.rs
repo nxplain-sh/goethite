@@ -21,6 +21,7 @@ pub mod doh;
 pub mod doq;
 mod https;
 mod limits;
+pub mod odoh;
 mod quic;
 mod stream;
 
@@ -99,6 +100,9 @@ pub struct ServerConfig {
     /// a known client ID; others get `REFUSED`. For serving them beyond the
     /// local network. UDP and TCP are not affected.
     pub require_client_id: bool,
+    /// Whether the DNS over HTTPS listeners are also an Oblivious DoH
+    /// target (RFC 9230), with keys of their own ([`odoh::OdohKeys`]).
+    pub odoh: bool,
     /// How long shutdown waits for queries in progress before abandoning them.
     pub shutdown_grace: Duration,
     /// Listen addresses that may not be on this host yet, such as a
@@ -124,6 +128,7 @@ impl ServerConfig {
             server_name: None,
             tls_idle_timeout: Duration::from_secs(30),
             require_client_id: false,
+            odoh: false,
             shutdown_grace: Duration::from_secs(5),
             freebind: Vec::new(),
         }
@@ -143,12 +148,14 @@ pub enum Transport {
     Https,
     /// DNS over QUIC (RFC 9250).
     Quic,
+    /// Oblivious DNS over HTTPS (RFC 9230), through a proxy.
+    Oblivious,
 }
 
 impl Transport {
-    /// Whether it is DNS over TLS, HTTPS or QUIC.
+    /// Whether it is DNS over TLS, HTTPS or QUIC, or Oblivious DoH.
     pub fn is_encrypted(self) -> bool {
-        matches!(self, Self::Tls | Self::Https | Self::Quic)
+        matches!(self, Self::Tls | Self::Https | Self::Quic | Self::Oblivious)
     }
 }
 
@@ -160,6 +167,7 @@ impl fmt::Display for Transport {
             Self::Tls => "tls",
             Self::Https => "https",
             Self::Quic => "quic",
+            Self::Oblivious => "odoh",
         })
     }
 }
@@ -198,6 +206,9 @@ pub enum ServerError {
     /// The TLS settings cannot serve QUIC, which needs TLS 1.3.
     #[error("the TLS settings do not support DNS over QUIC (TLS 1.3)")]
     Quic,
+    /// The Oblivious DoH keys cannot be made.
+    #[error("cannot make Oblivious DoH keys: {0}")]
+    Odoh(#[from] odoh::OdohError),
 }
 
 /// Receives every answered query, for the query log and statistics.
@@ -447,8 +458,15 @@ impl Server {
             self.tls.as_deref(),
             config.tls_idle_timeout,
         )?;
+        // Keys only for a target that can be reached.
+        let odoh = if config.odoh && encrypted.serves_https() {
+            Some(Arc::new(odoh::OdohKeys::new()?))
+        } else {
+            None
+        };
         let shared = Arc::new(Shared {
             engine: self.engine,
+            odoh: odoh.clone(),
             udp_slots: Arc::new(Semaphore::new(
                 config.max_inflight_udp_queries.min(Semaphore::MAX_PERMITS),
             )),
@@ -488,6 +506,10 @@ impl Server {
             ));
         }
         encrypted.spawn(&shared, &stop_rx, &mut listeners);
+        if let Some(keys) = odoh {
+            info!("Oblivious DoH target on the DNS over HTTPS listeners");
+            listeners.spawn(rotate_odoh_keys(keys, stop_rx.clone()));
+        }
         drop(stop_rx);
 
         let stopped_early = tokio::select! {
@@ -564,6 +586,13 @@ impl Encrypted {
         Ok(Self { streams, quic })
     }
 
+    /// Whether there are DNS over HTTPS listeners.
+    fn serves_https(&self) -> bool {
+        self.streams
+            .iter()
+            .any(|(_, kind, _)| matches!(kind, Kind::Https(_)))
+    }
+
     /// Serves every listener in `listeners`.
     fn spawn(
         self,
@@ -608,6 +637,8 @@ async fn stopped(stop: &mut watch::Receiver<bool>) {
 /// State shared by every listener.
 struct Shared {
     engine: Arc<Engine>,
+    /// The Oblivious DoH keys, if the HTTPS listeners are a target.
+    odoh: Option<Arc<odoh::OdohKeys>>,
     config: ServerConfig,
     udp_slots: Arc<Semaphore>,
     rate_limiter: Option<RateLimiter>,
@@ -698,6 +729,7 @@ impl Engine {
             Transport::Tcp | Transport::Tls | Transport::Https | Transport::Quic => {
                 usize::from(u16::MAX)
             }
+            Transport::Oblivious => odoh::MAX_RESPONSE_LEN,
         };
         let min_ttl = response
             .answers
@@ -733,6 +765,21 @@ impl Engine {
         self.codec
             .encode_response(&response, usize::from(MIN_UDP_PAYLOAD), out)
             .is_ok()
+    }
+}
+
+/// Replaces the Oblivious DoH keys every [`odoh::ROTATION`] until `stop`.
+async fn rotate_odoh_keys(keys: Arc<odoh::OdohKeys>, mut stop: watch::Receiver<bool>) {
+    loop {
+        tokio::select! {
+            () = tokio::time::sleep(odoh::ROTATION) => {
+                match keys.rotate() {
+                    Ok(()) => info!("new Oblivious DoH key"),
+                    Err(err) => error!(%err, "cannot rotate the Oblivious DoH key; keeping the current one"),
+                }
+            }
+            () = stopped(&mut stop) => return,
+        }
     }
 }
 

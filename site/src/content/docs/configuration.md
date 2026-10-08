@@ -53,7 +53,8 @@ table, none is served.
 | `doh` | none | Addresses for DNS over HTTPS, usually port 443: one or a list, at most 16. Queries go to `/dns-query`. |
 | `doq` | none | Addresses for DNS over QUIC, usually UDP port 853: one or a list, at most 16. |
 | `server_name` | unset | The name devices use, such as `"dns.example"`. With it, a TLS server name one label below it (`anna-phone.dns.example`) carries a client ID over DoT and DoQ; the certificate should then cover `*.dns.example` too. |
-| `require_client_id` | `false` | Answer only DoT, DoH and DoQ queries that carry a known client ID; others get `REFUSED`. Turn it on when the listeners are reachable from the internet. |
+| `require_client_id` | `false` | Answer only DoT, DoH, DoQ and ODoH queries that carry a known client ID; others get `REFUSED`. Turn it on when the listeners are reachable from the internet. |
+| `odoh` | `false` | Make the `doh` addresses an [Oblivious DoH](../encrypted-dns/#oblivious-doh) target too: encrypted queries at `/dns-query`, the public key at `/.well-known/odohconfigs`. Needs `doh`. |
 
 At least one of `dot`, `doh` and `doq` is required. No TCP address may be used twice across
 `[server]`, `[server.tls]`, `[api]` and `[cluster]`, nor a UDP address across `[server] listen`

@@ -807,6 +807,12 @@ export interface components {
             /** @description The addresses DNS over TLS is served on. */
             dot: string[];
             /**
+             * @description Whether the DNS over HTTPS addresses are also an Oblivious DoH
+             *     target (RFC 9230): queries at `/dns-query`, keys at
+             *     `/.well-known/odohconfigs`.
+             */
+            odoh?: boolean;
+            /**
              * @description The name clients reach it by, such as `dns.example`, if configured:
              *     a client ID goes in front of it, as in `anna-phone.dns.example`.
              */
@@ -1032,7 +1038,7 @@ export interface components {
          * @description How a query reached goethite.
          * @enum {string}
          */
-        Protocol: "udp" | "tcp" | "dot" | "doh" | "doq";
+        Protocol: "udp" | "tcp" | "dot" | "doh" | "doq" | "odoh";
         /** @description One logged query, as the API shows it. */
         QueryEntry: {
             /** @description The client's address (shortened if the log anonymizes clients). */

@@ -56,6 +56,9 @@ max_clients = 65536    # client networks tracked at once
 # Reachable from the internet? Answer encrypted queries only with a known
 # client ID, so goethite is no open resolver.
 # require_client_id = true
+# Also an Oblivious DoH target (RFC 9230) on the doh addresses, for clients
+# that ask through a proxy: https://dns.example/.well-known/odohconfigs
+# odoh = true
 
 # Upstream resolvers, tried in this order with failover. At least one is
 # required: goethite does not pick a resolver on your behalf.

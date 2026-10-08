@@ -969,6 +969,10 @@ pub struct TlsSection {
     /// known client ID, as when they are reachable from the internet.
     #[serde(default)]
     pub require_client_id: bool,
+    /// Whether the DNS over HTTPS addresses are also an Oblivious DoH
+    /// target (RFC 9230), for clients that ask through a proxy.
+    #[serde(default)]
+    pub odoh: bool,
 }
 
 impl TlsSection {
@@ -990,6 +994,9 @@ impl TlsSection {
                 "server.tls.server_name {name:?} is not a host name such as \"dns.example\" \
                  (letters, digits and hyphens in dot-separated labels)"
             );
+        }
+        if self.odoh && self.doh.is_empty() {
+            bail!("server.tls.odoh needs doh addresses: Oblivious DoH is served on them");
         }
         Ok(())
     }
@@ -1095,6 +1102,7 @@ impl ServerSection {
             config.doh.clone_from(&tls.doh);
             config.doq.clone_from(&tls.doq);
             config.require_client_id = tls.require_client_id;
+            config.odoh = tls.odoh;
             config.server_name = tls
                 .server_name
                 .as_ref()
@@ -1750,6 +1758,7 @@ mod tests {
             doh = ["0.0.0.0:443", "[::]:443"]
             doq = "0.0.0.0:853"
             require_client_id = true
+            odoh = true
             "#,
         )
         .unwrap();
@@ -1761,11 +1770,14 @@ mod tests {
         assert_eq!(server.doq, ["0.0.0.0:853".parse().unwrap()]);
         assert_eq!(server.server_name.as_deref(), Some("dns.example"));
         assert!(server.require_client_id);
+        assert!(server.odoh);
         let plain = Config::parse("").unwrap().server.to_server_config();
         assert_eq!((plain.dot.len(), plain.doh.len()), (0, 0));
+        assert!(!plain.odoh);
 
         for (bad, expected) in [
             ("", "no dot, doh or doq"),
+            ("dot = \"0.0.0.0:853\"\nodoh = true", "odoh needs doh"),
             (
                 "dot = \"0.0.0.0:853\"\nserver_name = \"dns example\"",
                 "server_name",

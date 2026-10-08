@@ -3,9 +3,11 @@
 //!
 //! Only `/dns-query` (and `/dns-query/<client ID>`) answers, to `GET` with
 //! the `dns` parameter and to `POST` with an `application/dns-message`
-//! body. Everything is bounded: header size and the time to send them, the
-//! body's size and the time to send it, concurrent HTTP/2 streams, and how
-//! long a connection may go without a request.
+//! body. As an Oblivious DoH target it also answers `POST`s with an
+//! `application/oblivious-dns-message` body there, and serves its keys at
+//! `/.well-known/odohconfigs`. Everything is bounded: header size and the
+//! time to send them, the body's size and the time to send it, concurrent
+//! HTTP/2 streams, and how long a connection may go without a request.
 
 use std::convert::Infallible;
 use std::net::SocketAddr;
@@ -27,6 +29,7 @@ use tokio_rustls::server::TlsStream;
 use tracing::{debug, trace};
 
 use crate::doh::{self, DohError};
+use crate::odoh::{self, OdohError, OdohKeys};
 use crate::stream::TLS_HANDSHAKE_TIMEOUT;
 use crate::{Engine, ServerStats, Shared, Transport, stopped};
 
@@ -57,6 +60,7 @@ pub(crate) async fn serve_connection(
     let activity = Arc::new(Activity::new());
     let context = Arc::new(Context {
         engine: Arc::clone(&shared.engine),
+        odoh: shared.odoh.clone(),
         stats: Arc::clone(&shared.stats),
         peer,
         sni_id,
@@ -155,6 +159,8 @@ impl Drop for Busy {
 /// What every request on a connection shares.
 struct Context {
     engine: Arc<Engine>,
+    /// The Oblivious DoH keys, if this is a target.
+    odoh: Option<Arc<OdohKeys>>,
     stats: Arc<ServerStats>,
     peer: SocketAddr,
     /// The client ID in the TLS server name, if any.
@@ -174,6 +180,11 @@ impl Context {
     }
 
     async fn answer(&self, request: Request<Incoming>) -> Response<Full<Bytes>> {
+        if request.uri().path() == odoh::CONFIGS_PATH
+            && let Some(keys) = &self.odoh
+        {
+            return configs(request.method(), keys);
+        }
         let path_id = match doh::client_id_from_path(request.uri().path()) {
             Ok(id) => id.map(str::to_owned),
             Err(err) => {
@@ -193,7 +204,11 @@ impl Context {
                 }
             }
             Method::POST => match self.read_body(request).await {
-                Ok(body) => message = body,
+                Ok((Body::Dns, body)) => message = body,
+                Ok((Body::Oblivious(keys), body)) => {
+                    let client_id = path_id.as_deref().or(self.sni_id.as_deref());
+                    return self.oblivious(&keys, &body, client_id).await;
+                }
                 Err((status, text)) => return plain(status, text),
             },
             _ => {
@@ -217,40 +232,89 @@ impl Context {
         }
     }
 
-    /// The body of a `POST`: a DNS message of at most
-    /// [`doh::MAX_MESSAGE_LEN`] bytes, sent in time.
+    /// Answers an Oblivious DoH query: decrypts it, answers the DNS query
+    /// in it and encrypts the answer.
+    async fn oblivious(
+        &self,
+        keys: &OdohKeys,
+        body: &[u8],
+        client_id: Option<&str>,
+    ) -> Response<Full<Bytes>> {
+        let query = match keys.open(body) {
+            Ok(query) => query,
+            Err(OdohError::UnknownKey) => {
+                return plain(
+                    StatusCode::UNAUTHORIZED,
+                    "unknown key: fetch /.well-known/odohconfigs again",
+                );
+            }
+            Err(err) => return plain(StatusCode::BAD_REQUEST, &err.to_string()),
+        };
+        let mut out = Vec::new();
+        if self
+            .engine
+            .answer(
+                query.dns(),
+                Transport::Oblivious,
+                self.peer,
+                client_id,
+                &mut out,
+            )
+            .await
+            .is_none()
+        {
+            return plain(StatusCode::BAD_REQUEST, "not a DNS query");
+        }
+        match keys.seal(&query, &out) {
+            Ok(sealed) => oblivious_message(sealed),
+            Err(err) => {
+                debug!(peer = %self.peer, %err, "cannot encrypt an Oblivious DoH answer");
+                plain(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "cannot encrypt the answer",
+                )
+            }
+        }
+    }
+
+    /// The body of a `POST`, sent in time: a DNS message of at most
+    /// [`doh::MAX_MESSAGE_LEN`] bytes, or for an Oblivious DoH target an
+    /// ODoH message of at most [`odoh::MAX_MESSAGE_LEN`].
     async fn read_body(
         &self,
         request: Request<Incoming>,
-    ) -> Result<Vec<u8>, (StatusCode, &'static str)> {
+    ) -> Result<(Body, Vec<u8>), (StatusCode, &'static str)> {
         let headers = request.headers();
-        let is_dns_message = headers
+        let media = headers
             .get(CONTENT_TYPE)
             .and_then(|value| value.to_str().ok())
             .and_then(|value| value.split(';').next())
-            .is_some_and(|media| media.trim().eq_ignore_ascii_case(DNS_MESSAGE));
-        if !is_dns_message {
-            return Err((
-                StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                "send an application/dns-message body",
-            ));
-        }
-        let too_large = (
-            StatusCode::PAYLOAD_TOO_LARGE,
-            "a DNS message is at most 65535 bytes",
-        );
+            .map(str::trim);
+        let (kind, limit) = match (media, &self.odoh) {
+            (Some(media), _) if media.eq_ignore_ascii_case(DNS_MESSAGE) => {
+                (Body::Dns, doh::MAX_MESSAGE_LEN)
+            }
+            (Some(media), Some(keys)) if media.eq_ignore_ascii_case(odoh::MEDIA_TYPE) => {
+                (Body::Oblivious(Arc::clone(keys)), odoh::MAX_MESSAGE_LEN)
+            }
+            _ => {
+                return Err((
+                    StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                    "send an application/dns-message body",
+                ));
+            }
+        };
+        let too_large = (StatusCode::PAYLOAD_TOO_LARGE, "the body is too large");
         let declared = headers
             .get(CONTENT_LENGTH)
             .and_then(|value| value.to_str().ok())
             .and_then(|value| value.parse::<u64>().ok());
-        if declared
-            .is_some_and(|len| usize::try_from(len).map_or(true, |len| len > doh::MAX_MESSAGE_LEN))
-        {
+        if declared.is_some_and(|len| usize::try_from(len).map_or(true, |len| len > limit)) {
             return Err(too_large);
         }
-        let body = Limited::new(request.into_body(), doh::MAX_MESSAGE_LEN);
+        let body = Limited::new(request.into_body(), limit);
         match timeout(self.body_timeout, body.collect()).await {
-            Ok(Ok(collected)) => Ok(collected.to_bytes().to_vec()),
+            Ok(Ok(collected)) => Ok((kind, collected.to_bytes().to_vec())),
             Ok(Err(err)) if err.is::<LengthLimitError>() => Err(too_large),
             Ok(Err(err)) => {
                 debug!(peer = %self.peer, %err, "cannot read a DNS over HTTPS body");
@@ -259,6 +323,47 @@ impl Context {
             Err(_) => Err((StatusCode::REQUEST_TIMEOUT, "the body took too long")),
         }
     }
+}
+
+/// What a `POST` carries.
+enum Body {
+    /// A DNS message.
+    Dns,
+    /// An Oblivious DoH message, for these keys.
+    Oblivious(Arc<OdohKeys>),
+}
+
+/// The target's keys, as an `ObliviousDoHConfigs`. Clients fetch them again
+/// when a query gets a 401, so an hour's caching is plenty.
+fn configs(method: &Method, keys: &OdohKeys) -> Response<Full<Bytes>> {
+    if method != Method::GET && method != Method::HEAD {
+        let mut response = plain(StatusCode::METHOD_NOT_ALLOWED, "use GET");
+        response
+            .headers_mut()
+            .insert(ALLOW, HeaderValue::from_static("GET, HEAD"));
+        return response;
+    }
+    let mut response = Response::new(Full::new(Bytes::copy_from_slice(&keys.configs())));
+    let headers = response.headers_mut();
+    headers.insert(
+        CONTENT_TYPE,
+        HeaderValue::from_static("application/octet-stream"),
+    );
+    headers.insert(CACHE_CONTROL, HeaderValue::from_static("max-age=3600"));
+    response
+}
+
+/// An encrypted Oblivious DoH answer, which no one may cache (RFC 9230,
+/// section 4.1).
+fn oblivious_message(wire: Vec<u8>) -> Response<Full<Bytes>> {
+    let mut response = Response::new(Full::new(Bytes::from(wire)));
+    let headers = response.headers_mut();
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static(odoh::MEDIA_TYPE));
+    headers.insert(
+        CACHE_CONTROL,
+        HeaderValue::from_static("no-cache, no-store"),
+    );
+    response
 }
 
 /// A DNS answer, cacheable for as long as its shortest time to live (RFC

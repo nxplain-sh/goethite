@@ -44,6 +44,7 @@ server_name = "dns.example"
 dot = "127.0.0.1:${DOT_PORT}"
 doh = "127.0.0.1:${DOH_PORT}"
 doq = "127.0.0.1:${DOQ_PORT}"
+odoh = true
 
 [[upstream]]
 address = "192.0.2.1"

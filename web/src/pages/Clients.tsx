@@ -227,7 +227,20 @@ function ClientIdUse({ id, encrypted }: { id: string; encrypted: Status['encrypt
 						<dd className="mono">{`quic://${id}.${encrypted.server_name}${port(quic) === '853' ? '' : `:${port(quic)}`}`}</dd>
 					</>
 				)}
+				{https === undefined || encrypted.odoh !== true ? null : (
+					<>
+						<dt>Oblivious DoH target</dt>
+						<dd className="mono">{`https://${host}${httpsPort}/dns-query/${id}`}</dd>
+					</>
+				)}
 			</dl>
+			{https === undefined || encrypted.odoh !== true ? null : (
+				<p className="hint">
+					Through an Oblivious DoH proxy, goethite sees the proxy's address, not the device's: with
+					the ID in the target path it still knows the device, without it the device is anonymous
+					and filtered as the proxy is.
+				</p>
+			)}
 			{encrypted.server_name == null ? (
 				<p className="hint">
 					With <span className="mono">server_name</span> set in <span className="mono">[server.tls]</span>,
