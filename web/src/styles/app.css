@@ -502,3 +502,169 @@ code,
 	font-family: var(--font-ui);
 	font-weight: 700;
 }
+
+/* The configuration pages: index tables and editors. */
+
+.page-head {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: end;
+	gap: var(--space-3);
+}
+
+.page-head h1 {
+	margin-right: auto;
+}
+
+.grow {
+	flex: 1 1 240px;
+}
+
+.hint {
+	font-weight: 400;
+	font-size: 0.88rem;
+	color: var(--muted);
+}
+
+.input.sans {
+	font-family: var(--font-ui);
+}
+
+textarea.input {
+	resize: vertical;
+}
+
+.editor {
+	max-width: 760px;
+}
+
+.form .fields,
+.subform {
+	border: none;
+	margin: 0;
+	padding: 0;
+	display: grid;
+	gap: var(--space-4);
+	min-width: 0;
+}
+
+.subform {
+	border-top: var(--border);
+	padding-top: var(--space-3);
+}
+
+.subform legend {
+	font-weight: 700;
+	font-size: 1.1rem;
+	padding-right: var(--space-2);
+}
+
+.row {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: end;
+	gap: var(--space-3);
+}
+
+.actions {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--space-3);
+}
+
+.actions-cell {
+	width: 1%;
+	white-space: nowrap;
+	text-align: right;
+}
+
+.confirm {
+	display: inline-flex;
+	gap: var(--space-2);
+}
+
+.button.danger {
+	background: var(--blocked);
+	color: var(--on-blocked);
+}
+
+.button.danger-outline {
+	color: var(--blocked);
+}
+
+.add-form {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: end;
+	gap: var(--space-3);
+}
+
+.add-form .notice {
+	flex-basis: 100%;
+}
+
+.window {
+	display: grid;
+	gap: var(--space-2);
+	padding-bottom: var(--space-3);
+	border-bottom: 1px solid var(--muted);
+}
+
+.days {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--space-2);
+}
+
+.day {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-1);
+	padding: var(--space-1) var(--space-2);
+	border: var(--border);
+	font-weight: 700;
+	cursor: pointer;
+}
+
+.day:has(input:checked) {
+	background: var(--accent);
+	color: var(--on-accent);
+}
+
+.day input {
+	accent-color: var(--ink);
+}
+
+.change {
+	display: grid;
+	gap: var(--space-3);
+	grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+
+.change h3 {
+	margin: 0 0 var(--space-1);
+	font-size: 0.85rem;
+	text-transform: uppercase;
+	letter-spacing: 0.06em;
+}
+
+.change pre {
+	margin: 0;
+	padding: var(--space-2);
+	border: 1px solid var(--muted);
+	background: var(--bg);
+	font-family: var(--font-mono);
+	font-size: 0.82rem;
+	overflow-x: auto;
+}
+
+a.button {
+	text-decoration: none;
+}
+
+.table input[type='checkbox'] {
+	width: 18px;
+	height: 18px;
+	accent-color: var(--ink);
+}

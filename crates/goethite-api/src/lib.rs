@@ -19,6 +19,7 @@
 
 mod auth;
 mod cluster;
+mod docs;
 mod error;
 mod handlers;
 mod openapi;
@@ -49,6 +50,7 @@ pub use cluster::{
     ClusterRole, ClusterStatus, Forwarded, ForwardedAnswer, PeerStatus, RoleChange, SyncStatus,
     Writes, execute,
 };
+pub use docs::{EmbeddedDocs, SCALAR as DOCS_SCALAR};
 pub use error::{ApiError, ErrorBody, ErrorDetail};
 pub use openapi::{openapi, openapi_json};
 pub use serve::{ApiListeners, MAX_CONNECTIONS, Serving, serve, serve_router};
@@ -74,6 +76,9 @@ pub struct ApiConfig {
     pub tls: Option<Arc<rustls::ServerConfig>>,
     /// The web UI's files; no web UI without them.
     pub web: Option<Arc<dyn WebAssets>>,
+    /// The API reference's files (see [`EmbeddedDocs`]): served at
+    /// `/api/docs` to loopback clients only. Off without them.
+    pub docs: Option<Arc<dyn WebAssets>>,
 }
 
 /// What changed in the store, so the data plane knows what to recompile.
@@ -283,6 +288,11 @@ pub fn router(api: &Arc<Api>) -> Router {
         ));
     Router::new()
         .route("/api/v1/health", axum::routing::get(handlers::health))
+        // Off unless configured, and loopback only: see `docs`.
+        .route("/api/docs", axum::routing::get(docs::page))
+        .route("/api/docs/scalar.js", axum::routing::get(docs::scalar))
+        .route("/api/docs/start.js", axum::routing::get(docs::start))
+        .route("/api/docs/openapi.json", axum::routing::get(docs::document))
         .merge(protected)
         .fallback(web::serve)
         .with_state(Arc::clone(api))
@@ -305,13 +315,15 @@ async fn limit_time(request: Request<axum::body::Body>, next: Next) -> Result<Re
 async fn security_headers(request: Request<axum::body::Body>, next: Next) -> Response {
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
-    for (name, value) in [
-        (
-            CONTENT_SECURITY_POLICY,
+    // A page may tighten its own policy with a nonce (the API reference).
+    headers
+        .entry(CONTENT_SECURITY_POLICY)
+        .or_insert(HeaderValue::from_static(
             "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; \
-             font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; \
-             form-action 'self'; frame-ancestors 'none'",
-        ),
+         font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; \
+         form-action 'self'; frame-ancestors 'none'",
+        ));
+    for (name, value) in [
         (X_CONTENT_TYPE_OPTIONS, "nosniff"),
         (X_FRAME_OPTIONS, "DENY"),
         (REFERRER_POLICY, "no-referrer"),

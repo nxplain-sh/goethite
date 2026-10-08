@@ -176,6 +176,8 @@ listen = "127.0.0.1:8053"
 # tls_cert = "/etc/goethite/api.crt"
 # tls_key = "/etc/goethite/api.key"
 web_ui = true
+# The API reference at /api/docs, for loopback clients only.
+docs = false
 
 # [cluster]
 # Two goethite nodes sharing one configuration: the primary owns it, the

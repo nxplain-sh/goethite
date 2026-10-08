@@ -74,6 +74,13 @@ export function Shell() {
 					Dashboard
 				</Link>
 				<Link to="/querylog">Query log</Link>
+				<Link to="/lists">Lists</Link>
+				<Link to="/rules">Rules</Link>
+				<Link to="/groups">Groups</Link>
+				<Link to="/clients">Clients</Link>
+				<Link to="/schedules">Schedules</Link>
+				<Link to="/settings">Settings</Link>
+				<Link to="/audit">Audit log</Link>
 			</nav>
 			<ErrorNotice error={status.error ?? pause.error ?? resume.error} />
 			{(status.data?.problems ?? []).map((problem) => (

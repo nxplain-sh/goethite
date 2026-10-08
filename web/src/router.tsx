@@ -5,6 +5,7 @@ import {
 	createRootRouteWithContext,
 	createRoute,
 	createRouter,
+	lazyRouteComponent,
 } from '@tanstack/react-router'
 
 import { OUTCOMES } from './api/client'
@@ -76,9 +77,119 @@ const queryLogRoute = createRoute({
 	},
 })
 
+// The configuration pages load on first use: the dashboard and the query
+// log stay small.
+const lists = () => import('./pages/Lists')
+const rules = () => import('./pages/Rules')
+const groups = () => import('./pages/Groups')
+const clients = () => import('./pages/Clients')
+const schedules = () => import('./pages/Schedules')
+const ListEditor = lazyRouteComponent(lists, 'ListEditor')
+const RuleEditor = lazyRouteComponent(rules, 'RuleEditor')
+const GroupEditor = lazyRouteComponent(groups, 'GroupEditor')
+const ClientEditor = lazyRouteComponent(clients, 'ClientEditor')
+const ScheduleEditor = lazyRouteComponent(schedules, 'ScheduleEditor')
+
+const listsRoute = createRoute({
+	getParentRoute: () => appRoute,
+	path: '/lists',
+	component: lazyRouteComponent(lists, 'Lists'),
+})
+
+const listEditorRoute = createRoute({
+	getParentRoute: () => appRoute,
+	path: '/lists/$id',
+	component: function ListEditorPage() {
+		return <ListEditor id={listEditorRoute.useParams().id} />
+	},
+})
+
+const rulesRoute = createRoute({
+	getParentRoute: () => appRoute,
+	path: '/rules',
+	component: lazyRouteComponent(rules, 'Rules'),
+})
+
+const ruleEditorRoute = createRoute({
+	getParentRoute: () => appRoute,
+	path: '/rules/$id',
+	component: function RuleEditorPage() {
+		return <RuleEditor id={ruleEditorRoute.useParams().id} />
+	},
+})
+
+const groupsRoute = createRoute({
+	getParentRoute: () => appRoute,
+	path: '/groups',
+	component: lazyRouteComponent(groups, 'Groups'),
+})
+
+const groupEditorRoute = createRoute({
+	getParentRoute: () => appRoute,
+	path: '/groups/$id',
+	component: function GroupEditorPage() {
+		return <GroupEditor id={groupEditorRoute.useParams().id} />
+	},
+})
+
+const clientsRoute = createRoute({
+	getParentRoute: () => appRoute,
+	path: '/clients',
+	component: lazyRouteComponent(clients, 'Clients'),
+})
+
+const clientEditorRoute = createRoute({
+	getParentRoute: () => appRoute,
+	path: '/clients/$id',
+	component: function ClientEditorPage() {
+		return <ClientEditor id={clientEditorRoute.useParams().id} />
+	},
+})
+
+const schedulesRoute = createRoute({
+	getParentRoute: () => appRoute,
+	path: '/schedules',
+	component: lazyRouteComponent(schedules, 'Schedules'),
+})
+
+const scheduleEditorRoute = createRoute({
+	getParentRoute: () => appRoute,
+	path: '/schedules/$id',
+	component: function ScheduleEditorPage() {
+		return <ScheduleEditor id={scheduleEditorRoute.useParams().id} />
+	},
+})
+
+const settingsRoute = createRoute({
+	getParentRoute: () => appRoute,
+	path: '/settings',
+	component: lazyRouteComponent(() => import('./pages/Settings'), 'Settings'),
+})
+
+const auditRoute = createRoute({
+	getParentRoute: () => appRoute,
+	path: '/audit',
+	component: lazyRouteComponent(() => import('./pages/Audit'), 'Audit'),
+})
+
 const routeTree = rootRoute.addChildren([
 	loginRoute,
-	appRoute.addChildren([dashboardRoute, queryLogRoute]),
+	appRoute.addChildren([
+		dashboardRoute,
+		queryLogRoute,
+		listsRoute,
+		listEditorRoute,
+		rulesRoute,
+		ruleEditorRoute,
+		groupsRoute,
+		groupEditorRoute,
+		clientsRoute,
+		clientEditorRoute,
+		schedulesRoute,
+		scheduleEditorRoute,
+		settingsRoute,
+		auditRoute,
+	]),
 ])
 
 export function createAppRouter(queryClient: QueryClient) {

@@ -282,6 +282,9 @@ pub struct ApiSection {
     pub tls_key: Option<PathBuf>,
     /// Whether the web UI is served next to the API.
     pub web_ui: bool,
+    /// Whether the API reference is served at `/api/docs`, to loopback
+    /// clients only.
+    pub docs: bool,
 }
 
 impl Default for ApiSection {
@@ -293,6 +296,7 @@ impl Default for ApiSection {
             tls_cert: None,
             tls_key: None,
             web_ui: true,
+            docs: false,
         }
     }
 }

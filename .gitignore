@@ -13,6 +13,9 @@
 # Web UI (web/dist is built, then embedded into the binary)
 /web/node_modules/
 /web/dist/
+/web/dist-docs/
+/web/test-results/
+/web/playwright-report/
 
 # Website
 /site/node_modules/

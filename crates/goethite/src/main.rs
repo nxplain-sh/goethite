@@ -26,7 +26,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use arc_swap::ArcSwapOption;
 use clap::{Parser, Subcommand};
-use goethite_api::{Api, ApiConfig, EmbeddedWeb, WebAssets};
+use goethite_api::{Api, ApiConfig, EmbeddedDocs, EmbeddedWeb, WebAssets};
 use goethite_resolver::{
     Cache, Forwarder, ForwarderConfig, Policy, PolicyState, Resolver, health_record, test_record,
 };
@@ -559,11 +559,27 @@ fn api(
     } else {
         None
     };
+    let docs = if config.api.docs {
+        let docs = EmbeddedDocs::get();
+        if docs.is_none() {
+            warn!(
+                "[api] docs is on, but this build has no API reference: build web/ before goethite"
+            );
+        }
+        docs.map(|docs| Arc::new(docs) as Arc<dyn WebAssets>)
+    } else {
+        None
+    };
     Arc::new(Api {
         store: Arc::clone(control.store()),
         log: Arc::clone(log),
         control: Arc::new(node),
-        config: ApiConfig { token, tls, web },
+        config: ApiConfig {
+            token,
+            tls,
+            web,
+            docs,
+        },
     })
 }
 

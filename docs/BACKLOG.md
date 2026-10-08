@@ -76,11 +76,6 @@ releases.
 
 - **[P2] Scoped API tokens:** read-only tokens (for monitoring) and a Terraform token, beside the
   single admin token.
-- **[P4] `/api/docs` in the binary** (Scalar, bundled assets, off by default, loopback only), with
-  the full web UI.
-- **[P4] Web UI tests.** Component and end-to-end tests (for example Vitest and Playwright) once
-  the UI has screens that change things; the skeleton is checked by the type-checker, the Rust
-  serving tests and a CI job that embeds and fetches it.
 - **[P5] Release builds include the web UI.** The release workflow must build `web/` before
   `cargo build --release`, reproducibly (pinned Node, `npm ci`).
 - **[P3] Query log writer priority and cost.** The writer thread competes with the DNS workers

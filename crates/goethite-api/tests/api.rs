@@ -18,8 +18,8 @@ use std::time::SystemTime;
 
 use goethite_api::{
     Api, ApiConfig, ApiListeners, BoxFuture, BoxResult, Change, ClusterRole, ClusterStatus,
-    Control, FilterStatus, Forwarded, ForwardedAnswer, PeerStatus, QueryLogStatus, Status,
-    WebAssets, Writes, generate_token,
+    Control, DOCS_SCALAR, FilterStatus, Forwarded, ForwardedAnswer, PeerStatus, QueryLogStatus,
+    Status, WebAssets, Writes, generate_token,
 };
 use goethite_store::{
     Actor, ActorKind, ConfigVersion, QueryLogConfig, StatsReport, Store, TopEntry,
@@ -143,6 +143,16 @@ impl WebAssets for FakeWeb {
     }
 }
 
+/// The API reference's one built file.
+#[derive(Debug)]
+struct FakeDocs;
+
+impl WebAssets for FakeDocs {
+    fn file(&self, path: &str) -> Option<Cow<'static, [u8]>> {
+        (path == DOCS_SCALAR).then_some(Cow::Borrowed(b"gzipped scalar".as_slice()))
+    }
+}
+
 struct Server {
     addr: SocketAddr,
     api: Arc<Api>,
@@ -168,6 +178,14 @@ fn start(with_token: bool) -> Server {
 }
 
 fn start_with(with_token: bool, web: Option<Arc<dyn WebAssets>>) -> Server {
+    start_with_docs(with_token, web, None)
+}
+
+fn start_with_docs(
+    with_token: bool,
+    web: Option<Arc<dyn WebAssets>>,
+    docs: Option<Arc<dyn WebAssets>>,
+) -> Server {
     static NEXT: AtomicU32 = AtomicU32::new(0);
     let path = std::env::temp_dir().join(format!(
         "goethite-api-{}-{}.redb",
@@ -189,6 +207,7 @@ fn start_with(with_token: bool, web: Option<Arc<dyn WebAssets>>) -> Server {
             token: with_token.then_some(hash),
             tls: None,
             web,
+            docs,
         },
     });
     let listeners = ApiListeners::bind(&["127.0.0.1:0".parse().unwrap()]).unwrap();
@@ -922,5 +941,87 @@ async fn cluster_statistics_add_up_every_node() {
     assert_eq!(
         server.get("/api/v1/stats?scope=everyone").await.status,
         StatusCode::BAD_REQUEST
+    );
+}
+
+/// The API reference: off by default; on, a page with a fresh nonce in its
+/// policy, its files and the OpenAPI document, without a token.
+#[tokio::test]
+async fn api_reference_is_off_unless_turned_on() {
+    let off = start(false);
+    for path in [
+        "/api/docs",
+        "/api/docs/scalar.js",
+        "/api/docs/start.js",
+        "/api/docs/openapi.json",
+    ] {
+        assert_eq!(off.get(path).await.status, StatusCode::NOT_FOUND, "{path}");
+    }
+
+    let mut on = start_with_docs(true, None, Some(Arc::new(FakeDocs)));
+    // The docs need no token; the rest of the API still does.
+    on.token = None;
+    assert_eq!(
+        on.get("/api/v1/openapi.json").await.status,
+        StatusCode::UNAUTHORIZED
+    );
+
+    let page = on.get("/api/docs").await;
+    assert_eq!(page.status, StatusCode::OK);
+    let policy = page.headers["content-security-policy"]
+        .to_str()
+        .unwrap()
+        .to_owned();
+    let nonce = policy
+        .split("'nonce-")
+        .nth(1)
+        .and_then(|rest| rest.split('\'').next())
+        .unwrap()
+        .to_owned();
+    assert_eq!(nonce.len(), 32);
+    assert!(policy.contains("script-src 'self';"), "{policy}");
+    // Inline style attributes only: style elements need the nonce or a hash.
+    assert!(
+        policy.contains("style-src-attr 'unsafe-inline'"),
+        "{policy}"
+    );
+    assert_eq!(policy.matches("unsafe-inline").count(), 1, "{policy}");
+    assert!(
+        policy.contains(&format!("style-src-elem 'self' 'nonce-{nonce}' 'sha256-")),
+        "{policy}"
+    );
+    assert!(page.text.contains(&format!(
+        "<meta property=\"csp-nonce\" content=\"{nonce}\">"
+    )));
+    let again = on.get("/api/docs").await;
+    assert!(!again.text.contains(&nonce), "a nonce is used once");
+
+    let scalar = on
+        .send(
+            Method::GET,
+            "/api/docs/scalar.js",
+            None,
+            &[("accept-encoding", "gzip, br")],
+        )
+        .await;
+    assert_eq!(scalar.status, StatusCode::OK);
+    assert_eq!(scalar.headers["content-encoding"], "gzip");
+    assert_eq!(scalar.text, "gzipped scalar");
+    assert_eq!(
+        on.get("/api/docs/scalar.js").await.status,
+        StatusCode::NOT_ACCEPTABLE
+    );
+    let start = on.get("/api/docs/start.js").await;
+    assert!(start.text.contains("/api/docs/openapi.json"));
+    let document = on.get("/api/docs/openapi.json").await;
+    assert_eq!(document.status, StatusCode::OK);
+    assert!(document.body["paths"]["/api/v1/lists"].is_object());
+    // Every other page keeps the strict policy.
+    let other = on.get("/api/docs/start.js").await;
+    assert!(
+        !other.headers["content-security-policy"]
+            .to_str()
+            .unwrap()
+            .contains("nonce")
     );
 }

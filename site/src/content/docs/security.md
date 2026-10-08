@@ -132,6 +132,9 @@ DNS server's, with netlink and packet sockets allowed and nothing writable;
   do not name this machine, so pages you visit cannot use your browser against it (including by
   DNS rebinding). The [web UI](../web-ui/) runs under a strict Content Security Policy and keeps
   the token in its browser tab only. `[api] web_ui = false` turns it off.
+- **API reference.** `/api/docs` is off unless `[api] docs` turns it on, answers loopback only,
+  and serves files built into goethite. Its scripts are limited to goethite's own, like the UI's;
+  see [Web UI](../web-ui/#api-reference) for its style policy.
 - **Limits.** At most 64 API connections, 10 seconds for the TLS handshake and headers, 1 MiB
   request bodies and 30 seconds per request.
 - **Audit log.** Every change to lists, rules, groups, clients, schedules and settings is recorded

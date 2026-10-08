@@ -9,6 +9,16 @@ configuration format.
 
 ### Added
 
+- **The full web UI**: lists, rules, groups, clients, schedules, settings and the audit log can
+  be viewed and changed from the browser. Changes carry the revision you saw, so a change made
+  meanwhile is offered instead of overwritten; what Terraform manages is read-only; a list, a
+  schedule or a group that is still in use says what uses it. New lists can join the default
+  group at once.
+- **The API reference in the binary**, at `/api/docs` with `[api] docs = true`: Scalar, built in,
+  for loopback clients only.
+- Web UI tests: Vitest for the forms' logic, and Playwright end-to-end tests against a real
+  goethite, in CI.
+
 - **A Terraform and OpenTofu provider**, in its own repository
   ([nxplain-sh/terraform-provider-goethite](https://github.com/nxplain-sh/terraform-provider-goethite)):
   lists, rules, groups, clients, schedules and settings, generated from goethite's OpenAPI

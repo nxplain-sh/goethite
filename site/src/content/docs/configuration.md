@@ -117,6 +117,7 @@ readable by goethite's user only, and only one goethite process can open it at a
 | `token_sha256` | unset | The SHA-256 hash of the admin token, as printed by `goethite token`. Without it, only loopback clients are answered, without authentication. |
 | `tls_cert`, `tls_key` | unset | PEM files to serve HTTPS. Read before goethite drops its privileges, so they may be readable by root only. |
 | `web_ui` | `true` | Whether the [web UI](../web-ui/) is served at `/` on the same addresses. |
+| `docs` | `false` | Whether the [API reference](../web-ui/#api-reference) is served at `/api/docs`, to loopback clients only. |
 
 See [REST API](../api/) for how to use it.
 
