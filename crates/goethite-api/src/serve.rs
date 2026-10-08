@@ -58,6 +58,19 @@ impl ApiListeners {
             .map(Self)
     }
 
+    /// Listeners bound before, by an earlier goethite process or by
+    /// systemd. They are made non-blocking.
+    ///
+    /// # Errors
+    ///
+    /// If one refuses to become non-blocking.
+    pub fn from_listeners(listeners: Vec<StdListener>) -> io::Result<Self> {
+        for listener in &listeners {
+            listener.set_nonblocking(true)?;
+        }
+        Ok(Self(listeners))
+    }
+
     /// The bound addresses.
     ///
     /// # Errors

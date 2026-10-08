@@ -98,7 +98,7 @@ thread, then gives the privileges up:
   up once its sockets are bound. The unit also makes the file system read-only except
   `/var/lib/goethite` (keep downloaded lists there with `cache_dir = "/var/lib/goethite/lists"`),
   hides other processes and devices, allows only IP sockets and filters system calls.
-  `systemd-analyze security goethite` rates it 1.5, "OK"; what remains is what a DNS server needs,
+  `systemd-analyze security goethite` rates it 1.7, "OK"; what remains is what a DNS server needs,
   such as Internet sockets.
 - **Started as root** without systemd, set the user to switch to:
 

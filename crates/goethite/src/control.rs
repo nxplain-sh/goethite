@@ -18,7 +18,8 @@ use goethite_resolver::{
 };
 use goethite_store::{BlockResponseKind, ConfigSnapshot, Store};
 use jiff::Timestamp;
-use tokio::sync::Notify;
+use tokio::sync::{Notify, watch};
+use tokio::task::JoinSet;
 use tracing::{error, info, warn};
 
 use crate::download::Downloader;
@@ -174,12 +175,23 @@ impl Control {
     }
 
     /// Starts downloading lists (now, then every `list_update_hours`) and
-    /// tracking schedules (every minute).
-    pub fn spawn(self: &Arc<Self>, downloader: Downloader) {
+    /// tracking schedules (every minute), in `tasks`, until `stopped`
+    /// turns true.
+    pub fn spawn(
+        self: &Arc<Self>,
+        downloader: Downloader,
+        tasks: &mut JoinSet<()>,
+        stopped: &watch::Receiver<bool>,
+    ) {
         let control = Arc::clone(self);
-        tokio::spawn(async move {
+        let stop = stopped.clone();
+        tasks.spawn(async move {
             loop {
-                if control.download_all(&downloader).await {
+                let lists_changed = tokio::select! {
+                    changed = control.download_all(&downloader) => changed,
+                    () = crate::until(stop.clone()) => return,
+                };
+                if lists_changed {
                     control.rebuild_filter().await;
                 }
                 let hours = control.store.config().settings.spec.list_update_hours;
@@ -190,14 +202,18 @@ impl Control {
                 tokio::select! {
                     () = tokio::time::sleep(interval.saturating_add(jitter)) => {}
                     () = control.refresh.notified() => {}
+                    () = crate::until(stop.clone()) => return,
                 }
             }
         });
         let control = Arc::clone(self);
-        tokio::spawn(async move {
+        let stop = stopped.clone();
+        tasks.spawn(async move {
             loop {
-                tokio::time::sleep(until_next_minute()).await;
-                control.update_schedules();
+                tokio::select! {
+                    () = tokio::time::sleep(until_next_minute()) => control.update_schedules(),
+                    () = crate::until(stop.clone()) => return,
+                }
             }
         });
     }

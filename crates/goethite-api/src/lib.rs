@@ -15,6 +15,8 @@
 //!
 //! The same listener serves the web UI ([`WebAssets`]) for every other path.
 
+#![forbid(unsafe_code)]
+
 mod auth;
 mod cluster;
 mod error;

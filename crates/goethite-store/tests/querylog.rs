@@ -186,3 +186,33 @@ fn anonymized_and_disabled_logs() {
     drop(store);
     let _ = std::fs::remove_file(&path);
 }
+
+#[test]
+fn closing_writes_everything_and_lets_go_of_the_store() {
+    let path = temp("close");
+    let store = Arc::new(Store::open(&path).unwrap());
+    let log = store
+        .start_query_log(QueryLogConfig::default(), vec!["9.9.9.9:853".into()])
+        .unwrap();
+    for _ in 0..50 {
+        log.record(event("ads.example.", "192.0.2.1", QueryOutcome::Blocked));
+    }
+    log.close();
+    assert_eq!(
+        store.query_log_len().unwrap(),
+        50,
+        "everything queued is written"
+    );
+    assert_eq!(
+        Arc::strong_count(&store),
+        1,
+        "the writer let go of the store"
+    );
+    // After closing, events are dropped and counted, not queued.
+    log.record(event("late.example.", "192.0.2.1", QueryOutcome::Forwarded));
+    assert_eq!(log.dropped(), 1);
+    drop(store);
+    // The file can be opened again: nothing holds its lock.
+    assert!(Store::open(&path).is_ok());
+    let _ = std::fs::remove_file(&path);
+}

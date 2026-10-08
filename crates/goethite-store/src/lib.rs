@@ -5,6 +5,8 @@
 //! query log and hourly statistics. The store is the source of truth for
 //! filtering configuration: the TOML config file only seeds it.
 
+#![forbid(unsafe_code)]
+
 pub mod model;
 pub mod querylog;
 pub mod stats;

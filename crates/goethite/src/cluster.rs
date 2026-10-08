@@ -7,7 +7,7 @@
 //! and its status.
 
 use std::path::Path;
-use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -26,10 +26,12 @@ use goethite_store::{
 };
 use jiff::Timestamp;
 use tokio::sync::watch;
+use tokio::task::JoinSet;
 use tracing::{error, info, warn};
 
 use crate::config::ClusterSection;
 use crate::control::Control;
+use crate::secrets::ClusterPem;
 
 /// Cluster connections served at once: the peer needs a few.
 const MAX_CONNECTIONS: usize = 8;
@@ -51,39 +53,6 @@ const MAX_FORWARD: usize = 2 * 1024 * 1024;
 const ROLE_KEY: &str = "cluster_role";
 const ROLE_BASE_KEY: &str = "cluster_role_base";
 
-/// What is read and bound before privileges are dropped: the node's keys
-/// may be readable by root only.
-pub struct Prepared {
-    section: ClusterSection,
-    identity: Identity,
-    listeners: ApiListeners,
-}
-
-/// Reads this node's certificates and binds the cluster listener.
-///
-/// # Errors
-///
-/// A file that cannot be read, certificates that do not fit together, or
-/// an address that cannot be bound.
-pub fn prepare(section: &ClusterSection) -> Result<Prepared> {
-    let read = |path: &Path, what: &str| {
-        std::fs::read(path).with_context(|| format!("cannot read {what} {}", path.display()))
-    };
-    let identity = Identity::from_pem(
-        section.node.clone(),
-        &read(&section.ca, "the cluster CA")?,
-        &read(&section.cert, "the node certificate")?,
-        &read(&section.key, "the node key")?,
-    )?;
-    let listeners = ApiListeners::bind(&[section.listen])
-        .with_context(|| format!("cannot bind the cluster listener on {}", section.listen))?;
-    Ok(Prepared {
-        section: section.clone(),
-        identity,
-        listeners,
-    })
-}
-
 /// The other node, as last checked.
 #[derive(Clone, Debug, Default)]
 struct PeerState {
@@ -103,28 +72,46 @@ pub struct Cluster {
     peer_state: Mutex<PeerState>,
     sync: Mutex<SyncStatus>,
     /// The API, to run changes forwarded by the replica; set once it
-    /// exists.
-    api: OnceLock<Arc<Api>>,
+    /// exists, cleared when the control plane stops (it refers back here).
+    api: Mutex<Option<Arc<Api>>>,
 }
 
-/// Starts the cluster listener, the heartbeat and, on a replica, following
-/// the primary, until `stopped` turns true.
+/// What the cluster needs from the rest of the control plane.
+pub struct Parts<'a> {
+    /// The control plane.
+    pub control: &'a Arc<Control>,
+    /// The query log, for the statistics.
+    pub log: &'a Arc<QueryLog>,
+    /// When this node started.
+    pub started_at: Timestamp,
+}
+
+/// Starts the cluster listener on `listeners`, the heartbeat and, on a
+/// replica, following the primary, in `tasks`, until `stopped` turns true.
 ///
 /// # Errors
 ///
-/// If the TLS configuration cannot be built or the store cannot be read.
+/// If the certificates do not fit together, or the store cannot be read.
 pub fn start(
-    prepared: Prepared,
-    control: &Arc<Control>,
-    log: &Arc<QueryLog>,
-    started_at: Timestamp,
+    section: &ClusterSection,
+    pem: &ClusterPem,
+    listeners: ApiListeners,
+    parts: &Parts<'_>,
+    tasks: &mut JoinSet<()>,
     stopped: &watch::Receiver<bool>,
 ) -> Result<Arc<Cluster>> {
-    let Prepared {
-        section,
-        identity,
-        listeners,
-    } = prepared;
+    let Parts {
+        control,
+        log,
+        started_at,
+    } = *parts;
+    let identity = Identity::from_pem(
+        section.node.clone(),
+        pem.ca.as_bytes(),
+        pem.node.cert.as_bytes(),
+        pem.node.key.as_bytes(),
+    )?;
+    let section = section.clone();
     let store = Arc::clone(control.store());
     let role = starting_role(&store, section.role)?;
     let (role_tx, role_rx) = watch::channel(role);
@@ -147,7 +134,7 @@ pub fn start(
             last_copy: None,
             error: None,
         }),
-        api: OnceLock::new(),
+        api: Mutex::new(None),
     });
     let shared = Arc::new(Shared {
         node: section.node.clone(),
@@ -167,13 +154,13 @@ pub fn start(
         max_connections: MAX_CONNECTIONS,
     };
     let until = crate::until(stopped.clone());
-    tokio::spawn(async move {
+    tasks.spawn(async move {
         if let Err(err) = serve_router(listeners, serving, until).await {
             error!(%err, "the cluster listener failed");
         }
     });
-    tokio::spawn(heartbeat(Arc::clone(&cluster), stopped.clone()));
-    tokio::spawn(follow(
+    tasks.spawn(heartbeat(Arc::clone(&cluster), stopped.clone()));
+    tasks.spawn(follow(
         Arc::clone(&cluster),
         Arc::clone(control),
         role_rx,
@@ -217,7 +204,13 @@ fn starting_role(store: &Store, configured: Role) -> Result<Role> {
 impl Cluster {
     /// Hands over the API, to run forwarded changes with.
     pub fn set_api(&self, api: Arc<Api>) {
-        let _ = self.api.set(api);
+        *self.api.lock().unwrap_or_else(PoisonError::into_inner) = Some(api);
+    }
+
+    /// Lets go of the API: the control plane is stopping, and the API
+    /// refers back to this cluster.
+    pub fn release_api(&self) {
+        *self.api.lock().unwrap_or_else(PoisonError::into_inner) = None;
     }
 
     fn role(&self) -> Role {
@@ -489,14 +482,19 @@ async fn run_forwarded(
             format!("{} is not the primary", cluster.node),
         );
     }
-    let Some(api) = cluster.api.get() else {
+    let api = cluster
+        .api
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    let Some(api) = api else {
         return refuse(
             StatusCode::SERVICE_UNAVAILABLE,
             "unavailable",
             "starting up".into(),
         );
     };
-    match goethite_api::execute(api, cluster.peer.peer().as_str(), forwarded).await {
+    match goethite_api::execute(&api, cluster.peer.peer().as_str(), forwarded).await {
         Ok(answer) => Json(answer).into_response(),
         Err(err) => err.into_response(),
     }

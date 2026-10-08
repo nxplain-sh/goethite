@@ -5,11 +5,16 @@ mod config;
 mod control;
 mod download;
 mod filters;
+mod handoff;
 mod lists;
 mod metrics;
 mod node;
+mod notify;
 mod observe;
+mod plane;
 mod privileges;
+mod secrets;
+mod sockets;
 
 use std::future::Future;
 use std::io::IsTerminal;
@@ -18,13 +23,13 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use arc_swap::ArcSwapOption;
 use clap::{Parser, Subcommand};
-use goethite_api::{Api, ApiConfig, ApiListeners, EmbeddedWeb, WebAssets};
+use goethite_api::{Api, ApiConfig, EmbeddedWeb, WebAssets};
 use goethite_resolver::{
-    Cache, Forwarder, ForwarderConfig, Policy, PolicyState, Resolver, TlsRoots, test_record,
-    tls_client_config,
+    Cache, Forwarder, ForwarderConfig, Policy, PolicyState, Resolver, test_record,
 };
-use goethite_server::{Listeners, Server};
+use goethite_server::Server;
 use goethite_store::{Actor, Import, Store};
 use jiff::Timestamp;
 use tokio::sync::watch;
@@ -35,6 +40,8 @@ use tracing_subscriber::filter::LevelFilter;
 use crate::config::Config;
 use crate::control::Control;
 use crate::lists::ListStore;
+use crate::secrets::Secrets;
+use crate::sockets::Sockets;
 
 /// The `meta` key holding a fingerprint of the last imported `[filter]`.
 const IMPORTED_FILTER: &str = "imported_filter";
@@ -181,80 +188,99 @@ fn init_logging() {
         .try_init();
 }
 
-/// What is set up while goethite may still be privileged, before any
-/// thread starts.
-struct Prepared {
-    listeners: Listeners,
-    server_config: goethite_server::ServerConfig,
-    api_listeners: Option<ApiListeners>,
-    api_tls: Option<Arc<rustls::ServerConfig>>,
-    store: Arc<Store>,
-    /// Why the store file is not in use, if it is not.
-    store_problem: Option<String>,
-    query_log: Arc<goethite_store::QueryLog>,
-    cluster: Option<cluster::Prepared>,
-}
-
 fn run(config_path: &Path) -> Result<()> {
+    // First, before any file is opened: sockets systemd kept for goethite
+    // across a restart.
+    let from_systemd = sockets::take_systemd_fds();
     info!(
         version = env!("CARGO_PKG_VERSION"),
         config = %config_path.display(),
         "starting goethite"
     );
-    let config = Config::load(config_path)?;
-    let prepared = prepare(&config, config_path)?;
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .context("cannot start the async runtime")?;
-    runtime.block_on(serve(&config, prepared))
+    let config_path = std::path::absolute(config_path)
+        .with_context(|| format!("cannot resolve {}", config_path.display()))?;
+    // Remembered now: an upgrade starts whatever binary is at this path
+    // then, while this process's own file may be gone by then.
+    let binary = std::env::current_exe().context("cannot find goethite's own binary")?;
+    let config = Config::load(&config_path)?;
+    let child = handoff::Child::from_env()?;
+    let result = start(&config, &config_path, &binary, from_systemd, child.as_ref());
+    if let (Err(err), Some(child)) = (&result, &child) {
+        child.failed(&format!("{err:#}"));
+    }
+    result
 }
 
-/// Binds every socket and reads the API key while the process is still
-/// single-threaded and maybe privileged, drops privileges, then opens the
-/// store as the user goethite runs as, so its files are its own.
-fn prepare(config: &Config, config_path: &Path) -> Result<Prepared> {
+/// Takes the sockets (from the goethite this one takes over from, from
+/// systemd, or by binding) and the keys while the process may still be
+/// privileged and has no threads, drops privileges, and serves.
+fn start(
+    config: &Config,
+    config_path: &Path,
+    binary: &Path,
+    from_systemd: Vec<(String, std::os::fd::OwnedFd)>,
+    child: Option<&handoff::Child>,
+) -> Result<()> {
     let account = config
         .server
         .user
         .as_deref()
         .map(privileges::lookup)
         .transpose()?;
-    let server_config = config.server.to_server_config();
-    let listeners = Listeners::bind(&server_config)?;
-    let api_listeners = config
-        .api
-        .enabled
-        .then(|| ApiListeners::bind(&config.api.listen))
-        .transpose()?;
-    let api_tls = match (&config.api.tls_cert, &config.api.tls_key) {
-        (Some(cert), Some(key)) if config.api.enabled => Some(load_tls(cert, key)?),
-        _ => None,
+    let (sockets, secrets) = match child {
+        Some(child) => {
+            let (named, handed_over) = child.receive()?;
+            let sockets = Sockets::adopt(config, named)?;
+            info!("took over the previous goethite's sockets");
+            (sockets, Secrets::read_or(config, handed_over))
+        }
+        None => (sockets_from(config, from_systemd)?, Secrets::read(config)?),
     };
-    let cluster = config.cluster.as_ref().map(cluster::prepare).transpose()?;
     privileges::drop_privileges(account.as_ref())?;
-    let (store, store_problem) = open_store_or_fall_back(config)?;
-    let store = Arc::new(store);
-    seed(&store, config, config_path)?;
-    let upstream_names = config
-        .upstream
-        .iter()
-        .map(|upstream| upstream.to_upstream().address.to_string())
-        .collect();
-    let query_log = store.start_query_log(config.querylog.to_config(), upstream_names)?;
-    if !config.querylog.enabled {
-        info!("the query log is turned off; statistics are still kept");
+    if let Some(child) = child {
+        // Waits for the previous goethite to close the store.
+        child.adopted()?;
     }
-    Ok(Prepared {
-        listeners,
-        server_config,
-        api_listeners,
-        api_tls,
-        store,
-        store_problem,
-        query_log,
-        cluster,
-    })
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .context("cannot start the async runtime")?;
+    runtime.block_on(serve(config, config_path, binary, sockets, &secrets, child))
+}
+
+/// The sockets systemd kept, if they still fit the config file; otherwise
+/// freshly bound ones.
+fn sockets_from(
+    config: &Config,
+    from_systemd: Vec<(String, std::os::fd::OwnedFd)>,
+) -> Result<Sockets> {
+    if from_systemd.is_empty() {
+        return Sockets::bind(config);
+    }
+    let names: Vec<String> = from_systemd.iter().map(|(name, _)| name.clone()).collect();
+    match Sockets::adopt(config, from_systemd) {
+        Ok(sockets) => {
+            info!(sockets = names.len(), "took over the sockets systemd kept");
+            Ok(sockets)
+        }
+        Err(err) => {
+            warn!("{err:#}; binding them afresh");
+            for name in &names {
+                notify::forget(name);
+            }
+            // systemd lets go of its copies in a moment.
+            for _ in 0..20 {
+                match Sockets::bind(config) {
+                    Ok(sockets) => return Ok(sockets),
+                    Err(err) => {
+                        tracing::debug!("{err:#}; trying again");
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                    }
+                }
+            }
+            Sockets::bind(config)
+        }
+    }
 }
 
 /// The resolver for `config`, steered by `state`.
@@ -284,82 +310,205 @@ fn resolver(config: &Config, state: &Arc<PolicyState>) -> Result<Resolver> {
     Ok(resolver)
 }
 
-/// Runs the DNS server, the control plane and the API until a shutdown
-/// signal.
-async fn serve(config: &Config, prepared: Prepared) -> Result<()> {
+/// Runs the DNS server (the data plane) and the control plane until a
+/// shutdown signal, upgrading on `SIGUSR2`.
+async fn serve(
+    config: &Config,
+    config_path: &Path,
+    binary: &Path,
+    mut sockets: Sockets,
+    secrets: &Secrets,
+    child: Option<&handoff::Child>,
+) -> Result<()> {
     // One signal stops both the DNS server and the API.
     let shutdown = shutdown_signal()?;
     let (stop, stopped) = watch::channel(false);
+    let stop = Arc::new(stop);
+    let on_shutdown = Arc::clone(&stop);
     tokio::spawn(async move {
         shutdown.await;
-        stop.send_replace(true);
+        on_shutdown.send_replace(true);
     });
+    let mut upgrades = upgrade_signal()?;
     let state = Arc::new(PolicyState::new(Policy::none()));
     let resolver = Arc::new(resolver(config, &state)?);
-    let control = Control::new(prepared.store, state, ListStore::new(config.lists_dir()));
-    // Filter from the first query on, with the lists already on disk.
-    if !control.rebuild_filter().await {
-        if config.filter.on_failure == config::OnFailure::Closed {
-            anyhow::bail!(
-                "the filter cannot be built ({}), and [filter] on_failure is \"closed\": not starting",
-                control.build_error().unwrap_or_default()
-            );
-        }
-        warn!("starting without filtering: [filter] on_failure is \"open\"");
-    }
-    if !control.store().config().settings.spec.protection {
-        info!("filtering is turned off in the settings");
-    }
-    reload_on_hangup(Arc::clone(&control))?;
-    let started = Timestamp::now();
-    let cluster = prepared
-        .cluster
-        .map(|cluster| cluster::start(cluster, &control, &prepared.query_log, started, &stopped))
-        .transpose()?;
-    let tls = tls_client_config(&TlsRoots::Bundled, &[b"h2", b"http/1.1"])?;
-    let downloader = download::Downloader::new(Arc::clone(&resolver), tls, filters::MAX_LIST_LEN);
-    control.spawn(downloader);
     let metrics = Arc::new(metrics::Metrics::default());
+    let observer_log = Arc::new(ArcSwapOption::empty());
     let server = Server::new(
-        prepared.listeners,
-        prepared.server_config,
+        sockets.take_dns().context("the DNS sockets are missing")?,
+        config.server.to_server_config(),
         Arc::clone(&resolver),
     )?
     .with_observer(Arc::new(observe::Observer {
-        log: Arc::clone(&prepared.query_log),
+        log: Arc::clone(&observer_log),
         metrics: Arc::clone(&metrics),
     }));
-    let node = node::Node {
-        control: Arc::clone(&control),
-        resolver: Arc::clone(&resolver),
-        server: server.stats(),
+    let data = plane::DataPlane {
+        resolver,
+        state,
         metrics,
-        log: Arc::clone(&prepared.query_log),
-        querylog_enabled: config.querylog.enabled,
-        started,
-        store_problem: prepared.store_problem,
-        cluster: cluster.clone(),
+        server: server.stats(),
+        log: observer_log,
+        started: Timestamp::now(),
     };
-    // The API exists even when it is not served: the primary runs the
-    // replica's forwarded changes through it.
-    let api = api(
-        config,
-        &control,
-        &prepared.query_log,
-        node,
-        prepared.api_tls,
+    let mut plane = Some(
+        plane::ControlPlane::start(config, config_path, &sockets, secrets, &data, true).await?,
     );
-    if let Some(cluster) = &cluster {
-        cluster.set_api(Arc::clone(&api));
+    let mut dns = tokio::spawn(server.run(until(stopped.clone())));
+    for (name, fd) in sockets.named() {
+        notify::store(name, fd);
     }
-    let api = prepared
-        .api_listeners
-        .map(|listeners| tokio::spawn(goethite_api::serve(listeners, api, until(stopped.clone()))));
-    server.run(until(stopped)).await?;
-    if let Some(api) = api {
-        api.await.context("the API task failed")??;
+    if let Some(child) = child {
+        notify::took_over();
+        child.serving()?;
+        info!("answering in place of the previous goethite");
+    } else {
+        notify::ready();
+    }
+    let upgrade_dir = runtime_dir(config);
+    // After an upgrade, the new process is the service: this one must not
+    // tell systemd the service is stopping, or systemd stops the new one.
+    let mut handed_over = false;
+    loop {
+        tokio::select! {
+            finished = &mut dns => {
+                finished.context("the DNS server task failed")??;
+                break;
+            }
+            () = upgrades.next() => {
+                info!("received SIGUSR2: upgrading");
+                let parts = Upgrade {
+                    config,
+                    config_path,
+                    binary,
+                    dir: &upgrade_dir,
+                    sockets: &sockets,
+                    secrets,
+                    data: &data,
+                };
+                match parts.run(&mut plane).await {
+                    Ok(()) => {
+                        info!("the new goethite answers; finishing the queries in flight");
+                        handed_over = true;
+                        stop.send_replace(true);
+                    }
+                    Err(err) => error!("the upgrade failed, carrying on: {err:#}"),
+                }
+            }
+        }
+    }
+    if !handed_over {
+        notify::stopping();
+    }
+    if let Some(plane) = plane {
+        plane.stop().await?;
     }
     Ok(())
+}
+
+/// Where the upgrade's private socket goes: systemd's runtime directory
+/// for the service, or the state directory.
+fn runtime_dir(config: &Config) -> PathBuf {
+    std::env::var_os("RUNTIME_DIRECTORY")
+        .and_then(|dirs| std::env::split_paths(&dirs).next())
+        .filter(|dir| dir.is_absolute())
+        .unwrap_or_else(|| config.state_dir())
+}
+
+/// Everything an upgrade needs.
+struct Upgrade<'a> {
+    config: &'a Config,
+    config_path: &'a Path,
+    binary: &'a Path,
+    dir: &'a Path,
+    sockets: &'a Sockets,
+    secrets: &'a Secrets,
+    data: &'a plane::DataPlane,
+}
+
+impl Upgrade<'_> {
+    /// Hands everything to a new goethite (see [`handoff`]). On success the
+    /// new one answers and this one should stop; on failure this one goes
+    /// on, with its control plane running again if it was stopped.
+    async fn run(&self, plane: &mut Option<plane::ControlPlane>) -> Result<()> {
+        use tokio::task::block_in_place;
+
+        let mut parent =
+            block_in_place(|| handoff::Parent::spawn(self.binary, self.config_path, self.dir))?;
+        let sent = block_in_place(|| {
+            parent.send_sockets(self.sockets, self.secrets)?;
+            parent.wait_adopted()
+        });
+        if let Err(err) = sent {
+            parent.abandon();
+            return Err(err);
+        }
+        // The point of no return for the store: the new goethite opens it.
+        if let Some(running) = plane.take()
+            && let Err(err) = running.stop().await
+        {
+            parent.abandon();
+            self.restart(plane).await;
+            return Err(err);
+        }
+        let started = block_in_place(|| {
+            parent.store_released()?;
+            parent.wait_serving()
+        });
+        if let Err(err) = started {
+            parent.abandon();
+            self.restart(plane).await;
+            return Err(err);
+        }
+        Ok(())
+    }
+
+    /// Starts the control plane again after a failed upgrade.
+    async fn restart(&self, plane: &mut Option<plane::ControlPlane>) {
+        match plane::ControlPlane::start(
+            self.config,
+            self.config_path,
+            self.sockets,
+            self.secrets,
+            self.data,
+            false,
+        )
+        .await
+        {
+            Ok(running) => *plane = Some(running),
+            Err(err) => error!(
+                "cannot start the control plane again: {err:#}; answering queries without it"
+            ),
+        }
+    }
+}
+
+/// `SIGUSR2`, which asks for an upgrade.
+struct Upgrades {
+    #[cfg(unix)]
+    signal: tokio::signal::unix::Signal,
+}
+
+impl Upgrades {
+    /// The next request; never on platforms without `SIGUSR2`.
+    async fn next(&mut self) {
+        #[cfg(unix)]
+        if self.signal.recv().await.is_some() {
+            return;
+        }
+        std::future::pending::<()>().await;
+    }
+}
+
+fn upgrade_signal() -> Result<Upgrades> {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        let signal = signal(SignalKind::user_defined2()).context("cannot handle SIGUSR2")?;
+        Ok(Upgrades { signal })
+    }
+    #[cfg(not(unix))]
+    Ok(Upgrades {})
 }
 
 /// Completes once `stopped` turns true.
@@ -403,16 +552,15 @@ fn api(
     })
 }
 
-/// The TLS settings for the API from PEM files.
-fn load_tls(cert: &Path, key: &Path) -> Result<Arc<rustls::ServerConfig>> {
+/// The TLS settings for the API from PEM text.
+fn load_tls(cert: &str, key: &str) -> Result<Arc<rustls::ServerConfig>> {
     use rustls::pki_types::pem::PemObject;
     use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 
-    let chain = CertificateDer::pem_file_iter(cert)
-        .and_then(Iterator::collect::<Result<Vec<_>, _>>)
-        .with_context(|| format!("cannot read the API certificate {}", cert.display()))?;
-    let key = PrivateKeyDer::from_pem_file(key)
-        .with_context(|| format!("cannot read the API key {}", key.display()))?;
+    let chain = CertificateDer::pem_slice_iter(cert.as_bytes())
+        .collect::<Result<Vec<_>, _>>()
+        .context("cannot read the API certificate")?;
+    let key = PrivateKeyDer::from_pem_slice(key.as_bytes()).context("cannot read the API key")?;
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     let mut tls = rustls::ServerConfig::builder_with_provider(provider)
         .with_safe_default_protocol_versions()?
@@ -423,7 +571,6 @@ fn load_tls(cert: &Path, key: &Path) -> Result<Arc<rustls::ServerConfig>> {
     Ok(Arc::new(tls))
 }
 
-/// Runs the terminal UI.
 fn tui(api: Option<String>, token_file: Option<&Path>, ca_file: Option<&Path>) -> Result<()> {
     let url = api
         .or_else(|| std::env::var("GOETHITE_API").ok())
@@ -599,14 +746,26 @@ fn import(config_path: &Path) -> Result<()> {
 
 /// Re-reads the list files and recompiles the filter on every SIGHUP.
 #[cfg(unix)]
-fn reload_on_hangup(control: Arc<Control>) -> Result<()> {
+fn reload_on_hangup(
+    control: Arc<Control>,
+    tasks: &mut tokio::task::JoinSet<()>,
+    stopped: watch::Receiver<bool>,
+) -> Result<()> {
     use tokio::signal::unix::{SignalKind, signal};
 
     let mut hangup = signal(SignalKind::hangup()).context("cannot handle SIGHUP")?;
-    tokio::spawn(async move {
-        while hangup.recv().await.is_some() {
-            info!("received SIGHUP, reloading filter lists");
-            control.rebuild_filter().await;
+    tasks.spawn(async move {
+        loop {
+            tokio::select! {
+                received = hangup.recv() => {
+                    if received.is_none() {
+                        return;
+                    }
+                    info!("received SIGHUP, reloading filter lists");
+                    control.rebuild_filter().await;
+                }
+                () = until(stopped.clone()) => return,
+            }
         }
     });
     Ok(())
@@ -618,7 +777,11 @@ fn reload_on_hangup(control: Arc<Control>) -> Result<()> {
     clippy::unnecessary_wraps,
     reason = "same signature as the Unix version"
 )]
-fn reload_on_hangup(_control: Arc<Control>) -> Result<()> {
+fn reload_on_hangup(
+    _control: Arc<Control>,
+    _tasks: &mut tokio::task::JoinSet<()>,
+    _stopped: watch::Receiver<bool>,
+) -> Result<()> {
     Ok(())
 }
 

@@ -9,7 +9,7 @@
 //! compact binary form. It also enforces the retention limits.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, TryRecvError, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
@@ -391,17 +391,41 @@ pub struct QueryLog {
     sender: SyncSender<LogEvent>,
     dropped: AtomicU64,
     stats: Arc<Mutex<Aggregator>>,
+    /// Set to have the writer finish up and stop.
+    closing: Arc<AtomicBool>,
+    writer: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
 
 impl QueryLog {
     /// Queues `event` for the writer. Never waits: if the queue is full, the
     /// event is dropped and counted.
     pub fn record(&self, event: LogEvent) {
+        if self.closing.load(Ordering::Relaxed) {
+            self.dropped.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
         match self.sender.try_send(event) {
             Ok(()) => {}
             Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) => {
                 self.dropped.fetch_add(1, Ordering::Relaxed);
             }
+        }
+    }
+
+    /// Writes what is queued, saves the statistics and stops the writer,
+    /// which lets go of the store. Events recorded afterwards are dropped
+    /// and counted. Blocks until the writer has stopped; call it once.
+    pub fn close(&self) {
+        self.closing.store(true, Ordering::Release);
+        let handle = self
+            .writer
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if let Some(handle) = handle
+            && handle.join().is_err()
+        {
+            error!("the query log writer failed");
         }
     }
 
@@ -434,17 +458,30 @@ impl Store {
         tx.commit()?;
         let stats = Arc::new(Mutex::new(crate::stats::load(self)?));
         let (sender, receiver) = sync_channel(QUEUE_CAPACITY);
-        let log = Arc::new(QueryLog {
+        let closing = Arc::new(AtomicBool::new(false));
+        let store = Arc::clone(self);
+        let writer_closing = Arc::clone(&closing);
+        let writer_stats = Arc::clone(&stats);
+        let handle = std::thread::Builder::new()
+            .name("goethite-querylog".into())
+            .spawn(move || {
+                writer(
+                    &store,
+                    &config,
+                    &upstreams,
+                    &receiver,
+                    &writer_stats,
+                    &writer_closing,
+                );
+            })
+            .map_err(|err| StoreError::Database(err.into()))?;
+        Ok(Arc::new(QueryLog {
             sender,
             dropped: AtomicU64::new(0),
-            stats: Arc::clone(&stats),
-        });
-        let store = Arc::clone(self);
-        std::thread::Builder::new()
-            .name("goethite-querylog".into())
-            .spawn(move || writer(&store, &config, &upstreams, &receiver, &stats))
-            .map_err(|err| StoreError::Database(err.into()))?;
-        Ok(log)
+            stats,
+            closing,
+            writer: Mutex::new(Some(handle)),
+        }))
     }
 
     /// Searches the query log, newest first.
@@ -551,6 +588,7 @@ fn writer(
     upstreams: &[String],
     receiver: &Receiver<LogEvent>,
     stats: &Mutex<Aggregator>,
+    closing: &AtomicBool,
 ) {
     let mut last_key = 0_u64;
     let mut last_prune = Instant::now()
@@ -568,7 +606,11 @@ fn writer(
                     }
                     batch.push(event);
                 }
-                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Empty) => {
+                    // Closing: everything queued is in the batch.
+                    disconnected = closing.load(Ordering::Acquire);
+                    break;
+                }
                 Err(TryRecvError::Disconnected) => {
                     disconnected = true;
                     break;

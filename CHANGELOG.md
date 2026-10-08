@@ -19,6 +19,11 @@ configuration format.
   unreachable, they are refused rather than lost. `GET /api/v1/cluster` (and `cluster` in
   `/api/v1/status`) reports both nodes, sync state and problems such as two primaries.
   `POST /api/v1/cluster/promote` and `/demote` change roles; a promoted role survives restarts.
+- **Upgrades without dropping a query.** `SIGUSR2` (`systemctl kill --signal=SIGUSR2
+  --kill-whom=main goethite`) starts the new binary and hands it the sockets and the store; the
+  old process finishes its queries and exits, and stays in charge if the new one fails. systemd
+  also keeps the sockets across restarts and crashes, so queries wait instead of being refused.
+  The unit is now `Type=notify` and allows Unix sockets.
 - **Fail open.** If the store cannot be opened, goethite runs on a temporary one in memory seeded
   from the config file; if the filter cannot be built it starts unfiltered; if checking a name
   fails, the query is answered unfiltered. Each case is reported in `problems` of

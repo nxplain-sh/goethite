@@ -68,8 +68,9 @@ dig @192.0.2.10 example.com          # use the server's address
 dig @192.0.2.10 doubleclick.net      # 0.0.0.0: blocked
 ```
 
-`sudo systemctl reload goethite` re-reads the filter lists. Changes to the config file itself need
-`sudo systemctl restart goethite`.
+`sudo systemctl reload goethite` re-reads the filter lists. Changes to the config file itself take
+effect with an upgrade in place (below), or with `sudo systemctl restart goethite`; changes to
+listen addresses need the restart.
 
 The unit runs goethite as a dynamic, unprivileged user. It may bind port 53, and gives that up as
 soon as its sockets are bound. The only writable directory is `/var/lib/goethite`. See
@@ -121,12 +122,23 @@ worst abuse, but an open resolver still attracts it.
 
 ## Upgrade
 
-Build the new version, then:
+Build the new version, install it, and ask the running goethite to hand over to it:
 
 ```sh
 sudo install -m 0755 target/release/goethite /usr/bin/goethite
-sudo systemctl restart goethite
+sudo goethite check-config --config /etc/goethite/goethite.toml
+sudo systemctl kill --signal=SIGUSR2 --kill-whom=main goethite
 ```
+
+goethite starts the new binary and hands it its sockets and its store; the new one starts
+answering, and the old one finishes the queries it was answering and exits. No query is dropped,
+and the log says `answering in place of the previous goethite`. If the new one fails to start,
+the old one says `the upgrade failed, carrying on` and goes on as if nothing happened. The new one
+also re-reads the config file, so this applies config changes too, except new listen addresses.
+
+`sudo systemctl restart goethite` works too: systemd keeps goethite's sockets across the restart,
+so queries wait in the kernel for the second or so it takes rather than being refused. The same
+happens if goethite crashes and systemd restarts it.
 
 Read the [changelog](../changelog/) first: before 1.0, a minor version may change the
 configuration format, and `goethite check-config` tells you what to fix.

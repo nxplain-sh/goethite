@@ -84,6 +84,46 @@ impl Listeners {
         Ok(Self { addresses })
     }
 
+    /// Listeners from sockets bound before, by an earlier goethite process
+    /// or by systemd: for each listen address, its UDP sockets and its TCP
+    /// listener. The caller has checked what they are; they are made
+    /// non-blocking here.
+    ///
+    /// # Errors
+    ///
+    /// If there are no addresses, too many, an address without UDP sockets
+    /// or with too many, or a socket refuses to become non-blocking.
+    pub fn from_sockets(addresses: Vec<(Vec<UdpSocket>, TcpListener)>) -> io::Result<Self> {
+        if addresses.is_empty() || addresses.len() > MAX_LISTEN_ADDRESSES {
+            return Err(io::Error::other(format!(
+                "{} listen addresses; 1 to {MAX_LISTEN_ADDRESSES} are supported",
+                addresses.len()
+            )));
+        }
+        let mut bound = Vec::with_capacity(addresses.len());
+        for (udp, tcp) in addresses {
+            if udp.is_empty() || udp.len() > MAX_UDP_SOCKETS {
+                return Err(io::Error::other(format!(
+                    "{} UDP sockets for an address; 1 to {MAX_UDP_SOCKETS} are supported",
+                    udp.len()
+                )));
+            }
+            for socket in &udp {
+                socket.set_nonblocking(true)?;
+            }
+            tcp.set_nonblocking(true)?;
+            bound.push(Bound { udp, tcp });
+        }
+        Ok(Self { addresses: bound })
+    }
+
+    /// For each listen address, its UDP sockets and its TCP listener.
+    pub fn sockets(&self) -> impl Iterator<Item = (&[UdpSocket], &TcpListener)> {
+        self.addresses
+            .iter()
+            .map(|bound| (bound.udp.as_slice(), &bound.tcp))
+    }
+
     /// The local address of each listen address's UDP sockets.
     ///
     /// # Errors

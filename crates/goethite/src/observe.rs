@@ -2,6 +2,8 @@
 
 use std::sync::Arc;
 
+use arc_swap::ArcSwapOption;
+
 use goethite_resolver::Outcome;
 use goethite_server::{QueryEvent, QueryObserver, Transport};
 use goethite_store::{LogEvent, NameBuf, Protocol, QueryLog, QueryOutcome, RuleHit};
@@ -12,8 +14,9 @@ use crate::metrics::Metrics;
 /// Reports queries to the query log and the metrics. It only copies and
 /// queues: it never waits on the disk.
 pub struct Observer {
-    /// The query log.
-    pub log: Arc<QueryLog>,
+    /// The query log, while the control plane runs: it can stop and start
+    /// again (on an upgrade) while queries go on.
+    pub log: Arc<ArcSwapOption<QueryLog>>,
     /// The metrics.
     pub metrics: Arc<Metrics>,
 }
@@ -35,8 +38,12 @@ impl QueryObserver for Observer {
             Transport::Tcp => Protocol::Tcp,
         };
         self.metrics.observe(outcome, protocol, event.elapsed);
+        let log = self.log.load();
+        let Some(log) = log.as_ref() else {
+            return;
+        };
         let time = Timestamp::try_from(event.time).unwrap_or_else(|_| Timestamp::now());
-        self.log.record(LogEvent {
+        log.record(LogEvent {
             time,
             client: event.peer.ip(),
             protocol,

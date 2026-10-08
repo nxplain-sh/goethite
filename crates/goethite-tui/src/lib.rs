@@ -6,6 +6,8 @@
 //! turn lists on and off, download them now, and pause or resume filtering.
 //! Resources managed by Terraform are read-only here.
 
+#![forbid(unsafe_code)]
+
 mod app;
 mod client;
 mod ui;

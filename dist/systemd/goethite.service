@@ -10,6 +10,13 @@
 #   cache_dir = "/var/lib/goethite/lists"
 #
 # `systemctl reload goethite` re-reads the filter lists (SIGHUP).
+# After installing a new binary, upgrade without dropping a query:
+#
+#   systemctl kill --signal=SIGUSR2 --kill-whom=main goethite
+#
+# goethite starts the new binary, hands it its sockets and its store, and
+# exits once the new one answers. Its sockets also stay with systemd, so a
+# restart after a crash queues queries instead of refusing them.
 # `systemd-analyze security goethite` reviews the sandbox.
 
 [Unit]
@@ -20,11 +27,16 @@ After=network-online.target
 Before=nss-lookup.target
 
 [Service]
-Type=exec
+# goethite says when it answers, and after an upgrade the new process
+# reports itself as the main one.
+Type=notify
+NotifyAccess=all
 ExecStart=/usr/bin/goethite run --config /etc/goethite/goethite.toml
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=2s
+# Listening sockets kept across restarts: more than goethite ever has.
+FileDescriptorStoreMax=2048
 # Every UDP query in flight forwards over its own socket.
 LimitNOFILE=65536
 
@@ -32,6 +44,9 @@ LimitNOFILE=65536
 DynamicUser=yes
 StateDirectory=goethite
 StateDirectoryMode=0750
+# The private socket an upgrade hands everything over on.
+RuntimeDirectory=goethite
+RuntimeDirectoryMode=0700
 ConfigurationDirectory=goethite
 UMask=0077
 
@@ -64,9 +79,10 @@ MemoryDenyWriteExecute=yes
 RemoveIPC=yes
 DevicePolicy=closed
 
-# Network: IP sockets only. Logs go to the journal through standard error,
+# Network: IP sockets, and Unix sockets for telling systemd how goethite is
+# doing and for upgrades. Logs go to the journal through standard error,
 # which systemd connects before starting the service.
-RestrictAddressFamilies=AF_INET AF_INET6
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 
 # System calls: what services usually need, minus the privileged ones.
 # capset stays allowed: goethite uses it to give up its capability.

@@ -9,6 +9,8 @@
 //! connection may sit idle, and how long shutdown waits for queries in
 //! progress. Later phases add DoT, DoH and DoQ listeners.
 
+#![forbid(unsafe_code)]
+
 mod bind;
 mod limits;
 
