@@ -78,6 +78,7 @@ cd web && npm ci --ignore-scripts && npm run build
 | `web/`                      | Web UI (Vite, React, TanStack), embedded into the binary                |
 | `site/`                     | Project website and docs (Astro Starlight), deployed to GitHub Pages    |
 | `fuzz/`                     | cargo-fuzz targets                                                      |
+| `tests/chaos/`              | Chaos tests: two nodes and a client in network namespaces               |
 | `dist/`                     | Deployment files: the hardened systemd units                            |
 | `docs/`                     | Threat model, ADRs, backlog                                             |
 

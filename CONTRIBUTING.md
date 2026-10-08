@@ -54,9 +54,19 @@ dig @127.0.0.1 -p 15353 goethite.test +tcp
 Logs go to stderr and are controlled by `RUST_LOG` (default `info`; malformed packets are logged at
 `debug`).
 
+Chaos tests (Linux, root): a two-node cluster with a floating IP in network namespaces, broken
+in several ways under load. See [`tests/chaos/README.md`](tests/chaos/README.md), also for
+running them from macOS in a container.
+
+```sh
+cargo build --release
+sudo tests/chaos/chaos.sh target/release/goethite
+```
+
 CI (`.github/workflows/ci.yml`) runs fmt, clippy with `-D warnings`, the tests on linux amd64
-(`ubuntu-24.04`) and arm64 (`ubuntu-24.04-arm`), an MSRV check, `cargo deny` and `cargo audit`. All
-actions are pinned to commit SHAs. Keep it that way when you edit workflows.
+(`ubuntu-24.04`) and arm64 (`ubuntu-24.04-arm`), an MSRV check, `cargo deny` and `cargo audit`.
+The fuzz and chaos workflows run weekly and on demand. All actions are pinned to commit SHAs. Keep
+it that way when you edit workflows.
 
 ## Fuzzing
 

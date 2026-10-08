@@ -1,0 +1,7 @@
+# The tools the chaos tests need, for running them on macOS (or anywhere
+# without root on the host). See README.md.
+FROM docker.io/library/debian:trixie-slim
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      bind9-dnsutils ca-certificates curl dnsperf iproute2 nftables procps \
+ && rm -rf /var/lib/apt/lists/*
