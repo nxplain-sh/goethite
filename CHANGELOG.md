@@ -7,6 +7,13 @@ configuration format.
 
 ## [Unreleased]
 
+### Added
+
+- **A Terraform and OpenTofu provider**, in its own repository
+  ([nxplain-sh/terraform-provider-goethite](https://github.com/nxplain-sh/terraform-provider-goethite)):
+  lists, rules, groups, clients, schedules and settings, generated from goethite's OpenAPI
+  document. A new guide on the website explains how to use it.
+
 ### Changed
 
 - The web UI has one theme, light, whatever the system prefers; the theme switch in its header

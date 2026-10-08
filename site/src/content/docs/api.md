@@ -98,7 +98,8 @@ Specs reject unknown fields. Errors are JSON with a stable code:
 | 422 | `invalid` | A value is not valid, or a field is unknown. |
 
 Resources with `"managed_by": "terraform"` are read-only in the web UI and the TUI, so they do not
-drift from their Terraform definition. The API itself accepts changes to them.
+drift from their Terraform definition (see [Terraform](../terraform/)). The API itself accepts
+changes to them.
 
 ## Pausing filtering
 

@@ -29,6 +29,7 @@ export default defineConfig({
 				{ label: 'REST API', slug: 'api' },
 				{ label: 'Web UI', slug: 'web-ui' },
 				{ label: 'Terminal UI', slug: 'tui' },
+				{ label: 'Terraform', slug: 'terraform' },
 				{ label: 'Security settings', slug: 'security' },
 				{ label: 'API reference', slug: 'api-reference' },
 				{ label: 'Changelog', slug: 'changelog' },

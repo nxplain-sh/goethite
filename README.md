@@ -88,6 +88,8 @@ Benchmarks and how to record them are in [`bench/`](bench/README.md).
 ## Documentation
 
 - Website: <https://nxplain-sh.github.io/goethite/>
+- Terraform and OpenTofu provider:
+  [nxplain-sh/terraform-provider-goethite](https://github.com/nxplain-sh/terraform-provider-goethite)
 - [Contributing](CONTRIBUTING.md): build, test, fuzz, commit conventions
 - [Security policy](SECURITY.md): how to report vulnerabilities
 - [Threat model](docs/THREAT_MODEL.md)
