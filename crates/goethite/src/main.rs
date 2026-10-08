@@ -301,7 +301,7 @@ async fn serve(config: &Config, prepared: Prepared) -> Result<()> {
     let started = Timestamp::now();
     let cluster = prepared
         .cluster
-        .map(|cluster| cluster::start(cluster, &control, started, &stopped))
+        .map(|cluster| cluster::start(cluster, &control, &prepared.query_log, started, &stopped))
         .transpose()?;
     let tls = tls_client_config(&TlsRoots::Bundled, &[b"h2", b"http/1.1"])?;
     let downloader = download::Downloader::new(Arc::clone(&resolver), tls, filters::MAX_LIST_LEN);

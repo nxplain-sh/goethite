@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 
-import type { StatsReport, Status } from '../api/client'
+import type { ClusterStatus, StatsReport, Status } from '../api/client'
 import { clientsQuery, listsQuery, statsQuery, statusQuery } from '../api/queries'
 import { ErrorNotice, Panel, Stat } from '../components/ui'
 import { bytes, count, dateTime, millis, percent } from '../format'
@@ -22,7 +22,7 @@ export function Dashboard() {
 			<ErrorNotice error={stats.error ?? lists.error} />
 			<div className="stats">
 				<Stat
-					label="Queries, 24 h"
+					label={(stats.data?.nodes?.length ?? 0) > 1 ? 'Queries, 24 h, cluster' : 'Queries, 24 h'}
 					value={totals ? count(totals.queries) : '…'}
 					{...(totals && totals.queries > 0
 						? { detail: `${millis(totals.elapsed_us / totals.queries)} average` }
@@ -57,8 +57,14 @@ export function Dashboard() {
 				<TopPanel title="Top names" entries={stats.data?.top_names} />
 				<TopPanel title="Top clients" entries={stats.data?.top_clients} names={clients.data} />
 			</div>
+			{(stats.data?.unreachable?.length ?? 0) > 0 ? (
+				<div className="notice">
+					Counts from {stats.data?.unreachable?.join(', ')} are missing: it could not be reached.
+				</div>
+			) : null}
 			{status.data ? (
 				<div className="grid">
+					{status.data.cluster ? <ClusterPanel cluster={status.data.cluster} /> : null}
 					<Upstreams status={status.data} />
 					<Filter status={status.data} names={listNames(lists.data)} />
 					<Node status={status.data} />
@@ -222,6 +228,53 @@ function Filter({ status, names }: { status: Status; names: Map<string, string> 
 					</tbody>
 				</table>
 			)}
+		</Panel>
+	)
+}
+
+function ClusterPanel({ cluster }: { cluster: ClusterStatus }) {
+	const { peer } = cluster
+	return (
+		<Panel title="Cluster">
+			<table className="table">
+				<tbody>
+					<tr>
+						<td>This node</td>
+						<td className="name">
+							{cluster.node} <span className="badge">{cluster.role.toUpperCase()}</span>
+						</td>
+					</tr>
+					<tr>
+						<td>Peer</td>
+						<td className="name">
+							{peer.node}{' '}
+							{peer.reachable ? (
+								<span className="badge ok">UP</span>
+							) : (
+								<span className="badge blocked">DOWN</span>
+							)}
+							{peer.role ? <span className="muted"> {peer.role}</span> : null}
+							{peer.error ? <div className="muted">{peer.error}</div> : null}
+						</td>
+					</tr>
+					<tr>
+						<td>Changes</td>
+						<td>
+							{cluster.writable ? (
+								<span className="badge ok">WRITABLE</span>
+							) : (
+								<span className="badge blocked">READ-ONLY</span>
+							)}
+						</td>
+					</tr>
+					{cluster.sync?.last_copy ? (
+						<tr>
+							<td>Last copy</td>
+							<td className="name">{dateTime(cluster.sync.last_copy)}</td>
+						</tr>
+					) : null}
+				</tbody>
+			</table>
 		</Panel>
 	)
 }

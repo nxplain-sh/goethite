@@ -4,6 +4,7 @@
 //! accent for focus, rust for blocked and teal for good. Outcomes always
 //! carry a text label, so nothing depends on color alone.
 
+use goethite_api::{ClusterRole, ClusterStatus};
 use goethite_store::{ManagedBy, QueryOutcome};
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
@@ -80,11 +81,61 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, app: &App) {
                 .bg(color)
                 .bold(),
         );
+        if let Some(cluster) = &status.cluster {
+            spans.extend(cluster_spans(cluster));
+        }
     }
     if let Some(updated) = app.updated {
         spans.push(Span::from(format!("  updated {}", clock(updated))).dim());
     }
     frame.render_widget(Line::from(spans), area);
+}
+
+/// The node's role and its peer, in words; problems in rust.
+fn cluster_spans(cluster: &ClusterStatus) -> Vec<Span<'static>> {
+    let role = match cluster.role {
+        ClusterRole::Primary => "PRIMARY",
+        ClusterRole::Replica => "REPLICA",
+    };
+    let mut spans = vec![
+        Span::from(format!("  {} ", cluster.node)),
+        Span::from(format!(" {role} "))
+            .fg(Color::Black)
+            .bg(SAND)
+            .bold(),
+    ];
+    let (peer, color) = if cluster.peer.reachable {
+        (format!(" peer {} UP ", cluster.peer.node), TEAL)
+    } else {
+        (format!(" peer {} DOWN ", cluster.peer.node), RUST)
+    };
+    spans.push(Span::from(" "));
+    spans.push(Span::from(peer).fg(Color::Black).bg(color).bold());
+    if !cluster.problems.is_empty() {
+        spans.push(
+            Span::from(format!(" {} PROBLEM(S) ", cluster.problems.len()))
+                .fg(Color::Black)
+                .bg(RUST)
+                .bold(),
+        );
+    }
+    spans
+}
+
+/// The totals' title: whose counts they are.
+fn totals_title(app: &App) -> String {
+    let Some(stats) = &app.data.stats else {
+        return "Last 24 hours".to_owned();
+    };
+    if stats.nodes.len() < 2 && stats.unreachable.is_empty() {
+        return "Last 24 hours".to_owned();
+    }
+    let missing = if stats.unreachable.is_empty() {
+        String::new()
+    } else {
+        format!(" ({} missing)", stats.unreachable.join(", "))
+    };
+    format!("Last 24 hours, {}{missing}", stats.nodes.join(" + "))
 }
 
 fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &App) {
@@ -187,7 +238,7 @@ fn render_dashboard(frame: &mut Frame<'_>, area: Rect, app: &App) {
     let [totals_area, upstreams_area] =
         Layout::vertical([Constraint::Length(11), Constraint::Min(4)]).areas(left);
     frame.render_widget(
-        Paragraph::new(totals(app)).block(block("Last 24 hours")),
+        Paragraph::new(totals(app)).block(block(&totals_title(app))),
         totals_area,
     );
 
@@ -598,6 +649,8 @@ mod tests {
                 count: 42,
             }],
             top_clients: Vec::new(),
+            nodes: Vec::new(),
+            unreachable: Vec::new(),
         })));
         let text = screen(&app);
         for expected in [
@@ -722,6 +775,35 @@ mod tests {
         app.tab = Tab::Groups;
         let groups = screen(&app);
         assert!(groups.contains("Kids") && groups.contains("ON"), "{groups}");
+    }
+
+    #[test]
+    fn the_cluster_shows_in_words() {
+        let mut app = app();
+        let mut status = status();
+        status.cluster = Some(ClusterStatus {
+            node: "dns2".into(),
+            role: ClusterRole::Replica,
+            config: goethite_store::ConfigVersion::default(),
+            writable: false,
+            peer: goethite_api::PeerStatus {
+                node: "dns1".into(),
+                address: "192.0.2.11:8054".into(),
+                reachable: false,
+                checked_at: None,
+                role: None,
+                version: None,
+                config: None,
+                error: Some("connection refused".into()),
+            },
+            sync: None,
+            problems: vec!["cannot copy the primary's configuration".into()],
+        });
+        app.apply(Update::Status(Box::new(status)));
+        let text = screen(&app);
+        assert!(text.contains("dns2") && text.contains("REPLICA"), "{text}");
+        assert!(text.contains("peer dns1 DOWN"), "{text}");
+        assert!(text.contains("1 PROBLEM(S)"), "{text}");
     }
 
     #[test]

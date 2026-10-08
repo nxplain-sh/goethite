@@ -1044,6 +1044,8 @@ export interface components {
             from: string;
             /** @description Counts per hour, oldest first; hours without queries are left out. */
             hours: components["schemas"]["HourPoint"][];
+            /** @description For a cluster's statistics, the nodes whose counts are included. */
+            nodes?: string[];
             /**
              * Format: date-time
              * @description When the report was made.
@@ -1057,6 +1059,11 @@ export interface components {
             top_names: components["schemas"]["TopEntry"][];
             /** @description Counts over the whole range. */
             totals: components["schemas"]["Counters"];
+            /**
+             * @description For a cluster's statistics, the nodes that could not be asked: their
+             *     counts are missing.
+             */
+            unreachable?: string[];
         };
         /** @description How the node is doing. */
         Status: {
@@ -2622,6 +2629,11 @@ export interface operations {
             query?: {
                 /** @description The last this many hours, 1 to 720 (default 24). */
                 hours?: number;
+                /**
+                 * @description `node` (the default) for this node's counts, or `cluster` for every
+                 *     node's added up. A cluster's top lists are approximate.
+                 */
+                scope?: "node" | "cluster";
             };
             header?: never;
             path?: never;

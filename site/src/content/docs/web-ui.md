@@ -32,7 +32,9 @@ the network; otherwise the token crosses it in clear text.
 - **Dashboard**: the last 24 hours (queries, blocked, cached, forwarded, failed, average answer
   time), queries per hour, the top blocked names, names and clients, each upstream's health, the
   filter and its lists, and the node's cache and query log. The header shows whether filtering is
-  on, and pauses it for 10 minutes or resumes it.
+  on, and pauses it for 10 minutes or resumes it. In a [cluster](../ha/), the counts are both
+  nodes' together, the header shows this node's role and its peer, a Cluster panel says whether
+  changes are possible, and cluster problems appear at the top.
 - **Query log**: the newest queries, following new ones live, with the client, the answer and
   what decided it (the rule, a CNAME, the upstream). Search by name and by answer, and page back
   through older entries. Searches are part of the address, so they can be bookmarked.

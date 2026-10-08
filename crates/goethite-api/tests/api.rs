@@ -17,10 +17,13 @@ use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
 use goethite_api::{
-    Api, ApiConfig, ApiListeners, BoxFuture, BoxResult, Change, Control, FilterStatus, Forwarded,
-    ForwardedAnswer, QueryLogStatus, Status, WebAssets, Writes, generate_token,
+    Api, ApiConfig, ApiListeners, BoxFuture, BoxResult, Change, ClusterRole, ClusterStatus,
+    Control, FilterStatus, Forwarded, ForwardedAnswer, PeerStatus, QueryLogStatus, Status,
+    WebAssets, Writes, generate_token,
 };
-use goethite_store::{Actor, ActorKind, ConfigVersion, QueryLogConfig, Store};
+use goethite_store::{
+    Actor, ActorKind, ConfigVersion, QueryLogConfig, StatsReport, Store, TopEntry,
+};
 use http_body_util::{BodyExt, Full};
 use hyper::body::Bytes;
 use hyper::header::{HeaderMap, HeaderValue};
@@ -43,6 +46,10 @@ struct FakeControl {
     forwarded: Mutex<Vec<Forwarded>>,
     /// The version the "primary" reports after a forwarded change.
     answer_version: Mutex<ConfigVersion>,
+    /// The cluster, if the node is in one.
+    cluster: Mutex<Option<ClusterStatus>>,
+    /// The other node's statistics; unreachable when unset.
+    peer_stats: Mutex<Option<StatsReport>>,
 }
 
 impl Control for FakeControl {
@@ -87,6 +94,17 @@ impl Control for FakeControl {
 
     fn metrics(&self) -> String {
         "goethite_up 1\n".into()
+    }
+
+    fn cluster(&self) -> Option<ClusterStatus> {
+        self.cluster.lock().unwrap().clone()
+    }
+
+    fn peer_stats(&self, _hours: u32) -> BoxResult<'_, StatsReport> {
+        let stats = self.peer_stats.lock().unwrap().clone();
+        Box::pin(async move {
+            stats.ok_or_else(|| goethite_api::ApiError::unavailable("dns2 is unreachable"))
+        })
     }
 
     fn writes(&self) -> Writes {
@@ -849,4 +867,59 @@ async fn the_primary_runs_forwarded_changes_as_their_caller() {
             "{method} {path}"
         );
     }
+}
+
+#[tokio::test]
+async fn cluster_statistics_add_up_every_node() {
+    let server = start(false);
+    // Not in a cluster: the node's own statistics.
+    let alone = server.get("/api/v1/stats?scope=cluster").await;
+    assert_eq!(alone.status, StatusCode::OK);
+    assert!(alone.body.get("nodes").is_none());
+
+    *server.control.cluster.lock().unwrap() = Some(ClusterStatus {
+        node: "dns1".into(),
+        role: ClusterRole::Primary,
+        config: server.api.store.version(),
+        writable: true,
+        peer: PeerStatus {
+            node: "dns2".into(),
+            address: "192.0.2.12:8054".into(),
+            reachable: true,
+            checked_at: None,
+            role: Some(ClusterRole::Replica),
+            version: None,
+            config: None,
+            error: None,
+        },
+        sync: None,
+        problems: Vec::new(),
+    });
+    let mut peer = server.api.log.stats(24);
+    peer.totals.queries = 40;
+    peer.totals.blocked = 4;
+    peer.top_blocked = vec![TopEntry {
+        key: "ads.example".into(),
+        count: 4,
+    }];
+    *server.control.peer_stats.lock().unwrap() = Some(peer);
+    let both = server.get("/api/v1/stats?scope=cluster").await;
+    assert_eq!(both.body["totals"]["queries"], 40);
+    assert_eq!(both.body["top_blocked"][0]["key"], "ads.example");
+    assert_eq!(both.body["nodes"], json!(["dns1", "dns2"]));
+    // The node's own statistics stay the node's.
+    assert_eq!(
+        server.get("/api/v1/stats").await.body["totals"]["queries"],
+        0
+    );
+
+    // An unreachable node is named, not silently left out.
+    *server.control.peer_stats.lock().unwrap() = None;
+    let partial = server.get("/api/v1/stats?scope=cluster").await;
+    assert_eq!(partial.body["nodes"], json!(["dns1"]));
+    assert_eq!(partial.body["unreachable"], json!(["dns2"]));
+    assert_eq!(
+        server.get("/api/v1/stats?scope=everyone").await.status,
+        StatusCode::BAD_REQUEST
+    );
 }

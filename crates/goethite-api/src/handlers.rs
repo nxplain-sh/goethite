@@ -24,6 +24,7 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use goethite_store::stats::{TOP_FOR_MERGE, TOP_IN_REPORT};
 use goethite_store::{
     Actor, AuditAction, AuditEntry, Client, ClientSpec, Group, GroupSpec, Kind, List, ListSpec,
     QueryOutcome, QueryPage, Rule, RuleSpec, Schedule, ScheduleSpec, Search, Settings,
@@ -497,6 +498,21 @@ pub(crate) async fn get_querylog(
 pub(crate) struct StatsParams {
     /// The last this many hours, 1 to 720 (default 24).
     hours: Option<u32>,
+    /// `node` (the default) for this node's counts, or `cluster` for every
+    /// node's added up. A cluster's top lists are approximate.
+    #[param(inline)]
+    scope: Option<StatsScope>,
+}
+
+/// Whose statistics.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum StatsScope {
+    /// This node's.
+    #[default]
+    Node,
+    /// Every node's in the cluster, added up.
+    Cluster,
 }
 
 /// Counts per hour, and the names and clients asked most.
@@ -508,7 +524,25 @@ pub(crate) async fn get_stats(
     State(api): Shared,
     ApiQuery(params): ApiQuery<StatsParams>,
 ) -> Json<StatsReport> {
-    Json(api.log.stats(params.hours.unwrap_or(24)))
+    let hours = params.hours.unwrap_or(24);
+    let cluster = match params.scope.unwrap_or_default() {
+        StatsScope::Cluster => api.control.cluster(),
+        StatsScope::Node => None,
+    };
+    let Some(cluster) = cluster else {
+        return Json(api.log.stats(hours));
+    };
+    // Long top lists from every node, merged, then cut.
+    let mut report = api.log.stats_top(hours, TOP_FOR_MERGE);
+    report.nodes.push(cluster.node);
+    if let Ok(peer) = api.control.peer_stats(hours).await {
+        report.merge(&peer, TOP_IN_REPORT);
+        report.nodes.push(cluster.peer.node);
+    } else {
+        report.cut_top(TOP_IN_REPORT);
+        report.unreachable.push(cluster.peer.node);
+    }
+    Json(report)
 }
 
 /// Which audit entries.

@@ -11,7 +11,9 @@ export const statusQuery = queryOptions({
 export const statsQuery = (hours: number) =>
 	queryOptions({
 		queryKey: ['stats', hours],
-		queryFn: () => call(api.GET('/api/v1/stats', { params: { query: { hours } } })),
+		// A cluster's, added up; a node on its own answers with its own.
+		queryFn: () =>
+			call(api.GET('/api/v1/stats', { params: { query: { hours, scope: 'cluster' } } })),
 		refetchInterval: 10_000,
 	})
 

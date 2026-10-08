@@ -21,7 +21,9 @@ use goethite_api::{
 use goethite_cluster::server::{self, Shared};
 use goethite_cluster::wire::{API_PATH, MAX_WAIT_SECS, NodeInfo, WireError};
 use goethite_cluster::{ClientError, Identity, NodeId, PeerClient, Role};
-use goethite_store::{Actor, AuditAction, ConfigExport, ConfigVersion, Store};
+use goethite_store::{
+    Actor, AuditAction, ConfigExport, ConfigVersion, QueryLog, StatsReport, Store,
+};
 use jiff::Timestamp;
 use tokio::sync::watch;
 use tracing::{error, info, warn};
@@ -114,6 +116,7 @@ pub struct Cluster {
 pub fn start(
     prepared: Prepared,
     control: &Arc<Control>,
+    log: &Arc<QueryLog>,
     started_at: Timestamp,
     stopped: &watch::Receiver<bool>,
 ) -> Result<Arc<Cluster>> {
@@ -150,6 +153,7 @@ pub fn start(
         node: section.node.clone(),
         role: role_rx.clone(),
         store,
+        log: Arc::clone(log),
         started_at,
     });
     let forward = Router::new()
@@ -326,6 +330,21 @@ impl Cluster {
                     "cannot forward the change to the primary: {other}"
                 )),
             })
+    }
+
+    /// The other node's statistics, unless it was unreachable at the last
+    /// check (no point waiting for it).
+    pub async fn peer_stats(&self, hours: u32) -> Result<StatsReport, ApiError> {
+        if self.peer_state().info.is_none() && self.peer_state().checked_at.is_some() {
+            return Err(ApiError::unavailable(format!(
+                "{} is unreachable",
+                self.peer.peer()
+            )));
+        }
+        self.peer
+            .stats(hours)
+            .await
+            .map_err(|err| ApiError::unavailable(err.to_string()))
     }
 
     /// Makes this node the primary or a replica.

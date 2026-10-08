@@ -33,6 +33,10 @@ const TOP_PER_HOUR: usize = 100;
 /// Entries a report's top lists have.
 pub const TOP_IN_REPORT: usize = 20;
 
+/// Entries each node's top lists have when reports from several nodes are
+/// merged, so the merged top lists come out right more often.
+pub const TOP_FOR_MERGE: usize = TOP_PER_HOUR;
+
 /// Distinct keys counted in an hour before counts are halved.
 const MAX_TRACKED: usize = 10_000;
 
@@ -248,12 +252,81 @@ pub struct StatsReport {
     pub top_blocked: Vec<TopEntry>,
     /// The clients asking most, by client ID or address.
     pub top_clients: Vec<TopEntry>,
+    /// For a cluster's statistics, the nodes whose counts are included.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub nodes: Vec<String>,
+    /// For a cluster's statistics, the nodes that could not be asked: their
+    /// counts are missing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unreachable: Vec<String>,
+}
+
+impl StatsReport {
+    /// Adds `other`'s counts to this report's, for statistics over several
+    /// nodes: totals and hours add up, top lists are merged by key and cut
+    /// to `entries` entries. Merged top lists are approximate, like each node's.
+    pub fn merge(&mut self, other: &Self, entries: usize) {
+        self.from = self.from.min(other.from);
+        self.to = self.to.max(other.to);
+        self.totals.merge(&other.totals);
+        let mut hours: BTreeMap<Timestamp, Counters> = self
+            .hours
+            .iter()
+            .map(|point| (point.start, point.counters))
+            .collect();
+        for point in &other.hours {
+            hours.entry(point.start).or_default().merge(&point.counters);
+        }
+        self.hours = hours
+            .into_iter()
+            .map(|(start, counters)| HourPoint { start, counters })
+            .collect();
+        for (mine, theirs) in [
+            (&mut self.top_names, &other.top_names),
+            (&mut self.top_blocked, &other.top_blocked),
+            (&mut self.top_clients, &other.top_clients),
+        ] {
+            let mut counts: HashMap<String, u64> = HashMap::new();
+            for entry in mine.drain(..).chain(theirs.iter().cloned()) {
+                let total = counts.entry(entry.key).or_default();
+                *total = total.saturating_add(entry.count);
+            }
+            *mine = top(counts.into_iter(), top_n(entries))
+                .into_iter()
+                .map(|(key, count)| TopEntry { key, count })
+                .collect();
+        }
+    }
+}
+
+impl StatsReport {
+    /// Cuts the top lists to `entries` entries.
+    pub fn cut_top(&mut self, entries: usize) {
+        for list in [
+            &mut self.top_names,
+            &mut self.top_blocked,
+            &mut self.top_clients,
+        ] {
+            list.truncate(entries);
+        }
+    }
+}
+
+/// `n`, at most what an hour keeps.
+fn top_n(n: usize) -> usize {
+    n.min(TOP_PER_HOUR)
 }
 
 impl QueryLog {
     /// Statistics for the last `hours` hours (1 to 720), the current one
     /// included.
     pub fn stats(&self, hours: u32) -> StatsReport {
+        self.stats_top(hours, TOP_IN_REPORT)
+    }
+
+    /// Like [`QueryLog::stats`], with up to `top` entries (at most 100) in
+    /// each top list.
+    pub fn stats_top(&self, hours: u32, top_entries: usize) -> StatsReport {
         let now = Timestamp::now();
         let span = i64::from(hours.clamp(1, 720));
         let from = hour_of(now).saturating_sub(span.saturating_sub(1));
@@ -285,7 +358,7 @@ impl QueryLog {
             });
         }
         let entries = |map: HashMap<String, u64>| {
-            top(map.into_iter(), TOP_IN_REPORT)
+            top(map.into_iter(), top_n(top_entries))
                 .into_iter()
                 .map(|(key, count)| TopEntry { key, count })
                 .collect()
@@ -298,6 +371,8 @@ impl QueryLog {
             top_names: entries(names),
             top_blocked: entries(blocked),
             top_clients: entries(clients),
+            nodes: Vec::new(),
+            unreachable: Vec::new(),
         }
     }
 }
@@ -439,6 +514,78 @@ mod tests {
         assert_eq!(first.blocked, [("ads.example.".to_owned(), 1)]);
         assert_eq!(first.clients[0], ("10.0.0.1".to_owned(), 2));
         assert_eq!(hours[1].1.counters.queries, 1);
+    }
+
+    #[test]
+    fn reports_from_two_nodes_add_up() {
+        let hour = |h: i64| Timestamp::from_second(h * 3600).unwrap();
+        let counters = |queries: u64, blocked: u64| Counters {
+            queries,
+            blocked,
+            ..Counters::default()
+        };
+        let entry = |key: &str, count: u64| TopEntry {
+            key: key.into(),
+            count,
+        };
+        let mut mine = StatsReport {
+            from: hour(10),
+            to: hour(12),
+            totals: counters(30, 3),
+            hours: vec![
+                HourPoint {
+                    start: hour(10),
+                    counters: counters(10, 1),
+                },
+                HourPoint {
+                    start: hour(11),
+                    counters: counters(20, 2),
+                },
+            ],
+            top_names: vec![entry("a.example", 20), entry("b.example", 10)],
+            top_blocked: vec![entry("ads.example", 3)],
+            top_clients: Vec::new(),
+            nodes: Vec::new(),
+            unreachable: Vec::new(),
+        };
+        let theirs = StatsReport {
+            from: hour(9),
+            to: hour(12),
+            totals: counters(25, 5),
+            hours: vec![
+                HourPoint {
+                    start: hour(9),
+                    counters: counters(5, 0),
+                },
+                HourPoint {
+                    start: hour(11),
+                    counters: counters(20, 5),
+                },
+            ],
+            top_names: vec![entry("b.example", 15), entry("c.example", 1)],
+            top_blocked: vec![entry("ads.example", 5)],
+            top_clients: vec![entry("cl_1", 25)],
+            nodes: Vec::new(),
+            unreachable: Vec::new(),
+        };
+        mine.merge(&theirs, 2);
+        assert_eq!(mine.from, hour(9));
+        assert_eq!((mine.totals.queries, mine.totals.blocked), (55, 8));
+        let hours: Vec<_> = mine
+            .hours
+            .iter()
+            .map(|p| (p.start, p.counters.queries))
+            .collect();
+        assert_eq!(hours, vec![(hour(9), 5), (hour(10), 10), (hour(11), 40)]);
+        assert_eq!(
+            mine.top_names,
+            vec![entry("b.example", 25), entry("a.example", 20)],
+            "cut to 2"
+        );
+        assert_eq!(mine.top_blocked, vec![entry("ads.example", 8)]);
+        assert_eq!(mine.top_clients, vec![entry("cl_1", 25)]);
+        mine.cut_top(1);
+        assert_eq!(mine.top_names.len(), 1);
     }
 
     #[test]

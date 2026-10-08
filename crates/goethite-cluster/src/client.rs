@@ -8,7 +8,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use goethite_store::{ConfigExport, ConfigVersion};
+use goethite_store::{ConfigExport, ConfigVersion, StatsReport};
 use http_body_util::{BodyExt, Full, Limited};
 use hyper::body::Bytes;
 use hyper::header::CONTENT_TYPE;
@@ -24,7 +24,9 @@ use tokio::time::timeout;
 use tokio_rustls::TlsConnector;
 
 use crate::node::NodeId;
-use crate::wire::{CONFIG_PATH, ConfigQuery, MAX_WAIT_SECS, NODE_PATH, NodeInfo, WireError};
+use crate::wire::{
+    CONFIG_PATH, ConfigQuery, MAX_WAIT_SECS, NODE_PATH, NodeInfo, STATS_PATH, WireError,
+};
 
 /// How long connecting, the TLS handshake and an answer without waiting
 /// may take.
@@ -146,6 +148,19 @@ impl PeerClient {
             return Ok(None);
         }
         self.decode(&body).map(Some)
+    }
+
+    /// The peer's statistics for the last `hours` hours, with long top
+    /// lists for merging.
+    ///
+    /// # Errors
+    ///
+    /// A [`ClientError`].
+    pub async fn stats(&self, hours: u32) -> Result<StatsReport, ClientError> {
+        let (_, body) = self
+            .get(&format!("{STATS_PATH}?hours={hours}"), TIMEOUT)
+            .await?;
+        self.decode(&body)
     }
 
     /// Sends `body` as JSON to `path` and decodes the JSON answer.

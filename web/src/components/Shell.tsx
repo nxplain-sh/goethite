@@ -6,7 +6,7 @@ import { clearToken, currentToken } from '../auth'
 import { api, call } from '../api/client'
 import { statusQuery } from '../api/queries'
 import { currentTheme, onSystemThemeChange, setTheme } from '../theme'
-import { ErrorNotice, ProtectionBadge } from './ui'
+import { ClusterBadges, ErrorNotice, ProtectionBadge } from './ui'
 
 /** How long the pause button pauses filtering. */
 const PAUSE_SECONDS = 600
@@ -37,6 +37,7 @@ export function Shell() {
 					{status.data ? <small>v{status.data.version}</small> : null}
 				</div>
 				{status.data ? <ProtectionBadge status={status.data} /> : null}
+				{status.data?.cluster ? <ClusterBadges cluster={status.data.cluster} /> : null}
 				{status.data?.protection ? (
 					paused ? (
 						<button
@@ -90,6 +91,11 @@ export function Shell() {
 				<Link to="/querylog">Query log</Link>
 			</nav>
 			<ErrorNotice error={status.error ?? pause.error ?? resume.error} />
+			{(status.data?.cluster?.problems ?? []).map((problem) => (
+				<div key={problem} className="notice error" role="alert">
+					Cluster: {problem}
+				</div>
+			))}
 			<main>
 				<Outlet />
 			</main>

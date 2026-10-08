@@ -12,6 +12,7 @@ export type StatsReport = Schemas['StatsReport']
 export type QueryEntry = Schemas['QueryEntry']
 export type QueryOutcome = Schemas['QueryOutcome']
 export type List = Schemas['List']
+export type ClusterStatus = Schemas['ClusterStatus']
 
 /** Every outcome, in display order. */
 export const OUTCOMES: readonly QueryOutcome[] = [

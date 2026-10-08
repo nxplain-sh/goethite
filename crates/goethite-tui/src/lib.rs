@@ -155,7 +155,8 @@ async fn fetch(
     let _ = updates.send(Update::Status(Box::new(status))).await;
     match tab {
         Tab::Dashboard => {
-            let report: StatsReport = client.get("/api/v1/stats?hours=24").await?;
+            // A cluster's, added up; a node on its own answers with its own.
+            let report: StatsReport = client.get("/api/v1/stats?hours=24&scope=cluster").await?;
             let _ = updates.send(Update::Stats(Box::new(report))).await;
         }
         Tab::QueryLog => {

@@ -2102,6 +2102,20 @@
               "format": "int32",
               "minimum": 0
             }
+          },
+          {
+            "name": "scope",
+            "in": "query",
+            "description": "`node` (the default) for this node's counts, or `cluster` for every\nnode's added up. A cluster's top lists are approximate.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Whose statistics.",
+              "enum": [
+                "node",
+                "cluster"
+              ]
+            }
           }
         ],
         "responses": {
@@ -3385,6 +3399,13 @@
             },
             "description": "Counts per hour, oldest first; hours without queries are left out."
           },
+          "nodes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "For a cluster's statistics, the nodes whose counts are included."
+          },
           "to": {
             "type": "string",
             "format": "date-time",
@@ -3414,6 +3435,13 @@
           "totals": {
             "$ref": "#/components/schemas/Counters",
             "description": "Counts over the whole range."
+          },
+          "unreachable": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "For a cluster's statistics, the nodes that could not be asked: their\ncounts are missing."
           }
         }
       },

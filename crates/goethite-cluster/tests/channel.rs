@@ -19,7 +19,7 @@ use goethite_api::{ApiListeners, Serving, serve_router};
 use goethite_cluster::certs::{self, Pem};
 use goethite_cluster::server::{self, Shared};
 use goethite_cluster::{ClientError, Identity, NodeId, PeerClient, Role};
-use goethite_store::{Actor, ManagedBy, Rule, RuleSpec, Store};
+use goethite_store::{Actor, ManagedBy, QueryLogConfig, Rule, RuleSpec, Store};
 use jiff::Timestamp;
 use tokio::sync::{oneshot, watch};
 
@@ -80,6 +80,9 @@ fn listen(identity: &Identity, peer: &str, store: &Arc<Store>, role: Role) -> Li
         node: identity.node().clone(),
         role: role_rx,
         store: Arc::clone(store),
+        log: store
+            .start_query_log(QueryLogConfig::default(), Vec::new())
+            .unwrap(),
         started_at: Timestamp::now(),
     });
     let listeners = ApiListeners::bind(&["127.0.0.1:0".parse().unwrap()]).unwrap();
@@ -151,6 +154,8 @@ async fn a_replica_follows_the_primary() {
     let info = client.node().await.unwrap();
     assert_eq!((info.node.as_str(), info.role), ("dns1", Role::Primary));
     assert_eq!(info.config, primary.0.version());
+    let stats = client.stats(24).await.unwrap();
+    assert_eq!(stats.totals.queries, 0);
 
     // A different epoch: the whole configuration, at once.
     let export = client

@@ -13,12 +13,15 @@ use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use goethite_store::Store;
+use goethite_store::stats::TOP_FOR_MERGE;
+use goethite_store::{QueryLog, Store};
 use jiff::Timestamp;
 use tokio::sync::watch;
 
 use crate::node::{NodeId, Role};
-use crate::wire::{CONFIG_PATH, ConfigQuery, MAX_WAIT_SECS, NODE_PATH, NodeInfo, WireError};
+use crate::wire::{
+    CONFIG_PATH, ConfigQuery, MAX_WAIT_SECS, NODE_PATH, NodeInfo, STATS_PATH, StatsQuery, WireError,
+};
 
 /// What the cluster routes need.
 pub struct Shared {
@@ -28,6 +31,8 @@ pub struct Shared {
     pub role: watch::Receiver<Role>,
     /// The store.
     pub store: Arc<Store>,
+    /// The query log, for the statistics.
+    pub log: Arc<QueryLog>,
     /// When this node started.
     pub started_at: Timestamp,
 }
@@ -50,6 +55,7 @@ pub fn router(shared: Arc<Shared>) -> Router {
     Router::new()
         .route(NODE_PATH, get(node))
         .route(CONFIG_PATH, get(config))
+        .route(STATS_PATH, get(stats))
         .fallback(not_found)
         .with_state(shared)
 }
@@ -98,6 +104,20 @@ async fn config(State(shared): State<Arc<Shared>>, Query(query): Query<ConfigQue
             StatusCode::SERVICE_UNAVAILABLE,
             "unavailable",
             "shutting down".into(),
+        ),
+    }
+}
+
+/// This node's statistics, with long top lists for merging.
+async fn stats(State(shared): State<Arc<Shared>>, Query(query): Query<StatsQuery>) -> Response {
+    let log = Arc::clone(&shared.log);
+    let hours = query.hours.clamp(1, 720);
+    match tokio::task::spawn_blocking(move || log.stats_top(hours, TOP_FOR_MERGE)).await {
+        Ok(report) => Json(report).into_response(),
+        Err(_) => error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal",
+            "cannot read the statistics".into(),
         ),
     }
 }

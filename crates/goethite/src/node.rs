@@ -9,7 +9,7 @@ use goethite_api::{
 };
 use goethite_resolver::{Resolver, Transport};
 use goethite_server::ServerStats;
-use goethite_store::{Actor, QueryLog};
+use goethite_store::{Actor, QueryLog, StatsReport};
 use jiff::Timestamp;
 use tracing::warn;
 
@@ -151,6 +151,17 @@ impl goethite_api::Control for Node {
         Box::pin(async move {
             match &self.cluster {
                 Some(cluster) => cluster.forward(forwarded).await,
+                None => Err(goethite_api::ApiError::not_found(
+                    "this node is not in a cluster",
+                )),
+            }
+        })
+    }
+
+    fn peer_stats(&self, hours: u32) -> BoxResult<'_, StatsReport> {
+        Box::pin(async move {
+            match &self.cluster {
+                Some(cluster) => cluster.peer_stats(hours).await,
                 None => Err(goethite_api::ApiError::not_found(
                     "this node is not in a cluster",
                 )),

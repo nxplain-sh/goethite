@@ -17,6 +17,17 @@ pub const NODE_PATH: &str = "/cluster/v1/node";
 /// The path of the configuration a replica follows.
 pub const CONFIG_PATH: &str = "/cluster/v1/config";
 
+/// The path of a node's statistics, for the cluster's.
+pub const STATS_PATH: &str = "/cluster/v1/stats";
+
+/// The query of a statistics request.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StatsQuery {
+    /// The last this many hours.
+    #[serde(default)]
+    pub hours: u32,
+}
+
 /// The path a replica forwards configuration changes to; the binary
 /// serves it, since it runs them through the API.
 pub const API_PATH: &str = "/cluster/v1/api";

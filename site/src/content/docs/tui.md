@@ -37,7 +37,8 @@ Switch screens with <kbd>Tab</kbd>, the arrow keys, or <kbd>1</kbd>–<kbd>5</kb
 
 1. **Dashboard**: the last 24 hours (queries, blocked, cached, forwarded, failed, average answer
    time), the top names, blocked names and clients, the filter's rule count, and whether each
-   upstream is up.
+   upstream is up. In a [cluster](../ha/), the counts are both nodes' together, and the header
+   shows this node's role and whether its peer is up.
 2. **Query log**: the newest queries, with their client, type, answer and the rule that decided.
 3. **Lists**: the filter lists, whether each is on, its rule count, its last update, who manages it
    and any download or parse problem.

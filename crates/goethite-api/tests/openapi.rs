@@ -49,3 +49,37 @@ fn every_operation_is_documented() {
     }
     assert!(spec["components"]["securitySchemes"]["token"].is_object());
 }
+
+/// Every `$ref` points at a schema the document defines: utoipa emits a
+/// reference for a type it was not told to include, which breaks clients.
+#[test]
+fn every_reference_resolves() {
+    fn walk(value: &serde_json::Value, refs: &mut Vec<String>) {
+        match value {
+            serde_json::Value::Object(map) => {
+                for (key, value) in map {
+                    if key == "$ref" {
+                        refs.push(value.as_str().unwrap().to_owned());
+                    } else {
+                        walk(value, refs);
+                    }
+                }
+            }
+            serde_json::Value::Array(items) => items.iter().for_each(|item| walk(item, refs)),
+            _ => {}
+        }
+    }
+    let spec: serde_json::Value = serde_json::from_str(&goethite_api::openapi_json()).unwrap();
+    let mut refs = Vec::new();
+    walk(&spec, &mut refs);
+    assert!(refs.len() > 10, "{} references", refs.len());
+    for reference in refs {
+        let name = reference
+            .strip_prefix("#/components/schemas/")
+            .unwrap_or_else(|| panic!("unexpected reference {reference}"));
+        assert!(
+            spec["components"]["schemas"].get(name).is_some(),
+            "{reference} is not defined"
+        );
+    }
+}

@@ -19,6 +19,9 @@ configuration format.
   unreachable, they are refused rather than lost. `GET /api/v1/cluster` (and `cluster` in
   `/api/v1/status`) reports both nodes, sync state and problems such as two primaries.
   `POST /api/v1/cluster/promote` and `/demote` change roles; a promoted role survives restarts.
+- **Cluster statistics.** `GET /api/v1/stats?scope=cluster` adds up both nodes' counts and
+  merges their top lists, naming any node it could not ask. The TUI and the web UI show the
+  cluster's statistics and state.
 
 ### Changed
 

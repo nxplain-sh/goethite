@@ -104,6 +104,14 @@ Nodes check on each other every 5 seconds. `problems` lists, in words, anything 
 person: both nodes primary (or both replicas), different goethite versions, or a replica that
 cannot copy the primary's configuration.
 
+## Statistics
+
+Each node keeps its own query log and statistics. `GET /api/v1/stats?scope=cluster` adds up
+both nodes' counts, hour by hour, and merges their top lists. `nodes` names the nodes included;
+a node that could not be asked is named in `unreachable` instead of being silently left out. The
+TUI and the web UI show the cluster's statistics, and the cluster's state, on their dashboards.
+Each node's top lists are approximate, and so are the merged ones.
+
 ## Promoting the replica
 
 If the primary is gone for good, or for longer than you want the configuration frozen, make the

@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 
-import { describe, type QueryOutcome, type Status } from '../api/client'
+import { type ClusterStatus, describe, type QueryOutcome, type Status } from '../api/client'
 import { clock } from '../format'
 
 const OUTCOME: Record<QueryOutcome, { label: string; tone: string }> = {
@@ -33,6 +33,22 @@ export function ProtectionBadge({ status }: { status: Status }) {
 		<span className="badge ok">FILTERING ON</span>
 	) : (
 		<span className="badge blocked">FILTERING OFF</span>
+	)
+}
+
+/** This node's role and its peer's state, in words. */
+export function ClusterBadges({ cluster }: { cluster: ClusterStatus }) {
+	return (
+		<>
+			<span className="badge">
+				{cluster.node} · {cluster.role.toUpperCase()}
+			</span>
+			{cluster.peer.reachable ? (
+				<span className="badge ok">PEER {cluster.peer.node} UP</span>
+			) : (
+				<span className="badge blocked">PEER {cluster.peer.node} DOWN</span>
+			)}
+		</>
 	)
 }
 

@@ -37,7 +37,7 @@ use axum::http::header::{
 use axum::http::{HeaderValue, Request};
 use axum::middleware::{self, Next};
 use axum::response::Response;
-use goethite_store::{Actor, QueryLog, Store};
+use goethite_store::{Actor, QueryLog, StatsReport, Store};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -117,6 +117,13 @@ pub trait Control: Send + Sync + 'static {
     /// Sends a configuration change to the cluster's primary.
     fn forward(&self, forwarded: Forwarded) -> BoxResult<'_, ForwardedAnswer> {
         let _ = forwarded;
+        Box::pin(async { Err(ApiError::not_found("this node is not in a cluster")) })
+    }
+
+    /// The other node's statistics for the last `hours` hours, with long
+    /// top lists for merging.
+    fn peer_stats(&self, hours: u32) -> BoxResult<'_, StatsReport> {
+        let _ = hours;
         Box::pin(async { Err(ApiError::not_found("this node is not in a cluster")) })
     }
 
