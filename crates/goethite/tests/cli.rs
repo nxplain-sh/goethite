@@ -385,6 +385,23 @@ mod serving {
         );
     }
 
+    /// Nothing reads goethite's log any more (its supervisor died, a pipe
+    /// closed): it goes on answering, and still stops on SIGTERM.
+    #[test]
+    fn keeps_working_when_nothing_reads_its_log() {
+        let mut server = Running::start("no_log_reader", upstream());
+        let udp = field(&server.wait_for_log(DNS_LISTENING), "udp");
+        // The reading thread stops at the next line, closing the pipe; the
+        // reload logs more lines after that, which cannot be written.
+        server.lines = mpsc::channel().1;
+        server.signal("HUP");
+        std::thread::sleep(Duration::from_millis(500));
+        let answer = ask(udp, "goethite.test.");
+        assert_eq!(answer.metadata.response_code, ResponseCode::NoError);
+        server.signal("TERM");
+        assert!(server.wait_for_exit().success());
+    }
+
     #[test]
     fn blocks_listed_names_and_reloads_lists_on_sighup() {
         let list = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("blocklist.txt");

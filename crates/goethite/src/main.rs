@@ -185,6 +185,11 @@ fn init_logging() {
         .with_env_filter(filter)
         .with_writer(std::io::stderr)
         .with_ansi(std::io::stderr().is_terminal())
+        // Otherwise a log line that cannot be written (nothing reads standard
+        // error any more) is reported with `eprintln!`, which panics: the
+        // process dies, or the task that logged does, such as the one that
+        // stops goethite on SIGTERM. A lost log line must cost nothing more.
+        .log_internal_errors(false)
         .try_init();
 }
 

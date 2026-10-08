@@ -34,6 +34,12 @@ configuration format.
   merges their top lists, naming any node it could not ask. The TUI and the web UI show the
   cluster's statistics and state.
 
+### Fixed
+
+- A log line that could not be written, because nothing read goethite's standard error any more,
+  made goethite panic: at startup it exited, and later the task that logged died, which could
+  leave goethite unable to stop on SIGTERM. Lost log lines are now ignored.
+
 ### Changed
 
 - In the API, the audit log's `actor.kind` and `action` are now open-ended strings
