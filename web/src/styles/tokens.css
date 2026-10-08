@@ -2,10 +2,10 @@
  * goethite design tokens: neobrutalism (AGENTS.md, "UI design").
  *
  * Thick ink borders, hard offset shadows with no blur, no gradients, no
- * rounding. Every text/background pair below is at least 4.5:1 in both
- * themes; `--on-*` is the text color for each filled background.
+ * rounding. Every text/background pair below is at least 4.5:1; `--on-*`
+ * is the text color for each filled background.
  *
- * The theme follows the system unless the page sets data-theme on <html>.
+ * One theme, light, whatever the system prefers.
  */
 
 :root {
@@ -40,34 +40,4 @@
 	--space-6: 32px;
 
 	color-scheme: light;
-}
-
-@media (prefers-color-scheme: dark) {
-	:root:not([data-theme='light']) {
-		--bg: #15120e;
-		--panel: #211c16;
-		--ink: #f2ece1;
-		--muted: #a89e8e;
-		--blocked: #e06a4b;
-		--on-blocked: #111111;
-		--ok: #5cc2b0;
-		--on-ok: #111111;
-		--cached: #3a2e1a;
-		--on-cached: #f2ece1;
-		color-scheme: dark;
-	}
-}
-
-:root[data-theme='dark'] {
-	--bg: #15120e;
-	--panel: #211c16;
-	--ink: #f2ece1;
-	--muted: #a89e8e;
-	--blocked: #e06a4b;
-	--on-blocked: #111111;
-	--ok: #5cc2b0;
-	--on-ok: #111111;
-	--cached: #3a2e1a;
-	--on-cached: #f2ece1;
-	color-scheme: dark;
 }

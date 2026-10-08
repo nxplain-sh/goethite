@@ -81,8 +81,6 @@ releases.
 - **[P4] Web UI tests.** Component and end-to-end tests (for example Vitest and Playwright) once
   the UI has screens that change things; the skeleton is checked by the type-checker, the Rust
   serving tests and a CI job that embeds and fetches it.
-- **[P4] Theme before the first paint.** A stored light/dark choice is applied when the script
-  starts, so it can flash; fixing it needs a CSP hash for a tiny inline script.
 - **[P5] Release builds include the web UI.** The release workflow must build `web/` before
   `cargo build --release`, reproducibly (pinned Node, `npm ci`).
 - **[P3] Query log writer priority and cost.** The writer thread competes with the DNS workers

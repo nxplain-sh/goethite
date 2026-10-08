@@ -1,11 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, Outlet, useNavigate } from '@tanstack/react-router'
-import { useEffect, useState } from 'react'
 
 import { clearToken, currentToken } from '../auth'
 import { api, call } from '../api/client'
 import { statusQuery } from '../api/queries'
-import { currentTheme, onSystemThemeChange, setTheme } from '../theme'
 import { ClusterBadges, ErrorNotice, ProtectionBadge } from './ui'
 
 /** How long the pause button pauses filtering. */
@@ -16,8 +14,6 @@ export function Shell() {
 	const status = useQuery(statusQuery)
 	const queryClient = useQueryClient()
 	const navigate = useNavigate()
-	const [theme, setThemeState] = useState(currentTheme)
-	useEffect(() => onSystemThemeChange(() => setThemeState(currentTheme())), [])
 	const refresh = () => queryClient.invalidateQueries({ queryKey: ['status'] })
 	const pause = useMutation({
 		mutationFn: () => call(api.PUT('/api/v1/pause', { body: { seconds: PAUSE_SECONDS } })),
@@ -59,17 +55,6 @@ export function Shell() {
 						</button>
 					)
 				) : null}
-				<button
-					type="button"
-					className="button small"
-					onClick={() => {
-						const next = theme === 'dark' ? 'light' : 'dark'
-						setTheme(next)
-						setThemeState(next)
-					}}
-				>
-					{theme === 'dark' ? 'Light theme' : 'Dark theme'}
-				</button>
 				{currentToken() === null ? null : (
 					<button
 						type="button"

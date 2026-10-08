@@ -11,9 +11,6 @@ import { createRoot } from 'react-dom/client'
 import { ApiError } from './api/client'
 import { clearToken } from './auth'
 import { createAppRouter } from './router'
-import { applyStoredTheme } from './theme'
-
-applyStoredTheme()
 
 /** A 401 means the token is missing or no longer valid: sign in again. */
 function onError(error: unknown) {

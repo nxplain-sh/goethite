@@ -7,6 +7,11 @@ configuration format.
 
 ## [Unreleased]
 
+### Changed
+
+- The web UI has one theme, light, whatever the system prefers; the theme switch in its header
+  is gone.
+
 ## [0.3.0] - 2026-10-08
 
 Phase 3, v0.3 high availability.

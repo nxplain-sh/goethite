@@ -40,7 +40,7 @@ the network; otherwise the token crosses it in clear text.
   through older entries. Searches are part of the address, so they can be bookmarked.
 
 Every answer carries a text label (`BLOCKED`, `CACHED`, `FORWARDED` and so on), so nothing
-depends on color alone. The theme follows the system; the header switches it.
+depends on color alone. The UI has one theme, light.
 
 ## Security
 
