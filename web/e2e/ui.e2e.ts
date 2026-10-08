@@ -2,7 +2,7 @@
 
 import { type APIRequestContext, expect, type Page, test } from '@playwright/test'
 
-import { DOH_PORT, DOT_PORT, TOKEN } from './settings.mjs'
+import { DOH_PORT, DOQ_PORT, DOT_PORT, TOKEN } from './settings.mjs'
 
 const auth = { Authorization: `Bearer ${TOKEN}` }
 
@@ -136,6 +136,7 @@ test('puts a client in a group that uses a list during a schedule', async ({ pag
 	const use = page.getByRole('note', { name: 'Using the client ID' })
 	await expect(use).toContainText(`https://dns.example:${DOH_PORT}/dns-query/e2e-tablet`)
 	await expect(use).toContainText(`e2e-tablet.dns.example (port ${DOT_PORT})`)
+	await expect(use).toContainText(`quic://e2e-tablet.dns.example:${DOQ_PORT}`)
 	await page.getByLabel('Group').selectOption({ label: 'E2E kids' })
 	await page.getByRole('button', { name: 'Create' }).click()
 	const client = page.getByRole('row').filter({ hasText: 'E2E tablet' })

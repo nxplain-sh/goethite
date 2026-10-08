@@ -539,7 +539,7 @@ export interface components {
             /** @description The group's ID. */
             group?: string;
             /**
-             * @description Client IDs, such as `anna-phone`: over DNS over TLS or HTTPS a
+             * @description Client IDs, such as `anna-phone`: over DNS over TLS, HTTPS or QUIC a
              *     device can name itself, in the server name (`anna-phone.dns.example`)
              *     or the DNS over HTTPS path (`/dns-query/anna-phone`), wherever it is.
              *     A known ID decides which client asked before the address does. 1 to
@@ -648,13 +648,15 @@ export interface components {
              */
             safe_search: number;
         };
-        /** @description How clients reach this node over DNS over TLS and HTTPS. */
+        /** @description How clients reach this node over DNS over TLS, HTTPS and QUIC. */
         EncryptedStatus: {
             /**
              * @description The addresses DNS over HTTPS is served on, at the path `/dns-query`
              *     (or `/dns-query/<client ID>`).
              */
             doh: string[];
+            /** @description The addresses DNS over QUIC is served on. */
+            doq: string[];
             /** @description The addresses DNS over TLS is served on. */
             dot: string[];
             /**
@@ -877,7 +879,7 @@ export interface components {
          * @description How a query reached goethite.
          * @enum {string}
          */
-        Protocol: "udp" | "tcp" | "dot" | "doh";
+        Protocol: "udp" | "tcp" | "dot" | "doh" | "doq";
         /** @description One logged query, as the API shows it. */
         QueryEntry: {
             /** @description The client's address (shortened if the log anonymizes clients). */

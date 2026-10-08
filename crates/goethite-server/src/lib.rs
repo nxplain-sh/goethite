@@ -2,24 +2,26 @@
 //!
 //! Serves DNS over UDP and TCP (RFC 7766 length-prefixed framing) on one or
 //! more addresses, with several `SO_REUSEPORT` UDP sockets per address on
-//! Linux (see [`Listeners`]), and DNS over TLS (RFC 7858) and DNS over HTTPS
-//! (RFC 8484) on addresses of their own. Every UDP query is resolved in its
+//! Linux (see [`Listeners`]), and DNS over TLS (RFC 7858), DNS over HTTPS
+//! (RFC 8484) and DNS over QUIC (RFC 9250) on addresses of their own. Every UDP query is resolved in its
 //! own task, so a slow upstream never holds up other clients. Every limit is
 //! explicit: datagram size, queries in flight, the UDP query rate per client
 //! network, concurrent connections in total and per client, TLS handshake
 //! time, how long a connection may sit idle, and how long shutdown waits
 //! for queries in progress.
 //!
-//! Over TLS and HTTPS a client can name itself with a client ID, in the
-//! server name (`<id>.<server name>`) or the DNS over HTTPS path
-//! (`/dns-query/<id>`); see [`doh`]. DNS over QUIC comes later.
+//! Over TLS, HTTPS and QUIC a client can name itself with a client ID, in
+//! the server name (`<id>.<server name>`) or the DNS over HTTPS path
+//! (`/dns-query/<id>`); see [`doh`].
 
 #![forbid(unsafe_code)]
 
 mod bind;
 pub mod doh;
+pub mod doq;
 mod https;
 mod limits;
+mod quic;
 mod stream;
 
 use std::fmt;
@@ -82,15 +84,19 @@ pub struct ServerConfig {
     /// Addresses to serve DNS over HTTPS on, usually port 443; at most
     /// [`MAX_LISTEN_ADDRESSES`]. Needs [`Server::with_tls`].
     pub doh: Vec<SocketAddr>,
+    /// Addresses to serve DNS over QUIC on, usually UDP port 853; at most
+    /// [`MAX_LISTEN_ADDRESSES`]. Needs [`Server::with_tls`].
+    pub doq: Vec<SocketAddr>,
     /// The name clients reach DNS over TLS and HTTPS by, such as
     /// `dns.example`: a server name one label below it, such as
     /// `anna-phone.dns.example`, carries a client ID. Without it, client IDs
     /// come from the DNS over HTTPS path only.
     pub server_name: Option<String>,
-    /// How long a DNS over TLS or HTTPS connection may go without a query.
+    /// How long a DNS over TLS, HTTPS or QUIC connection may go without a
+    /// query.
     pub tls_idle_timeout: Duration,
-    /// Whether DNS over TLS and HTTPS answer only queries that carry a
-    /// known client ID; others get `REFUSED`. For serving them beyond the
+    /// Whether DNS over TLS, HTTPS and QUIC answer only queries that carry
+    /// a known client ID; others get `REFUSED`. For serving them beyond the
     /// local network. UDP and TCP are not affected.
     pub require_client_id: bool,
     /// How long shutdown waits for queries in progress before abandoning them.
@@ -114,6 +120,7 @@ impl ServerConfig {
             tcp_idle_timeout: Duration::from_secs(10),
             dot: Vec::new(),
             doh: Vec::new(),
+            doq: Vec::new(),
             server_name: None,
             tls_idle_timeout: Duration::from_secs(30),
             require_client_id: false,
@@ -134,6 +141,15 @@ pub enum Transport {
     Tls,
     /// DNS over HTTPS (RFC 8484).
     Https,
+    /// DNS over QUIC (RFC 9250).
+    Quic,
+}
+
+impl Transport {
+    /// Whether it is DNS over TLS, HTTPS or QUIC.
+    pub fn is_encrypted(self) -> bool {
+        matches!(self, Self::Tls | Self::Https | Self::Quic)
+    }
 }
 
 impl fmt::Display for Transport {
@@ -143,6 +159,7 @@ impl fmt::Display for Transport {
             Self::Tcp => "tcp",
             Self::Tls => "tls",
             Self::Https => "https",
+            Self::Quic => "quic",
         })
     }
 }
@@ -174,9 +191,13 @@ pub enum ServerError {
     /// A bound socket could not be handed to the async runtime.
     #[error("cannot register a socket with the async runtime")]
     Register(#[source] io::Error),
-    /// DNS over TLS or HTTPS addresses are configured, but no certificate.
-    #[error("DNS over TLS and HTTPS need a certificate")]
+    /// DNS over TLS, HTTPS or QUIC addresses are configured, but no
+    /// certificate.
+    #[error("DNS over TLS, HTTPS and QUIC need a certificate")]
     NoCertificate,
+    /// The TLS settings cannot serve QUIC, which needs TLS 1.3.
+    #[error("the TLS settings do not support DNS over QUIC (TLS 1.3)")]
+    Quic,
 }
 
 /// Receives every answered query, for the query log and statistics.
@@ -219,8 +240,8 @@ pub struct ServerStats {
     pub tcp_refused: AtomicU64,
     /// TCP connections closed because their client had too many.
     pub tcp_refused_per_client: AtomicU64,
-    /// DNS over TLS and HTTPS connections whose TLS handshake failed or
-    /// took too long.
+    /// DNS over TLS, HTTPS and QUIC connections whose TLS handshake failed
+    /// or took too long.
     pub tls_handshake_failures: AtomicU64,
     /// DNS over HTTPS requests answered with an HTTP error, such as a wrong
     /// path or a body that is not a DNS message.
@@ -244,6 +265,8 @@ pub struct Server {
     addresses: Vec<Address>,
     dot: Vec<TcpListener>,
     doh: Vec<TcpListener>,
+    /// Registered with tokio once the TLS settings are known, in `run`.
+    doq: Vec<std::net::UdpSocket>,
     tls: Option<Arc<rustls::ServerConfig>>,
     engine: Arc<Engine>,
     config: ServerConfig,
@@ -307,6 +330,7 @@ impl Server {
         };
         let dot = register(listeners.dot)?;
         let doh = register(listeners.doh)?;
+        let doq = listeners.doq;
         let engine = Arc::new(Engine {
             codec: Box::new(HickoryCodec),
             resolver,
@@ -317,6 +341,7 @@ impl Server {
             addresses,
             dot,
             doh,
+            doq,
             tls: None,
             engine,
             config,
@@ -324,9 +349,9 @@ impl Server {
         })
     }
 
-    /// Serves DNS over TLS and HTTPS with `tls`: its certificates, versions
-    /// and session settings. Each listener sets its own ALPN protocols
-    /// (`dot`; `h2` and `http/1.1`).
+    /// Serves DNS over TLS, HTTPS and QUIC with `tls`: its certificates,
+    /// versions and session settings. Each listener sets its own ALPN
+    /// protocols (`dot`; `h2` and `http/1.1`; `doq`).
     #[must_use]
     pub fn with_tls(mut self, tls: Arc<rustls::ServerConfig>) -> Self {
         self.tls = Some(tls);
@@ -390,6 +415,18 @@ impl Server {
         self.doh.iter().map(TcpListener::local_addr).collect()
     }
 
+    /// The address of each DNS over QUIC socket.
+    ///
+    /// # Errors
+    ///
+    /// Returns the operating system's error if an address is unavailable.
+    pub fn doq_local_addrs(&self) -> io::Result<Vec<SocketAddr>> {
+        self.doq
+            .iter()
+            .map(std::net::UdpSocket::local_addr)
+            .collect()
+    }
+
     /// Serves until `shutdown` completes, then stops accepting new work,
     /// waits up to [`ServerConfig::shutdown_grace`] for queries in progress
     /// and returns.
@@ -397,22 +434,19 @@ impl Server {
     /// # Errors
     ///
     /// Returns [`ServerError::ListenerStopped`] if a listener ended before
-    /// `shutdown` completed, and [`ServerError::NoCertificate`] for DNS over
-    /// TLS or HTTPS listeners without [`Server::with_tls`].
+    /// `shutdown` completed, [`ServerError::NoCertificate`] for DNS over
+    /// TLS, HTTPS or QUIC listeners without [`Server::with_tls`], and
+    /// [`ServerError::Quic`] or [`ServerError::Register`] if a DNS over QUIC
+    /// endpoint cannot be set up.
     pub async fn run(self, shutdown: impl Future<Output = ()>) -> Result<(), ServerError> {
         let config = &self.config;
-        let acceptor = |alpn: &[&[u8]]| {
-            self.tls.as_ref().map(|tls| {
-                let mut tls = rustls::ServerConfig::clone(tls);
-                tls.alpn_protocols = alpn.iter().map(|protocol| protocol.to_vec()).collect();
-                TlsAcceptor::from(Arc::new(tls))
-            })
-        };
-        let over_tls = acceptor(&[b"dot"]);
-        let over_https = acceptor(&[b"h2", b"http/1.1"]);
-        if (!self.dot.is_empty() || !self.doh.is_empty()) && self.tls.is_none() {
-            return Err(ServerError::NoCertificate);
-        }
+        let encrypted = Encrypted::prepare(
+            self.dot,
+            self.doh,
+            self.doq,
+            self.tls.as_deref(),
+            config.tls_idle_timeout,
+        )?;
         let shared = Arc::new(Shared {
             engine: self.engine,
             udp_slots: Arc::new(Semaphore::new(
@@ -453,24 +487,7 @@ impl Server {
                 stop_rx.clone(),
             ));
         }
-        let encrypted = [
-            (self.dot, over_tls.map(Kind::Tls), "DNS over TLS"),
-            (self.doh, over_https.map(Kind::Https), "DNS over HTTPS"),
-        ];
-        for (sockets, kind, name) in encrypted {
-            let Some(kind) = kind else {
-                continue;
-            };
-            for listener in sockets {
-                info!(address = %DisplayAddr(listener.local_addr()), "{name} listening");
-                listeners.spawn(stream::serve(
-                    listener,
-                    kind.clone(),
-                    Arc::clone(&shared),
-                    stop_rx.clone(),
-                ));
-            }
-        }
+        encrypted.spawn(&shared, &stop_rx, &mut listeners);
         drop(stop_rx);
 
         let stopped_early = tokio::select! {
@@ -499,6 +516,73 @@ impl Server {
             Err(ServerError::ListenerStopped)
         } else {
             Ok(())
+        }
+    }
+}
+
+/// The DNS over TLS, HTTPS and QUIC listeners, ready to serve.
+struct Encrypted {
+    streams: Vec<(TcpListener, Kind, &'static str)>,
+    quic: Vec<quinn::Endpoint>,
+}
+
+impl Encrypted {
+    /// Sets the listeners up with `tls`, each with its ALPN protocols.
+    fn prepare(
+        dot: Vec<TcpListener>,
+        doh: Vec<TcpListener>,
+        doq: Vec<std::net::UdpSocket>,
+        tls: Option<&rustls::ServerConfig>,
+        idle: Duration,
+    ) -> Result<Self, ServerError> {
+        if dot.is_empty() && doh.is_empty() && doq.is_empty() {
+            return Ok(Self {
+                streams: Vec::new(),
+                quic: Vec::new(),
+            });
+        }
+        let tls = tls.ok_or(ServerError::NoCertificate)?;
+        let acceptor = |alpn: &[&[u8]]| {
+            let mut tls = tls.clone();
+            tls.alpn_protocols = alpn.iter().map(|protocol| protocol.to_vec()).collect();
+            TlsAcceptor::from(Arc::new(tls))
+        };
+        let over_tls = Kind::Tls(acceptor(&[b"dot"]));
+        let over_https = Kind::Https(acceptor(&[b"h2", b"http/1.1"]));
+        let streams = dot
+            .into_iter()
+            .map(|listener| (listener, over_tls.clone(), "DNS over TLS"))
+            .chain(
+                doh.into_iter()
+                    .map(|listener| (listener, over_https.clone(), "DNS over HTTPS")),
+            )
+            .collect();
+        let quic = doq
+            .into_iter()
+            .map(|socket| quic::endpoint(socket, tls, idle))
+            .collect::<Result<_, _>>()?;
+        Ok(Self { streams, quic })
+    }
+
+    /// Serves every listener in `listeners`.
+    fn spawn(
+        self,
+        shared: &Arc<Shared>,
+        stop: &watch::Receiver<bool>,
+        listeners: &mut JoinSet<()>,
+    ) {
+        for (listener, kind, name) in self.streams {
+            info!(address = %DisplayAddr(listener.local_addr()), "{name} listening");
+            listeners.spawn(stream::serve(
+                listener,
+                kind,
+                Arc::clone(shared),
+                stop.clone(),
+            ));
+        }
+        for endpoint in self.quic {
+            info!(address = %DisplayAddr(endpoint.local_addr()), "DNS over QUIC listening");
+            listeners.spawn(quic::serve(endpoint, Arc::clone(shared), stop.clone()));
         }
     }
 }
@@ -611,7 +695,9 @@ impl Engine {
 
         let max_len = match transport {
             Transport::Udp => udp_limit,
-            Transport::Tcp | Transport::Tls | Transport::Https => usize::from(u16::MAX),
+            Transport::Tcp | Transport::Tls | Transport::Https | Transport::Quic => {
+                usize::from(u16::MAX)
+            }
         };
         let min_ttl = response
             .answers
@@ -630,8 +716,7 @@ impl Engine {
 
     /// Whether a query must be refused for lack of a known client ID.
     fn refuses(&self, transport: Transport, client_id: Option<&str>) -> bool {
-        let encrypted = matches!(transport, Transport::Tls | Transport::Https);
-        encrypted
+        transport.is_encrypted()
             && self.require_client_id
             && !client_id.is_some_and(|id| self.resolver.knows_client_id(id))
     }

@@ -909,7 +909,7 @@ pub struct ServerSection {
     pub tls: Option<TlsSection>,
 }
 
-/// The `[server.tls]` table: DNS over TLS and DNS over HTTPS for clients.
+/// The `[server.tls]` table: DNS over TLS, HTTPS and QUIC for clients.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct TlsSection {
@@ -928,18 +928,23 @@ pub struct TlsSection {
     /// Addresses for DNS over HTTPS, usually port 443: one, or a list.
     #[serde(default, deserialize_with = "listen_addresses")]
     pub doh: Vec<SocketAddr>,
-    /// Whether DNS over TLS and HTTPS answer only queries with a known
-    /// client ID, as when they are reachable from the internet.
+    /// Addresses for DNS over QUIC, usually UDP port 853: one, or a list.
+    #[serde(default, deserialize_with = "listen_addresses")]
+    pub doq: Vec<SocketAddr>,
+    /// Whether DNS over TLS, HTTPS and QUIC answer only queries with a
+    /// known client ID, as when they are reachable from the internet.
     #[serde(default)]
     pub require_client_id: bool,
 }
 
 impl TlsSection {
     fn validate(&self) -> Result<()> {
-        if self.dot.is_empty() && self.doh.is_empty() {
-            bail!("server.tls has neither dot nor doh addresses: give one, or remove the table");
+        if self.dot.is_empty() && self.doh.is_empty() && self.doq.is_empty() {
+            bail!(
+                "server.tls has no dot, doh or doq addresses: give at least one, or remove the table"
+            );
         }
-        for (name, list) in [("dot", &self.dot), ("doh", &self.doh)] {
+        for (name, list) in [("dot", &self.dot), ("doh", &self.doh), ("doq", &self.doq)] {
             if list.len() > MAX_LISTEN_ADDRESSES {
                 bail!("server.tls.{name} has more than {MAX_LISTEN_ADDRESSES} addresses");
             }
@@ -1054,6 +1059,7 @@ impl ServerSection {
         if let Some(tls) = &self.tls {
             config.dot.clone_from(&tls.dot);
             config.doh.clone_from(&tls.doh);
+            config.doq.clone_from(&tls.doq);
             config.require_client_id = tls.require_client_id;
             config.server_name = tls
                 .server_name
@@ -1267,7 +1273,8 @@ impl Config {
     }
 
     /// Every TCP address must be listened on once: DNS over TCP, TLS and
-    /// HTTPS, the API and the cluster.
+    /// HTTPS, the API and the cluster; and every UDP address: DNS over UDP
+    /// and QUIC.
     fn check_tcp_addresses(&self) -> Result<()> {
         let mut seen = HashSet::new();
         let tls = self.server.tls.as_ref();
@@ -1292,6 +1299,18 @@ impl Config {
             for addr in addresses {
                 if addr.port() != 0 && !seen.insert(*addr) {
                     bail!("{name} uses the TCP address {addr}, which is listened on already");
+                }
+            }
+        }
+        let mut udp = HashSet::new();
+        let doq = tls.map_or(&[][..], |tls| &tls.doq);
+        for (name, addresses) in [
+            ("server.listen", self.server.listen.as_slice()),
+            ("server.tls.doq", doq),
+        ] {
+            for addr in addresses {
+                if addr.port() != 0 && !udp.insert(*addr) {
+                    bail!("{name} uses the UDP address {addr}, which is listened on already");
                 }
             }
         }
@@ -1695,6 +1714,7 @@ mod tests {
             server_name = "DNS.example."
             dot = "0.0.0.0:853"
             doh = ["0.0.0.0:443", "[::]:443"]
+            doq = "0.0.0.0:853"
             require_client_id = true
             "#,
         )
@@ -1704,13 +1724,14 @@ mod tests {
         let server = config.server.to_server_config();
         assert_eq!(server.dot, ["0.0.0.0:853".parse().unwrap()]);
         assert_eq!(server.doh.len(), 2);
+        assert_eq!(server.doq, ["0.0.0.0:853".parse().unwrap()]);
         assert_eq!(server.server_name.as_deref(), Some("dns.example"));
         assert!(server.require_client_id);
         let plain = Config::parse("").unwrap().server.to_server_config();
         assert_eq!((plain.dot.len(), plain.doh.len()), (0, 0));
 
         for (bad, expected) in [
-            ("", "neither dot nor doh"),
+            ("", "no dot, doh or doq"),
             (
                 "dot = \"0.0.0.0:853\"\nserver_name = \"dns example\"",
                 "server_name",

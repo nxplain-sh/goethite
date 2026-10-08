@@ -301,18 +301,23 @@ fn encrypted_listeners_are_handed_over() {
         text.replace(
             "[[upstream]]",
             "[server.tls]\ncert = \"dns.crt\"\nkey = \"dns.key\"\n\
-             dot = \"127.0.0.1:0\"\ndoh = \"127.0.0.1:0\"\n\n[[upstream]]",
+             dot = \"127.0.0.1:0\"\ndoh = \"127.0.0.1:0\"\ndoq = \"127.0.0.1:0\"\n\n[[upstream]]",
         ),
     )
     .unwrap();
     let mut old = Running::start(&config);
-    let [dot, doh, _, _] = old.wait_for_logs([
+    let [dot, doh, doq, _, _] = old.wait_for_logs([
         "DNS over TLS listening",
         "DNS over HTTPS listening",
+        "DNS over QUIC listening",
         "listening udp=",
         "API listening",
     ]);
-    let (dot, doh) = (field(&dot, "address"), field(&doh, "address"));
+    let (dot, doh, doq) = (
+        field(&dot, "address"),
+        field(&doh, "address"),
+        field(&doq, "address"),
+    );
 
     signal("USR2", old.child.id());
     let started = old.wait_for_log("started the new goethite");
@@ -320,14 +325,16 @@ fn encrypted_listeners_are_handed_over() {
     let _stray = Stray(new_pid);
     // The new process logs these, and the old one says it handed over, in
     // no fixed order.
-    let [_, tls_after, https_after, _] = old.wait_for_logs([
+    let [_, tls_after, https_after, quic_after, _] = old.wait_for_logs([
         "took over the previous goethite's sockets",
         "DNS over TLS listening",
         "DNS over HTTPS listening",
+        "DNS over QUIC listening",
         "answering in place of the previous goethite",
     ]);
     assert_eq!(field(&tls_after, "address"), dot);
     assert_eq!(field(&https_after, "address"), doh);
+    assert_eq!(field(&quic_after, "address"), doq);
     for addr in [&dot, &doh] {
         TcpStream::connect(addr.parse::<SocketAddr>().unwrap()).unwrap();
     }

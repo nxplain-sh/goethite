@@ -52,8 +52,8 @@ export function Clients() {
 			</div>
 			<p className="muted">
 				A client is a device or network, known by its addresses or its client IDs. A query belongs to the
-				client whose ID it carries (over DNS over TLS or HTTPS), or else to the client with the most specific
-				matching address; its group decides the filtering.
+				client whose ID it carries (over DNS over TLS, HTTPS or QUIC), or else to the client with the most
+				specific matching address; its group decides the filtering.
 			</p>
 			<ErrorNotice error={clients.error ?? groups.error} />
 			<div className="panel">
@@ -164,7 +164,7 @@ function ClientFields({ stored, reload }: { stored: Client | undefined; reload: 
 				hint={
 					invalidIds.length > 0
 						? `Not a client ID: ${invalidIds.join(', ')}. Use lowercase letters, digits and hyphens, not at either end.`
-						: `Names the device over DNS over TLS or HTTPS, on any network: one per line, ${count(ids.length)} of up to 16.`
+						: `Names the device over DNS over TLS, HTTPS or QUIC, on any network: one per line, ${count(ids.length)} of up to 16.`
 				}
 			/>
 			{ids.length > 0 && invalidIds.length === 0 ? <ClientIdUse id={ids[0] ?? ''} encrypted={encrypted} /> : null}
@@ -200,6 +200,7 @@ function ClientIdUse({ id, encrypted }: { id: string; encrypted: Status['encrypt
 	const host = encrypted.server_name ?? 'your-server'
 	const https = encrypted.doh[0]
 	const tls = encrypted.dot[0]
+	const quic = encrypted.doq[0]
 	const httpsPort = https === undefined || port(https) === '443' ? '' : `:${port(https)}`
 	return (
 		<div className="subform" role="note" aria-label="Using the client ID">
@@ -220,11 +221,18 @@ function ClientIdUse({ id, encrypted }: { id: string; encrypted: Status['encrypt
 						</dd>
 					</>
 				)}
+				{quic === undefined || encrypted.server_name == null ? null : (
+					<>
+						<dt>DNS over QUIC</dt>
+						<dd className="mono">{`quic://${id}.${encrypted.server_name}${port(quic) === '853' ? '' : `:${port(quic)}`}`}</dd>
+					</>
+				)}
 			</dl>
 			{encrypted.server_name == null ? (
 				<p className="hint">
 					With <span className="mono">server_name</span> set in <span className="mono">[server.tls]</span>,
-					DNS over TLS can carry the ID too, as <span className="mono">{`${id}.<server name>`}</span>.
+					DNS over TLS and QUIC can carry the ID too, as{' '}
+					<span className="mono">{`${id}.<server name>`}</span>.
 				</p>
 			) : null}
 		</div>

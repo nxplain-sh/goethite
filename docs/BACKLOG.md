@@ -103,6 +103,10 @@ Phase 3's scope shipped in v0.3.0. These items came up along the way.
 ## Phase 4: v0.4
 
 - **[P4] EDNS padding (RFC 7830 / RFC 8467)** for DoT, DoH and DoQ, both server and upstream.
+- **[P4] DoQ address validation tokens.** Every new DoQ connection costs a Retry round trip;
+  NEW_TOKEN tokens would let returning clients skip it, but quinn keeps their replay protection
+  in its `bloom` feature (another dependency).
+- **[later] DoH over HTTP/3,** on the QUIC stack DoQ already uses.
 - **[P4] DoH behind a reverse proxy:** plain HTTP from configured trusted proxies, with the
   client address from `X-Forwarded-For` or `Forwarded`, for setups where a web server owns port
   443.

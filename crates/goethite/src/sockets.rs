@@ -8,8 +8,8 @@
 //!
 //! - `dns-udp-<n>-<i>` and `dns-tcp-<n>` for the `n`th `[server] listen`
 //!   address;
-//! - `dns-dot-<n>` and `dns-doh-<n>` for the `n`th `[server.tls] dot` and
-//!   `doh` address;
+//! - `dns-dot-<n>`, `dns-doh-<n>` and `dns-doq-<n>` for the `n`th
+//!   `[server.tls] dot`, `doh` and `doq` address;
 //! - `api-<n>` for the `n`th `[api] listen` address;
 //! - `cluster` for the cluster listener.
 //!
@@ -107,6 +107,15 @@ impl Sockets {
         };
         let dot = encrypted("dns-dot", &server.dot)?;
         let doh = encrypted("dns-doh", &server.doh)?;
+        let doq = server
+            .doq
+            .iter()
+            .enumerate()
+            .map(|(n, &addr)| {
+                let fd = take(&format!("dns-doq-{n}"))?;
+                Ok(UdpSocket::from(checked(fd, Type::DGRAM, addr)?))
+            })
+            .collect::<Result<Vec<_>>>()?;
         let mut api = Vec::new();
         if config.api.enabled {
             for (n, &addr) in config.api.listen.iter().enumerate() {
@@ -128,8 +137,8 @@ impl Sockets {
                 "a socket handed over is not in the config file any more; closing it"
             );
         }
-        let dns =
-            Listeners::from_sockets(addresses, dot, doh).context("the DNS sockets handed over")?;
+        let dns = Listeners::from_sockets(addresses, dot, doh, doq)
+            .context("the DNS sockets handed over")?;
         Self::new(dns, api, cluster)
     }
 
@@ -146,6 +155,9 @@ impl Sockets {
         }
         for (n, listener) in dns.doh().iter().enumerate() {
             named.push((format!("dns-doh-{n}"), duplicate(listener)?));
+        }
+        for (n, socket) in dns.doq().iter().enumerate() {
+            named.push((format!("dns-doq-{n}"), duplicate(socket)?));
         }
         for (n, listener) in api.iter().enumerate() {
             named.push((format!("api-{n}"), duplicate(listener)?));
@@ -351,7 +363,7 @@ mod tests {
         let config: Config = toml::from_str(
             "[server]\nlisten = \"127.0.0.1:0\"\nudp_sockets = 1\n\
              [server.tls]\ncert = \"c\"\nkey = \"k\"\n\
-             dot = \"127.0.0.1:0\"\ndoh = [\"127.0.0.1:0\", \"127.0.0.1:0\"]\n\
+             dot = \"127.0.0.1:0\"\ndoh = [\"127.0.0.1:0\", \"127.0.0.1:0\"]\ndoq = \"127.0.0.1:0\"\n\
              [[upstream]]\naddress = \"192.0.2.1\"\n[api]\nenabled = false\n",
         )
         .unwrap();
@@ -364,7 +376,8 @@ mod tests {
                 "dns-tcp-0",
                 "dns-dot-0",
                 "dns-doh-0",
-                "dns-doh-1"
+                "dns-doh-1",
+                "dns-doq-0"
             ]
         );
         let given = bound
@@ -373,7 +386,10 @@ mod tests {
             .collect();
         let mut adopted = Sockets::adopt(&config, given).unwrap();
         let dns = adopted.take_dns().unwrap();
-        assert_eq!((dns.dot().len(), dns.doh().len()), (1, 2));
+        assert_eq!(
+            (dns.dot().len(), dns.doh().len(), dns.doq().len()),
+            (1, 2, 1)
+        );
 
         // A DNS over HTTPS listener gone missing needs a restart.
         let given = bound

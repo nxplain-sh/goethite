@@ -67,6 +67,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "parse_doq"
+path = "fuzz_targets/parse_doq.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "parse_list"
 path = "fuzz_targets/parse_list.rs"
 test = false

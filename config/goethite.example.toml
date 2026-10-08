@@ -42,7 +42,7 @@ ipv4_prefix = 32       # clients in the same /32 share a limit (each address)
 ipv6_prefix = 64       # clients in the same /64 share a limit
 max_clients = 65536    # client networks tracked at once
 
-# DNS over TLS and DNS over HTTPS for clients, with a certificate for the name
+# DNS over TLS, HTTPS and QUIC for clients, with a certificate for the name
 # devices use (and *.<that name>, for client IDs in the server name). Read at
 # startup and again on SIGHUP. Encrypted connections count against the TCP
 # connection limits above. See the site's "Encrypted DNS" page.
@@ -52,6 +52,7 @@ max_clients = 65536    # client networks tracked at once
 # server_name = "dns.example"   # anna-phone.dns.example carries a client ID
 # dot = ["0.0.0.0:853", "[::]:853"]
 # doh = ["0.0.0.0:443", "[::]:443"]   # https://dns.example/dns-query
+# doq = ["0.0.0.0:853", "[::]:853"]   # UDP; quic://dns.example
 # Reachable from the internet? Answer encrypted queries only with a known
 # client ID, so goethite is no open resolver.
 # require_client_id = true

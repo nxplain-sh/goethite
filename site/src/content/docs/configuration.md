@@ -43,20 +43,22 @@ Loopback clients are never limited.
 
 ### `[server.tls]`
 
-DNS over TLS and DNS over HTTPS for clients; see [Encrypted DNS](../encrypted-dns/). Without this
-table, neither is served.
+DNS over TLS, HTTPS and QUIC for clients; see [Encrypted DNS](../encrypted-dns/). Without this
+table, none is served.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `cert`, `key` | required | PEM files: the certificate chain and its private key. Read before goethite drops its privileges, and again on `SIGHUP`. Relative paths are relative to the config file. |
 | `dot` | none | Addresses for DNS over TLS, usually port 853: one or a list, at most 16. |
 | `doh` | none | Addresses for DNS over HTTPS, usually port 443: one or a list, at most 16. Queries go to `/dns-query`. |
-| `server_name` | unset | The name devices use, such as `"dns.example"`. With it, a TLS server name one label below it (`anna-phone.dns.example`) carries a client ID; the certificate should then cover `*.dns.example` too. |
-| `require_client_id` | `false` | Answer only DoT and DoH queries that carry a known client ID; others get `REFUSED`. Turn it on when the listeners are reachable from the internet. |
+| `doq` | none | Addresses for DNS over QUIC, usually UDP port 853: one or a list, at most 16. |
+| `server_name` | unset | The name devices use, such as `"dns.example"`. With it, a TLS server name one label below it (`anna-phone.dns.example`) carries a client ID over DoT and DoQ; the certificate should then cover `*.dns.example` too. |
+| `require_client_id` | `false` | Answer only DoT, DoH and DoQ queries that carry a known client ID; others get `REFUSED`. Turn it on when the listeners are reachable from the internet. |
 
-At least one of `dot` and `doh` is required. No TCP address may be used twice across `[server]`,
-`[server.tls]`, `[api]` and `[cluster]`. Encrypted connections count against
-`max_tcp_connections` and `max_tcp_connections_per_client`.
+At least one of `dot`, `doh` and `doq` is required. No TCP address may be used twice across
+`[server]`, `[server.tls]`, `[api]` and `[cluster]`, nor a UDP address across `[server] listen`
+and `doq`. Encrypted connections, QUIC ones included, count against `max_tcp_connections` and
+`max_tcp_connections_per_client`.
 
 ## `[[upstream]]`
 

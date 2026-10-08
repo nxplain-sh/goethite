@@ -97,11 +97,13 @@ pub enum Protocol {
     Dot,
     /// DNS over HTTPS (RFC 8484).
     Doh,
+    /// DNS over QUIC (RFC 9250).
+    Doq,
 }
 
 impl Protocol {
     /// Every protocol, for metrics.
-    pub const ALL: [Self; 4] = [Self::Udp, Self::Tcp, Self::Dot, Self::Doh];
+    pub const ALL: [Self; 5] = [Self::Udp, Self::Tcp, Self::Dot, Self::Doh, Self::Doq];
 
     fn code(self) -> u8 {
         match self {
@@ -109,6 +111,7 @@ impl Protocol {
             Self::Tcp => 1,
             Self::Dot => 2,
             Self::Doh => 3,
+            Self::Doq => 4,
         }
     }
 
@@ -118,6 +121,7 @@ impl Protocol {
             1 => Self::Tcp,
             2 => Self::Dot,
             3 => Self::Doh,
+            4 => Self::Doq,
             _ => return None,
         })
     }
@@ -129,6 +133,7 @@ impl Protocol {
             Self::Tcp => "tcp",
             Self::Dot => "dot",
             Self::Doh => "doh",
+            Self::Doq => "doq",
         }
     }
 }

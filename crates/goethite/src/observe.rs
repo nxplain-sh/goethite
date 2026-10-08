@@ -60,6 +60,7 @@ impl QueryObserver for Observer {
             Transport::Tcp => Protocol::Tcp,
             Transport::Tls => Protocol::Dot,
             Transport::Https => Protocol::Doh,
+            Transport::Quic => Protocol::Doq,
         };
         self.metrics.observe(outcome, protocol, event.elapsed);
         if outcome == QueryOutcome::Local && event.query.question.name == self.health {

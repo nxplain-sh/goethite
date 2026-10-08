@@ -776,6 +776,39 @@ mod serving {
         )
     }
 
+    /// Asks `name` over DNS over QUIC, as `server_name`, on a stream of its
+    /// own, trusting any certificate.
+    fn doq_ask(addr: SocketAddr, server_name: &str, name: &str) -> Message {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let provider = Arc::new(rustls::crypto::ring::default_provider());
+            let mut config = rustls::ClientConfig::builder_with_provider(Arc::clone(&provider))
+                .with_protocol_versions(&[&rustls::version::TLS13])
+                .unwrap()
+                .dangerous()
+                .with_custom_certificate_verifier(Arc::new(TrustAll(provider)))
+                .with_no_client_auth();
+            config.alpn_protocols = vec![b"doq".to_vec()];
+            let crypto = quinn::crypto::rustls::QuicClientConfig::try_from(config).unwrap();
+            let mut endpoint = quinn::Endpoint::client("127.0.0.1:0".parse().unwrap()).unwrap();
+            endpoint.set_default_client_config(quinn::ClientConfig::new(Arc::new(crypto)));
+            let connection = endpoint.connect(addr, server_name).unwrap().await.unwrap();
+            let (mut send, mut recv) = connection.open_bi().await.unwrap();
+            let wire = query(name);
+            let mut frame = u16::try_from(wire.len()).unwrap().to_be_bytes().to_vec();
+            frame.extend_from_slice(&wire);
+            send.write_all(&frame).await.unwrap();
+            send.finish().unwrap();
+            let stream = recv.read_to_end(65_537).await.unwrap();
+            connection.close(0_u32.into(), b"");
+            endpoint.wait_idle().await;
+            Message::from_vec(&stream[2..]).unwrap()
+        })
+    }
+
     trait ReadWrite: Read + Write {}
     impl<T: Read + Write> ReadWrite for T {}
 
@@ -799,7 +832,8 @@ mod serving {
         let first = write_certificate(&cert, &key);
         let config = format!(
             "[server]\nlisten = \"127.0.0.1:0\"\n\n[server.tls]\ncert = {:?}\nkey = {:?}\n\
-             server_name = \"dns.example\"\ndot = \"127.0.0.1:0\"\ndoh = \"127.0.0.1:0\"\n\n\
+             server_name = \"dns.example\"\ndot = \"127.0.0.1:0\"\ndoh = \"127.0.0.1:0\"\n\
+             doq = \"127.0.0.1:0\"\n\n\
              [[upstream]]\naddress = \"{}\"\n",
             cert.display().to_string(),
             key.display().to_string(),
@@ -808,6 +842,7 @@ mod serving {
         let mut server = Running::start_config("dns_over_tls_and_https", &config);
         let dot = field(&server.find_log("DNS over TLS listening"), "address");
         let doh = field(&server.find_log("DNS over HTTPS listening"), "address");
+        let doq = field(&server.find_log("DNS over QUIC listening"), "address");
         let api_addr = field(&server.find_log("API listening"), "address");
 
         let (status, kid) = api(
@@ -846,7 +881,11 @@ mod serving {
         let (status, _, _) = request(&mut stream, "dns.example", "GET /nothing HTTP/1.1", b"");
         assert_eq!(status, 404);
 
-        // Both reach the query log, as the client with the ID.
+        // DNS over QUIC, named by the server name.
+        let answer = doq_ask(doq, "kid.dns.example", "goethite.test.");
+        assert_eq!(answer.answers.len(), 1);
+
+        // All reach the query log, as the client with the ID.
         let mut seen = Vec::new();
         for _ in 0..100 {
             let (_, page) = api(api_addr, "GET /api/v1/querylog HTTP/1.1", "");
@@ -861,7 +900,7 @@ mod serving {
                     )
                 })
                 .collect();
-            if seen.len() >= 3 {
+            if seen.len() >= 4 {
                 break;
             }
             std::thread::sleep(Duration::from_millis(50));
@@ -871,7 +910,11 @@ mod serving {
                 .filter(|(p, id)| p == protocol && id.as_deref() == Some(kid.as_str()))
                 .count()
         };
-        assert_eq!((by_kid("dot"), by_kid("doh")), (2, 1), "{seen:?}");
+        assert_eq!(
+            (by_kid("dot"), by_kid("doh"), by_kid("doq")),
+            (2, 1, 1),
+            "{seen:?}"
+        );
 
         // A renewed certificate is served after SIGHUP, to new connections.
         let renewed = write_certificate(&cert, &key);

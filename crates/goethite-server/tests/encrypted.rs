@@ -1,13 +1,14 @@
-//! End-to-end tests of DNS over TLS and DNS over HTTPS on ephemeral ports,
-//! with a self-signed certificate for `dns.example` and `*.dns.example`.
+//! End-to-end tests of DNS over TLS, HTTPS and QUIC on ephemeral ports, with
+//! a self-signed certificate for `dns.example` and `*.dns.example`.
 //!
 //! Queries are built and responses checked with hickory-proto, and spoken
-//! to with tokio-rustls and hyper's clients.
+//! to with tokio-rustls, hyper's and quinn's clients.
 
 #![allow(
     clippy::unwrap_used,
     clippy::indexing_slicing,
     clippy::arithmetic_side_effects,
+    clippy::panic,
     reason = "test helpers; the no-panic rules cover non-test code"
 )]
 
@@ -63,6 +64,7 @@ impl Seen {
 struct Running {
     dot: SocketAddr,
     doh: SocketAddr,
+    doq: SocketAddr,
     roots: Arc<rustls::RootCertStore>,
     seen: Arc<Seen>,
     stats: Arc<ServerStats>,
@@ -122,6 +124,7 @@ fn start_with(configure: impl FnOnce(&mut ServerConfig)) -> Running {
     let mut config = ServerConfig::new(vec!["127.0.0.1:0".parse().unwrap()]);
     config.dot = vec!["127.0.0.1:0".parse().unwrap()];
     config.doh = vec!["127.0.0.1:0".parse().unwrap()];
+    config.doq = vec!["127.0.0.1:0".parse().unwrap()];
     config.server_name = Some("dns.example".into());
     configure(&mut config);
     let (tls, roots) = certificate();
@@ -132,6 +135,7 @@ fn start_with(configure: impl FnOnce(&mut ServerConfig)) -> Running {
         .with_observer(Arc::clone(&seen) as Arc<dyn QueryObserver>);
     let dot = server.dot_local_addrs().unwrap()[0];
     let doh = server.doh_local_addrs().unwrap()[0];
+    let doq = server.doq_local_addrs().unwrap()[0];
     let stats = server.stats();
     let (stop, stopped) = oneshot::channel::<()>();
     let task = tokio::spawn(server.run(async {
@@ -140,6 +144,7 @@ fn start_with(configure: impl FnOnce(&mut ServerConfig)) -> Running {
     Running {
         dot,
         doh,
+        doq,
         roots,
         seen,
         stats,
@@ -519,6 +524,220 @@ async fn only_known_client_ids_are_answered_when_required() {
             .await;
         refused(&answer.message());
     }
+
+    let (_endpoint, known) = quic(&server, "tv.dns.example").await;
+    assert_test_answer(&doq_exchange(&known, &wire).await, 0);
+    let (_other, unknown) = quic(&server, "dns.example").await;
+    refused(&doq_exchange(&unknown, &wire).await);
+    server.shutdown().await;
+}
+
+/// A DNS over QUIC connection for `server_name`, and its endpoint.
+async fn quic(server: &Running, server_name: &str) -> (quinn::Endpoint, quinn::Connection) {
+    let (endpoint, connection) = try_quic(server, server_name).await;
+    (endpoint, connection.unwrap())
+}
+
+/// A DNS over QUIC connection attempt for `server_name`, and its endpoint.
+async fn try_quic(
+    server: &Running,
+    server_name: &str,
+) -> (
+    quinn::Endpoint,
+    Result<quinn::Connection, quinn::ConnectionError>,
+) {
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let mut config = rustls::ClientConfig::builder_with_provider(provider)
+        .with_protocol_versions(&[&rustls::version::TLS13])
+        .unwrap()
+        .with_root_certificates(Arc::clone(&server.roots))
+        .with_no_client_auth();
+    config.alpn_protocols = vec![b"doq".to_vec()];
+    let crypto = quinn::crypto::rustls::QuicClientConfig::try_from(config).unwrap();
+    let mut endpoint = quinn::Endpoint::client("127.0.0.1:0".parse().unwrap()).unwrap();
+    endpoint.set_default_client_config(quinn::ClientConfig::new(Arc::new(crypto)));
+    let connecting = endpoint.connect(server.doq, server_name).unwrap();
+    let connection = timeout(WAIT, connecting).await.unwrap();
+    (endpoint, connection)
+}
+
+/// Sends `wire` on a stream of its own, as RFC 9250 says, and reads the
+/// answer.
+async fn doq_exchange(connection: &quinn::Connection, wire: &[u8]) -> Message {
+    let (mut send, mut recv) = connection.open_bi().await.unwrap();
+    let mut frame = u16::try_from(wire.len()).unwrap().to_be_bytes().to_vec();
+    frame.extend_from_slice(wire);
+    send.write_all(&frame).await.unwrap();
+    send.finish().unwrap();
+    let stream = timeout(WAIT, recv.read_to_end(65_537))
+        .await
+        .unwrap()
+        .unwrap();
+    let len = usize::from(u16::from_be_bytes([stream[0], stream[1]]));
+    assert_eq!(len, stream.len() - 2);
+    Message::from_vec(&stream[2..]).unwrap()
+}
+
+/// The DoQ error code the server closed `connection` with.
+async fn closed_with(connection: &quinn::Connection) -> u64 {
+    match timeout(WAIT, connection.closed()).await.unwrap() {
+        quinn::ConnectionError::ApplicationClosed(close) => close.error_code.into_inner(),
+        other => panic!("closed by {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn doq_answers_each_stream_and_reads_the_client_id() {
+    let server = start();
+    let (_endpoint, connection) = quic(&server, "kid-1.dns.example").await;
+    assert_eq!(
+        connection
+            .handshake_data()
+            .unwrap()
+            .downcast::<quinn::crypto::rustls::HandshakeData>()
+            .unwrap()
+            .protocol,
+        Some(b"doq".to_vec())
+    );
+    // Several queries at once, each on its own stream, all with ID 0.
+    let wire = query(0, "goethite.test.");
+    let answers = exchange_at_once(&connection, &wire, 5).await;
+    for answer in &answers {
+        assert_test_answer(answer, 0);
+    }
+    assert_eq!(
+        server.seen.last(),
+        (Transport::Quic, Some("cl_kid".to_owned()))
+    );
+
+    let (_other, plain) = quic(&server, "dns.example").await;
+    assert_test_answer(&doq_exchange(&plain, &wire).await, 0);
+    assert_eq!(server.seen.last(), (Transport::Quic, None));
+
+    // Shutting down closes connections without an error.
+    server.shutdown().await;
+    assert_eq!(closed_with(&connection).await, 0);
+}
+
+/// `count` exchanges of `wire` on `connection` at once.
+async fn exchange_at_once(
+    connection: &quinn::Connection,
+    wire: &[u8],
+    count: usize,
+) -> Vec<Message> {
+    let mut tasks = tokio::task::JoinSet::new();
+    for _ in 0..count {
+        let connection = connection.clone();
+        let wire = wire.to_vec();
+        tasks.spawn(async move { doq_exchange(&connection, &wire).await });
+    }
+    let mut answers = Vec::new();
+    while let Some(answer) = tasks.join_next().await {
+        answers.push(answer.unwrap());
+    }
+    answers
+}
+
+#[tokio::test]
+async fn doq_protocol_errors_close_the_connection() {
+    let server = start();
+    let wire = query(0, "goethite.test.");
+    let mut numbered = query(7, "goethite.test.");
+    let mut short = vec![0, 40];
+    short.extend_from_slice(&wire);
+    // Too short for a DNS header: a malformed query with a header gets
+    // FORMERR instead, as over TCP.
+    let garbage = b"\x00\x00\x01".to_vec();
+    // A nonzero ID, a length that does not match, and no DNS at all.
+    let cases: [Vec<u8>; 3] = [
+        {
+            let mut frame = u16::try_from(numbered.len())
+                .unwrap()
+                .to_be_bytes()
+                .to_vec();
+            frame.append(&mut numbered);
+            frame
+        },
+        short,
+        {
+            let mut frame = u16::try_from(garbage.len()).unwrap().to_be_bytes().to_vec();
+            frame.extend_from_slice(&garbage);
+            frame
+        },
+    ];
+    for (case, stream) in cases.iter().enumerate() {
+        let (_endpoint, connection) = quic(&server, "dns.example").await;
+        let (mut send, _recv) = connection.open_bi().await.unwrap();
+        send.write_all(stream).await.unwrap();
+        send.finish().unwrap();
+        assert_eq!(
+            closed_with(&connection).await,
+            2,
+            "case {case}: DOQ_PROTOCOL_ERROR"
+        );
+    }
+    // The server allows no unidirectional stream, so a client cannot open
+    // one (a client that did anyway would break QUIC's stream limit).
+    let (_endpoint, connection) = quic(&server, "dns.example").await;
+    let uni = timeout(Duration::from_millis(300), connection.open_uni()).await;
+    assert!(uni.is_err(), "a unidirectional stream opened");
+    assert_test_answer(&doq_exchange(&connection, &wire).await, 0);
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn doq_shares_the_connection_limits() {
+    let server = start_with(|config| {
+        config.max_tcp_connections = 1;
+        config.max_tcp_connections_per_client = 1;
+    });
+    let (_first, connection) = quic(&server, "dns.example").await;
+    assert_test_answer(
+        &doq_exchange(&connection, &query(0, "goethite.test.")).await,
+        0,
+    );
+    // The one slot is taken, by QUIC as by TCP.
+    let (_second, refused) = try_quic(&server, "dns.example").await;
+    assert!(
+        matches!(refused, Err(quinn::ConnectionError::ConnectionClosed(_))),
+        "{refused:?}"
+    );
+    assert!(TcpStream::connect(server.dot).await.is_ok());
+    assert_eq!(
+        server
+            .stats
+            .tcp_refused
+            .load(std::sync::atomic::Ordering::Relaxed),
+        1
+    );
+    // Once it is closed, the slot is free again.
+    connection.close(0_u32.into(), b"");
+    drop(connection);
+    let mut freed = false;
+    for _ in 0..50 {
+        if try_quic(&server, "dns.example").await.1.is_ok() {
+            freed = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(freed, "the slot was not freed");
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn idle_doq_connections_are_closed() {
+    let server = start_with(|config| config.tls_idle_timeout = Duration::from_millis(300));
+    let (_endpoint, connection) = quic(&server, "dns.example").await;
+    assert_test_answer(
+        &doq_exchange(&connection, &query(0, "goethite.test.")).await,
+        0,
+    );
+    let closed = timeout(WAIT, connection.closed()).await.unwrap();
+    assert!(
+        matches!(closed, quinn::ConnectionError::TimedOut),
+        "{closed:?}"
+    );
     server.shutdown().await;
 }
 

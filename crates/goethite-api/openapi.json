@@ -2411,7 +2411,7 @@
             "items": {
               "type": "string"
             },
-            "description": "Client IDs, such as `anna-phone`: over DNS over TLS or HTTPS a\ndevice can name itself, in the server name (`anna-phone.dns.example`)\nor the DNS over HTTPS path (`/dns-query/anna-phone`), wherever it is.\nA known ID decides which client asked before the address does. 1 to\n63 lowercase letters, digits and hyphens, not at either end."
+            "description": "Client IDs, such as `anna-phone`: over DNS over TLS, HTTPS or QUIC a\ndevice can name itself, in the server name (`anna-phone.dns.example`)\nor the DNS over HTTPS path (`/dns-query/anna-phone`), wherever it is.\nA known ID decides which client asked before the address does. 1 to\n63 lowercase letters, digits and hyphens, not at either end."
           },
           "managed_by": {
             "$ref": "#/components/schemas/ManagedBy",
@@ -2579,10 +2579,11 @@
       },
       "EncryptedStatus": {
         "type": "object",
-        "description": "How clients reach this node over DNS over TLS and HTTPS.",
+        "description": "How clients reach this node over DNS over TLS, HTTPS and QUIC.",
         "required": [
           "dot",
-          "doh"
+          "doh",
+          "doq"
         ],
         "properties": {
           "doh": {
@@ -2591,6 +2592,13 @@
               "type": "string"
             },
             "description": "The addresses DNS over HTTPS is served on, at the path `/dns-query`\n(or `/dns-query/<client ID>`)."
+          },
+          "doq": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The addresses DNS over QUIC is served on."
           },
           "dot": {
             "type": "array",
@@ -3048,7 +3056,8 @@
           "udp",
           "tcp",
           "dot",
-          "doh"
+          "doh",
+          "doq"
         ]
       },
       "QueryEntry": {
@@ -3524,7 +3533,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/EncryptedStatus",
-                "description": "DNS over TLS and HTTPS, if this node serves them."
+                "description": "DNS over TLS, HTTPS and QUIC, if this node serves them."
               },
               {
                 "type": "null"

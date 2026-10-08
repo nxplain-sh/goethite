@@ -196,7 +196,7 @@ pub struct ClientSpec {
     /// address decides which client asked. May be empty for a client known
     /// by its client IDs only.
     pub addresses: Vec<String>,
-    /// Client IDs, such as `anna-phone`: over DNS over TLS or HTTPS a
+    /// Client IDs, such as `anna-phone`: over DNS over TLS, HTTPS or QUIC a
     /// device can name itself, in the server name (`anna-phone.dns.example`)
     /// or the DNS over HTTPS path (`/dns-query/anna-phone`), wherever it is.
     /// A known ID decides which client asked before the address does. 1 to

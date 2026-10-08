@@ -172,7 +172,7 @@ pub struct Status {
     /// This node's cluster, if it is in one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cluster: Option<ClusterStatus>,
-    /// DNS over TLS and HTTPS, if this node serves them.
+    /// DNS over TLS, HTTPS and QUIC, if this node serves them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub encrypted: Option<EncryptedStatus>,
     /// What is wrong with this node, in words, such as filtering running
@@ -242,7 +242,7 @@ pub struct CacheStatus {
     pub misses: u64,
 }
 
-/// How clients reach this node over DNS over TLS and HTTPS.
+/// How clients reach this node over DNS over TLS, HTTPS and QUIC.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct EncryptedStatus {
     /// The name clients reach it by, such as `dns.example`, if configured:
@@ -254,6 +254,8 @@ pub struct EncryptedStatus {
     /// The addresses DNS over HTTPS is served on, at the path `/dns-query`
     /// (or `/dns-query/<client ID>`).
     pub doh: Vec<String>,
+    /// The addresses DNS over QUIC is served on.
+    pub doq: Vec<String>,
 }
 
 /// The query log.

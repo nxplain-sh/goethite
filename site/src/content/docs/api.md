@@ -136,7 +136,7 @@ api 'http://127.0.0.1:8053/api/v1/audit?limit=20'
 ## Metrics
 
 `/metrics` serves Prometheus metrics: queries by outcome and protocol (`udp`, `tcp`, `dot`,
-`doh`), a latency histogram, rate-limited and refused queries, failed TLS handshakes and rejected
+`doh`, `doq`), a latency histogram, rate-limited and refused queries, failed TLS handshakes and rejected
 DNS over HTTPS requests, the cache, upstream health, the filter and the query log. It
 needs the token once one is configured:
 

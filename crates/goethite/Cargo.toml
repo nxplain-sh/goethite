@@ -45,6 +45,7 @@ rustix.workspace = true
 hickory-proto.workspace = true
 proptest.workspace = true
 hyper = { workspace = true, features = ["server"] }
+quinn.workspace = true
 rcgen.workspace = true
 
 [lints]

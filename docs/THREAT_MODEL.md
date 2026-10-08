@@ -16,7 +16,7 @@ Resolution pipeline: client identification → policy/group lookup → local rew
 response.
 
 Today (Phase 4 in progress) goethite has UDP and TCP listeners with per-client rate and
-connection limits, DNS over TLS and HTTPS listeners with client IDs, forwarding over plain DNS,
+connection limits, DNS over TLS, HTTPS and QUIC listeners with client IDs, forwarding over plain DNS,
 DoT or DoH with failover, DNS rebinding protection, a cache, filtering per client group from local
 and downloaded lists, a query log, a REST API with a web UI and a TUI, a two-node cluster with
 replicated configuration and a floating IP, and zero-downtime upgrades.
@@ -25,7 +25,7 @@ replicated configuration and a floating IP, and zero-downtime upgrades.
 
 | #  | Boundary                                      | Direction          | Notes                                                       |
 | -- | --------------------------------------------- | ------------------ | ----------------------------------------------------------- |
-| B1 | Clients → DNS listeners (UDP/TCP 53, DoT, DoH; DoQ later) | untrusted → node | Highest-volume, fully attacker-controlled input; DoT and DoH may face the internet |
+| B1 | Clients → DNS listeners (UDP/TCP 53, DoT, DoH, DoQ) | untrusted → node | Highest-volume, fully attacker-controlled input; DoT, DoH and DoQ may face the internet |
 | B2 | Resolver → upstream resolvers / authoritative servers | node → untrusted | Responses are untrusted; off-path spoofing is possible over plain DNS |
 | B3 | Filter list downloads                          | untrusted → node   | Large, third-party-controlled content, parsed on the node    |
 | B4 | Admins → REST API / web UI / TUI / Terraform   | semi-trusted → node | Authenticated (Phase 2), can change all behaviour           |
@@ -107,9 +107,10 @@ for that phase and not implemented yet. Phases follow the roadmap in
 | Unsafe code adopting systemd's sockets (B6)  | One `unsafe` block, in the binary, takes the descriptors systemd passes: only when `LISTEN_PID` is this process, before any file is opened, each number exactly once, each checked to be a socket of the expected kind and address before use; every library crate forbids `unsafe` | 3 | done |
 | Filtering failure taking the network down   | Fail open by default: a store that cannot be opened is replaced by one in memory seeded from the config file (the file is left alone), an unbuildable filter leaves the previous one (or none at startup), and a failed check answers that query unfiltered; every case is reported in status, UIs and metrics. `[filter] on_failure = "closed"` refuses to start or answers SERVFAIL instead ([ADR 0011](adr/0011-fail-open.md)) | 3 | done |
 | Forged answers from upstream (B2)           | Recursion with full DNSSEC validation                                                              | 4     | planned |
-| Snooping of client queries on the network (B1) | DoT and DoH listeners with rustls (ring, TLS 1.2 and 1.3, no 0-RTT) and the operator's certificate, reloadable on SIGHUP; DoQ next ([ADR 0015](adr/0015-encrypted-dns-serving.md)) | 4 | partial |
-| Resource exhaustion through TLS and HTTP (B1) | DoT and DoH share the TCP connection limits (256 in total, 16 per client); 10 s for the handshake, 30 s idle; DoH heads of at most 64 KiB sent within 10 s, bodies of at most 65,535 bytes within the idle time, 64 HTTP/2 streams per connection; the request parsers are fuzzed (`parse_doh`). DoT and DoH queries are not rate limited per client yet (backlog) | 4 | partial |
-| Open resolver on the internet through DoT/DoH (B1) | `require_client_id` refuses encrypted queries without a known client ID. Client IDs are names, not secrets: DoT carries them in the clear in the TLS server name; the DoH path keeps them encrypted. Off by default, documented for internet-facing setups | 4 | done |
+| Snooping of client queries on the network (B1) | DoT, DoH and DoQ listeners with rustls (ring; TLS 1.2 and 1.3, 1.3 only for QUIC; no 0-RTT) and the operator's certificate, reloadable on SIGHUP ([ADR 0015](adr/0015-encrypted-dns-serving.md), [ADR 0016](adr/0016-dns-over-quic.md)) | 4 | done |
+| Resource exhaustion through TLS, HTTP and QUIC (B1) | DoT, DoH and DoQ share the TCP connection limits (256 in total, 16 per client); 10 s for the handshake, 30 s idle; DoH heads of at most 64 KiB sent within 10 s, bodies of at most 65,535 bytes within the idle time, 64 HTTP/2 streams per connection; DoQ: 64 bidirectional streams and no unidirectional ones, a 256 KiB receive window, one message per stream, protocol errors close the connection. The request parsers are fuzzed (`parse_doh`, `parse_doq`). Encrypted queries are not rate limited per client yet (backlog) | 4 | partial |
+| Spoofed QUIC handshakes filling connection slots (B1) | A DoQ client's address is validated with a Retry before its connection takes a slot, as TCP's handshake does; QUIC's anti-amplification limit bounds what goethite sends to an unvalidated address | 4 | done |
+| Open resolver on the internet through DoT/DoH/DoQ (B1) | `require_client_id` refuses encrypted queries without a known client ID. Client IDs are names, not secrets: DoT and DoQ carry them in the clear in the TLS server name; the DoH path keeps them encrypted. Off by default, documented for internet-facing setups | 4 | done |
 | Upstream learning client identity           | ODoH (Oblivious DoH)                                                                               | 4     | planned |
 | Tampered releases (B7)                      | Reproducible, signed builds. SBOM.                                                                  | 5     | planned |
 | Residual design and implementation flaws    | External security review                                                                           | 5     | planned |

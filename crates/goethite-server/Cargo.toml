@@ -16,6 +16,7 @@ goethite-resolver.workspace = true
 http-body-util.workspace = true
 hyper = { workspace = true, features = ["server"] }
 hyper-util = { workspace = true, features = ["server", "server-auto", "tokio"] }
+quinn.workspace = true
 rustls.workspace = true
 socket2.workspace = true
 thiserror.workspace = true

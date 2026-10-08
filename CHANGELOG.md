@@ -18,9 +18,13 @@ configuration format.
   addresses. A device names itself in the DNS over HTTPS path (`/dns-query/anna-phone`) or the
   TLS server name (`anna-phone.dns.example`), so its filtering follows it off the network. The
   web UI shows the values to set a device up with; the TUI lists them.
+- **DNS over QUIC for clients** (RFC 9250): `doq` addresses in `[server.tls]`, with client IDs in
+  the server name. A client's address is checked with a QUIC Retry before its connection counts
+  against the connection limits, which it shares with TCP, DoT and DoH; 0-RTT is refused. DoQ
+  sockets are handed over on upgrades too.
 - `require_client_id` in `[server.tls]` answers only encrypted queries with a known client ID, for
   listeners reachable from the internet.
-- The query log and metrics tell `dot` and `doh` apart from `udp` and `tcp`; the web UI's query
+- The query log and metrics tell `dot`, `doh` and `doq` apart from `udp` and `tcp`; the web UI's query
   log marks encrypted queries. New metrics: `goethite_tls_handshake_failures_total` and
   `goethite_https_rejected_total`. `/api/v1/status` reports the encrypted listeners.
 

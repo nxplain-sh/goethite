@@ -48,8 +48,8 @@ set. If several clients' networks contain an address, the longest one wins, so a
 own client inside a network that is another client. Clients goethite does not know are in the
 default group. The query log and the statistics show clients by ID.
 
-Client IDs name a device over [DNS over TLS and HTTPS](../encrypted-dns/#client-ids), wherever it
-is: a query that carries a known ID belongs to that client before its address is looked at. IDs
+Client IDs name a device over [DNS over TLS, HTTPS and QUIC](../encrypted-dns/#client-ids),
+wherever it is: a query that carries a known ID belongs to that client before its address is looked at. IDs
 are 1 to 63 lowercase letters, digits and hyphens, at most 16 per client, and unique. A client
 needs an address or an ID, or both.
 

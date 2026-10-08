@@ -255,7 +255,8 @@ fn serve_api(
     Ok(())
 }
 
-/// How clients reach this node over DNS over TLS and HTTPS, for the API.
+/// How clients reach this node over DNS over TLS, HTTPS and QUIC, for the
+/// API.
 fn encrypted_status(config: &Config) -> Option<goethite_api::EncryptedStatus> {
     let server = config.server_config();
     config
@@ -266,5 +267,6 @@ fn encrypted_status(config: &Config) -> Option<goethite_api::EncryptedStatus> {
             server_name: server.server_name,
             dot: server.dot.iter().map(ToString::to_string).collect(),
             doh: server.doh.iter().map(ToString::to_string).collect(),
+            doq: server.doq.iter().map(ToString::to_string).collect(),
         })
 }
