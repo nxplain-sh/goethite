@@ -468,6 +468,9 @@ pub(crate) struct QueryLogParams {
     /// Only entries at or after this time (RFC 3339).
     #[param(value_type = Option<String>, format = DateTime)]
     since: Option<Timestamp>,
+    /// Only entries before this time (RFC 3339).
+    #[param(value_type = Option<String>, format = DateTime)]
+    until: Option<Timestamp>,
 }
 
 /// Searches the query log, newest first. A search looks at no more than
@@ -487,6 +490,7 @@ pub(crate) async fn get_querylog(
         name: params.name,
         outcome: params.outcome,
         since: params.since,
+        until: params.until,
     };
     let store = Arc::clone(&api.store);
     Ok(Json(blocking(move || store.search_queries(&search)).await?))

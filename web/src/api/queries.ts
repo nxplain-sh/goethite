@@ -34,11 +34,22 @@ export const clientsQuery = queryOptions({
 export interface LogSearch {
 	name?: string | undefined
 	outcome?: QueryOutcome | undefined
+	/** A client address, client ID or group ID. */
+	client?: string | undefined
+	/** Entries at or after this time (RFC 3339). */
+	since?: string | undefined
+	/** Entries before this time (RFC 3339). */
+	until?: string | undefined
 	before?: number | undefined
 }
 
 /** How many entries one page shows. */
 export const LOG_PAGE = 500
+
+/** Whether a search shows the newest entries as they come. */
+export function isLive(search: LogSearch): boolean {
+	return search.before === undefined && search.until === undefined
+}
 
 export const queryLogQuery = (search: LogSearch) =>
 	queryOptions({
@@ -51,12 +62,16 @@ export const queryLogQuery = (search: LogSearch) =>
 							limit: LOG_PAGE,
 							...(search.name === undefined ? {} : { name: search.name }),
 							...(search.outcome === undefined ? {} : { outcome: search.outcome }),
+							...(search.client === undefined ? {} : { client: search.client }),
+							...(search.since === undefined ? {} : { since: search.since }),
+							...(search.until === undefined ? {} : { until: search.until }),
 							...(search.before === undefined ? {} : { before: search.before }),
 						},
 					},
 				}),
 			),
-		// The newest page follows the log live; older pages stand still.
-		refetchInterval: search.before === undefined ? 3_000 : false,
+		// The newest page follows the log live; older pages and closed time
+		// windows stand still.
+		refetchInterval: isLive(search) ? 3_000 : false,
 		placeholderData: (previous) => previous,
 	})

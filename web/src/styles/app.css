@@ -267,6 +267,60 @@ code,
 	color: var(--on-cached);
 }
 
+/* A tile that opens its queries presses like a button. */
+a.stat {
+	color: inherit;
+	text-decoration: none;
+}
+
+a.stat:hover {
+	transform: translate(3px, 3px);
+	box-shadow: var(--shadow-small);
+}
+
+a.stat:active {
+	transform: translate(5px, 5px);
+	box-shadow: var(--shadow-pressed);
+}
+
+a.stat:focus-visible {
+	outline: none;
+	box-shadow: var(--shadow), var(--focus);
+}
+
+/* The time range switch. */
+.segmented {
+	display: flex;
+	margin-left: auto;
+	border: var(--border);
+	box-shadow: var(--shadow-small);
+	background: var(--panel);
+}
+
+.segmented a {
+	padding: var(--space-2) var(--space-4);
+	font-weight: 700;
+	text-decoration: none;
+	color: var(--ink);
+}
+
+.segmented a + a {
+	border-left: var(--border);
+}
+
+.segmented a[aria-current='true'] {
+	background: var(--accent);
+	color: var(--on-accent);
+}
+
+.segmented a:hover {
+	background: var(--cached);
+}
+
+.segmented a[aria-current='true']:hover {
+	background: var(--accent);
+}
+
 .muted {
 	color: var(--muted);
 }
@@ -428,25 +482,43 @@ code,
 	border-top: var(--border);
 }
 
-/* The hourly chart. */
+/* The queries chart (TanStack Charts); ticks in the mono face. */
 
-.chart {
-	width: 100%;
-	height: 140px;
+.chart-host {
 	display: block;
+	font-family: var(--font-mono);
+	font-size: 0.75rem;
+	color: var(--ink);
+	cursor: pointer;
 }
 
-.chart .all {
-	fill: var(--muted);
+/* What TanStack Charts would set inline, which the CSP refuses. */
+.chart-host svg.ts-chart {
+	display: block;
+	overflow: visible;
 }
 
-.chart .blocked {
-	fill: var(--blocked);
+.chart-host:focus-visible {
+	outline: none;
+	box-shadow: var(--focus);
 }
 
-.chart .axis {
-	stroke: var(--ink);
-	stroke-width: 3;
+/* Where the chart goes while it loads. */
+.chart-placeholder {
+	height: 200px;
+}
+
+/* Its tooltip reads these variables; it may sit outside the chart. */
+.chart-tooltip {
+	--ts-chart-tooltip-background: var(--panel);
+	--ts-chart-tooltip-color: var(--ink);
+	--ts-chart-tooltip-border: var(--border);
+	--ts-chart-tooltip-border-radius: 0;
+	--ts-chart-tooltip-shadow: var(--shadow-small);
+	--ts-chart-tooltip-padding: var(--space-2) var(--space-3);
+	--ts-chart-tooltip-font: 500 0.85rem var(--font-ui);
+	--ts-chart-tooltip-active-row-border-radius: 0;
+	--ts-chart-tooltip-active-row-shadow: none;
 }
 
 .legend {
@@ -472,6 +544,74 @@ code,
 
 .legend .blocked::before {
 	background: var(--blocked);
+}
+
+.legend .hint {
+	margin-left: auto;
+	color: var(--muted);
+}
+
+.legend .hint::before {
+	display: none;
+}
+
+/* Top lists: a link per name, and a quick rule. */
+.table.top td.name a {
+	color: inherit;
+	text-decoration-thickness: 2px;
+}
+
+/* A quick rule's question or result, under its entry. */
+.table.top tr:has(+ .follow-up) td {
+	border-bottom: none;
+}
+
+.table.top .follow-up td {
+	padding-bottom: var(--space-2);
+	text-align: right;
+}
+
+.quick-rule {
+	display: inline-flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: flex-end;
+	gap: var(--space-2);
+}
+
+/* Filters set from elsewhere, on the query log. */
+.chips {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--space-2);
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.chip {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-2);
+	padding: var(--space-1) var(--space-1) var(--space-1) var(--space-3);
+	border: var(--border);
+	background: var(--cached);
+	font-weight: 700;
+	font-size: 0.9rem;
+}
+
+.chip-remove {
+	border: 2px solid var(--ink);
+	background: var(--panel);
+	font: inherit;
+	line-height: 1;
+	padding: 0 var(--space-2);
+	cursor: pointer;
+}
+
+.chip-remove:focus-visible {
+	outline: none;
+	box-shadow: var(--focus);
 }
 
 /* Login */

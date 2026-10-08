@@ -1,6 +1,8 @@
+import { Link } from '@tanstack/react-router'
 import type { ReactNode } from 'react'
 
 import { type ClusterStatus, describe, type QueryOutcome, type Status } from '../api/client'
+import type { LogSearch } from '../api/queries'
 import { clock } from '../format'
 
 const OUTCOME: Record<QueryOutcome, { label: string; tone: string }> = {
@@ -62,24 +64,33 @@ export function Panel({ title, children }: { title: string; children: ReactNode 
 	)
 }
 
-/** One number with a label. */
+/** One number with a label; with `search`, a link to those queries. */
 export function Stat({
 	label,
 	value,
 	detail,
 	tone,
+	search,
 }: {
 	label: string
 	value: string
 	detail?: string
 	tone?: 'blocked' | 'cached'
+	search?: LogSearch
 }) {
-	return (
-		<div className={`stat ${tone ?? ''}`}>
+	const body = (
+		<>
 			<div className="label">{label}</div>
 			<div className="value">{value}</div>
 			{detail === undefined ? null : <div className="detail">{detail}</div>}
-		</div>
+		</>
+	)
+	return search === undefined ? (
+		<div className={`stat ${tone ?? ''}`}>{body}</div>
+	) : (
+		<Link to="/querylog" search={search} className={`stat ${tone ?? ''}`}>
+			{body}
+		</Link>
 	)
 }
 

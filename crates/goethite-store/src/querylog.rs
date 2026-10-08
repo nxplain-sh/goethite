@@ -417,6 +417,8 @@ pub struct Search {
     pub outcome: Option<QueryOutcome>,
     /// Only entries at or after this time.
     pub since: Option<Timestamp>,
+    /// Only entries before this time.
+    pub until: Option<Timestamp>,
 }
 
 /// A page of search results.
@@ -547,10 +549,15 @@ impl Store {
         let limit = search.limit.clamp(1, MAX_PAGE);
         let name = search.name.as_ref().map(|name| name.to_ascii_lowercase());
         let since = search.since.map(key_floor);
+        // Keys sort by time, so a time is a bound on keys too.
+        let upper = search
+            .before
+            .unwrap_or(u64::MAX)
+            .min(search.until.map_or(u64::MAX, key_floor));
         let mut entries = Vec::new();
         let mut scanned = 0_usize;
         let mut last = None;
-        for row in table.range(..search.before.unwrap_or(u64::MAX))?.rev() {
+        for row in table.range(..upper)?.rev() {
             let (key, value) = row?;
             let id = key.value();
             if since.is_some_and(|since| id < since) {

@@ -73,10 +73,12 @@ export function Shell() {
 				)}
 			</header>
 			<nav className="nav" aria-label="Pages">
-				<Link to="/" activeOptions={{ exact: true }}>
+				<Link to="/" activeOptions={{ exact: true, includeSearch: false }}>
 					Dashboard
 				</Link>
-				<Link to="/querylog">Query log</Link>
+				<Link to="/querylog" activeOptions={{ includeSearch: false }}>
+					Query log
+				</Link>
 				<Link to="/lists">Lists</Link>
 				<Link to="/rules">Rules</Link>
 				<Link to="/groups">Groups</Link>

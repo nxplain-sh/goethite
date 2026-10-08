@@ -38,6 +38,13 @@ configuration format.
 - Web UI tests: Vitest for the forms' logic, and Playwright end-to-end tests against a real
   goethite, in CI.
 
+- **An interactive dashboard**: 24 hours, 7 days or 30 days; tiles, top names and clients and the
+  chart's bars open the query log filtered to them; the chart (now TanStack Charts) shows each
+  bar's counts on hover or keyboard focus; a top blocked name can be allowed, and a top name
+  blocked, from the dashboard. The query log shows client and time filters as chips, and dates
+  for entries from other days.
+- `until` on `GET /api/v1/querylog`: only entries before a time, for time windows with `since`.
+
 - **A Terraform and OpenTofu provider**, in its own repository
   ([nxplain-sh/terraform-provider-goethite](https://github.com/nxplain-sh/terraform-provider-goethite)):
   lists, rules, groups, clients, schedules and settings, generated from goethite's OpenAPI

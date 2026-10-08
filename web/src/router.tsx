@@ -12,7 +12,7 @@ import { OUTCOMES } from './api/client'
 import type { LogSearch } from './api/queries'
 import { safeRedirect } from './auth'
 import { Shell } from './components/Shell'
-import { Dashboard } from './pages/Dashboard'
+import { Dashboard, RANGES, type RangeId } from './pages/Dashboard'
 import { Login } from './pages/Login'
 import { QueryLog } from './pages/QueryLog'
 
@@ -20,12 +20,26 @@ import { QueryLog } from './pages/QueryLog'
 // valid: the router merges their result over the raw query parameters, so a
 // key left out would keep its raw, unchecked value.
 
+/** A non-empty string of at most 255 characters, if `value` is one. */
+function text(value: unknown): string | undefined {
+	return typeof value === 'string' && value !== '' ? value.slice(0, 255) : undefined
+}
+
+/** `value`, if it is a time the API can read. */
+function time(value: unknown): string | undefined {
+	return typeof value === 'string' && value.length <= 64 && !Number.isNaN(Date.parse(value))
+		? value
+		: undefined
+}
+
 function logSearch(search: Record<string, unknown>): LogSearch {
-	const name = search['name']
 	const before = Number(search['before'])
 	return {
-		name: typeof name === 'string' && name !== '' ? name.slice(0, 255) : undefined,
+		name: text(search['name']),
 		outcome: OUTCOMES.find((candidate) => candidate === search['outcome']),
+		client: text(search['client']),
+		since: time(search['since']),
+		until: time(search['until']),
 		before: Number.isSafeInteger(before) && before > 0 ? before : undefined,
 	}
 }
@@ -65,7 +79,12 @@ const appRoute = createRoute({
 const dashboardRoute = createRoute({
 	getParentRoute: () => appRoute,
 	path: '/',
-	component: Dashboard,
+	validateSearch: (search: Record<string, unknown>): { range?: RangeId | undefined } => ({
+		range: RANGES.find((range) => range.id === search['range'])?.id,
+	}),
+	component: function DashboardPage() {
+		return <Dashboard range={dashboardRoute.useSearch().range} />
+	},
 })
 
 const queryLogRoute = createRoute({

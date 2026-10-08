@@ -1,11 +1,12 @@
 # web/
 
 The goethite web UI: a single-page app built with Vite, React, TypeScript (strict), TanStack
-Router, Query, Table and Virtual. It talks only to the REST API, through a typed client generated
+Router, Query, Table, Virtual and Charts. It talks only to the REST API, through a typed client generated
 from [`openapi.json`](../crates/goethite-api/openapi.json). The build in `dist/` is embedded into
 the `goethite` binary and served next to the API with a strict Content Security Policy. See
-[ADR 0002](../docs/adr/0002-tanstack-router-spa-embedded.md) and
-[ADR 0009](../docs/adr/0009-web-ui-serving.md).
+[ADR 0002](../docs/adr/0002-tanstack-router-spa-embedded.md),
+[ADR 0009](../docs/adr/0009-web-ui-serving.md) and
+[ADR 0017](../docs/adr/0017-dashboard-charts.md).
 
 ```sh
 npm ci --ignore-scripts

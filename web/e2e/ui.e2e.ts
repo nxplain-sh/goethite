@@ -1,8 +1,10 @@
 // The web UI end to end, against a real goethite (see e2e/serve.mjs).
 
+import { createSocket } from 'node:dgram'
+
 import { type APIRequestContext, expect, type Page, test } from '@playwright/test'
 
-import { DOH_PORT, DOQ_PORT, DOT_PORT, TOKEN } from './settings.mjs'
+import { DNS_PORT, DOH_PORT, DOQ_PORT, DOT_PORT, TOKEN } from './settings.mjs'
 
 const auth = { Authorization: `Bearer ${TOKEN}` }
 
@@ -276,4 +278,107 @@ test('explains what keeps a schedule or a group from being deleted', async ({ pa
 	await apiCall(request, 'DELETE', `/api/v1/clients/${client.id}`)
 	await apiCall(request, 'DELETE', `/api/v1/groups/${group.id}`)
 	await apiCall(request, 'DELETE', `/api/v1/schedules/${schedule.id}`)
+})
+
+/** Asks goethite for `name` over UDP, as a client would, and waits for the answer. */
+async function ask(name: string): Promise<void> {
+	const labels = name
+		.split('.')
+		.map((label) => Buffer.concat([Buffer.from([label.length]), Buffer.from(label)]))
+	const query = Buffer.concat([
+		Buffer.from([0x12, 0x34, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0]),
+		...labels,
+		Buffer.from([0, 0, 1, 0, 1]),
+	])
+	const socket = createSocket('udp4')
+	try {
+		await new Promise<void>((resolve, reject) => {
+			const timer = setTimeout(() => reject(new Error(`no answer for ${name}`)), 5_000)
+			socket.once('message', () => {
+				clearTimeout(timer)
+				resolve()
+			})
+			socket.once('error', reject)
+			socket.send(query, DNS_PORT, '127.0.0.1')
+		})
+	} finally {
+		socket.close()
+	}
+}
+
+test('the dashboard: a range, its queries, a bar and a quick rule', async ({ page, request }) => {
+	const problems: string[] = []
+	page.on('console', (message) => {
+		if (message.type() === 'error') problems.push(message.text())
+	})
+	const block = await apiCall(request, 'POST', '/api/v1/rules', { rule: '||e2e-dash.example^' })
+	for (const name of ['e2e-dash.example', 'e2e-dash.example', 'goethite.test']) {
+		await ask(name)
+	}
+
+	// The statistics follow within moments.
+	const topBlocked = page.getByRole('region', { name: 'Top blocked' })
+	await expect(async () => {
+		await page.goto('/')
+		await expect(topBlocked.getByRole('link', { name: 'e2e-dash.example' })).toBeVisible({ timeout: 1_000 })
+	}).toPass({ timeout: 20_000 })
+
+	// A range is part of the address; the tabs stay where they are.
+	await page.getByRole('navigation', { name: 'Time range' }).getByRole('link', { name: '7 days' }).click()
+	await expect(page).toHaveURL(/range=7d/)
+	await expect(page.getByText('Queries, 7 days')).toBeVisible()
+	await expect(page.getByRole('region', { name: 'Queries per 6 hours' })).toBeVisible()
+	await expect(page.getByRole('link', { name: 'Dashboard' })).toHaveAttribute('aria-current', 'page')
+
+	// A tile opens its queries, over the same range.
+	await page.getByRole('link', { name: /^Blocked/ }).click()
+	await expect(page).toHaveURL(/\/querylog\?.*outcome=blocked/)
+	const filters = page.getByRole('list', { name: 'Filters' })
+	await expect(filters).toContainText('Since')
+	await expect(page.getByRole('row').filter({ hasText: 'e2e-dash.example' }).first()).toBeVisible()
+	await page.getByRole('button', { name: /Remove the filter Since/ }).click()
+	await expect(filters).toHaveCount(0)
+	await expect(page.getByLabel('Answer')).toHaveValue('blocked')
+
+	// A name in a top list opens its queries too.
+	await page.goto('/')
+	await topBlocked.getByRole('link', { name: 'e2e-dash.example' }).click()
+	await expect(page).toHaveURL(/name=e2e-dash\.example/)
+	await expect(page.getByLabel('Name contains')).toHaveValue('e2e-dash.example')
+
+	// A bar shows its counts, and opens its time window.
+	await page.goto('/')
+	const chart = page.getByRole('img', { name: 'Queries over time' })
+	// Near its top: the blocked part sits in front lower down.
+	const bar = chart.locator('rect[data-ts-key^="queries:"]').last()
+	await bar.hover({ position: { x: 8, y: 2 } })
+	await expect(page.locator('.chart-tooltip')).toContainText('Queries')
+	await bar.click({ position: { x: 8, y: 2 } })
+	await expect(page).toHaveURL(/\/querylog\?.*since=.*until=/)
+	await expect(filters).toContainText('until')
+	await expect(page.getByRole('row').filter({ hasText: 'e2e-dash.example' }).first()).toBeVisible()
+
+	// A quick rule, after asking.
+	await page.goto('/')
+	await topBlocked
+		.getByRole('row')
+		.filter({ has: page.getByRole('link', { name: 'e2e-dash.example' }) })
+		.getByRole('button', { name: 'Allow', exact: true })
+		.click()
+	const question = topBlocked.getByRole('group', { name: 'Allow e2e-dash.example?' })
+	await expect(question).toContainText('@@||e2e-dash.example^')
+	await question.getByRole('button', { name: 'Allow e2e-dash.example' }).click()
+	await expect(topBlocked.getByRole('status')).toContainText('@@||e2e-dash.example^')
+	const rules: { id: string; spec: { rule: string; enabled?: boolean } }[] = await apiCall(
+		request,
+		'GET',
+		'/api/v1/rules',
+	)
+	const allow = rules.find((rule) => rule.spec.rule === '@@||e2e-dash.example^')
+	expect(allow?.spec.enabled).toBe(true)
+
+	await apiCall(request, 'DELETE', `/api/v1/rules/${allow?.id}`)
+	await apiCall(request, 'DELETE', `/api/v1/rules/${block.id}`)
+	// The chart ran under the strict Content Security Policy throughout.
+	expect(problems).toEqual([])
 })

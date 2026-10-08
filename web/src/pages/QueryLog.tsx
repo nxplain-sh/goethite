@@ -5,14 +5,14 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 import { type FormEvent, useRef, useState } from 'react'
 
 import { OUTCOMES, type QueryEntry, type QueryOutcome } from '../api/client'
-import { LOG_PAGE, type LogSearch, clientsQuery, queryLogQuery } from '../api/queries'
+import { LOG_PAGE, type LogSearch, clientsQuery, isLive, queryLogQuery } from '../api/queries'
 import { ErrorNotice, OutcomeBadge, outcomeLabel } from '../components/ui'
-import { clock, count, millis } from '../format'
+import { count, dateTime, millis, moment } from '../format'
 
 const features = tableFeatures({})
 const column = createColumnHelper<typeof features, QueryEntry>()
 const columns = column.columns([
-	column.accessor('time', { header: 'Time', cell: (info) => clock(info.getValue()) }),
+	column.accessor('time', { header: 'Time', cell: (info) => moment(info.getValue()) }),
 	column.accessor('client', { header: 'Client', cell: (info) => <ClientName entry={info.row.original} /> }),
 	column.accessor('qtype', { header: 'Type' }),
 	column.accessor('name', { header: 'Name' }),
@@ -88,8 +88,9 @@ export function QueryLog({ search }: { search: LogSearch }) {
 		getItemKey: (index) => rows[index]?.id ?? index,
 		overscan: 12,
 	})
-	const live = search.before === undefined
+	const live = isLive(search)
 	const older = log.data?.next
+	const clientNames = useQuery(clientsQuery).data
 
 	const go = (next: LogSearch) => void navigate({ search: next })
 	const submit = (event: FormEvent) => {
@@ -106,6 +107,20 @@ export function QueryLog({ search }: { search: LogSearch }) {
 	const latest = () => {
 		const { before: _, ...rest } = search
 		go(rest)
+	}
+	// Filters set from elsewhere, such as the dashboard, each removable.
+	const filters: { label: string; without: LogSearch }[] = []
+	if (search.client !== undefined) {
+		const { client, before: _, ...rest } = search
+		filters.push({ label: `Client: ${clientNames?.get(client) ?? client}`, without: rest })
+	}
+	if (search.since !== undefined || search.until !== undefined) {
+		const { since, until, before: _, ...rest } = search
+		const from = since === undefined ? 'the start' : dateTime(since)
+		filters.push({
+			label: until === undefined ? `Since ${from}` : `From ${from} until ${dateTime(until)}`,
+			without: rest,
+		})
 	}
 
 	return (
@@ -142,6 +157,23 @@ export function QueryLog({ search }: { search: LogSearch }) {
 					Search
 				</button>
 			</form>
+			{filters.length === 0 ? null : (
+				<ul className="chips" aria-label="Filters">
+					{filters.map((filter) => (
+						<li key={filter.label} className="chip">
+							{filter.label}
+							<button
+								type="button"
+								className="chip-remove"
+								aria-label={`Remove the filter ${filter.label}`}
+								onClick={() => go(filter.without)}
+							>
+								×
+							</button>
+						</li>
+					))}
+				</ul>
+			)}
 			<ErrorNotice error={log.error} />
 			<div className="log">
 				<div className="log-scroll" ref={scroller}>

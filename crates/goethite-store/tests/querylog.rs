@@ -82,12 +82,16 @@ fn logs_searches_and_counts() {
     let log = store
         .start_query_log(QueryLogConfig::default(), vec!["9.9.9.9:853".into()])
         .unwrap();
+    // A few milliseconds apart, so time windows can tell them apart.
+    let pause = || std::thread::sleep(Duration::from_millis(5));
     log.record(event(
         "www.example.com.",
         "192.0.2.1",
         QueryOutcome::Forwarded,
     ));
+    pause();
     log.record(event("x.ads.example.", "192.0.2.2", QueryOutcome::Blocked));
+    pause();
     log.record(event("www.example.com.", "192.0.2.1", QueryOutcome::Cached));
 
     let entries = wait_for(&store, &search(10), 3);
@@ -128,6 +132,23 @@ fn logs_searches_and_counts() {
         })
         .unwrap();
     assert_eq!((last.entries.len(), last.next), (0, None));
+    // A time window: before the newest entry's time, from the oldest's.
+    let window = store
+        .search_queries(&Search {
+            since: Some(entries[2].time),
+            until: Some(entries[0].time),
+            ..search(10)
+        })
+        .unwrap();
+    let ids: Vec<u64> = window.entries.iter().map(|entry| entry.id).collect();
+    assert_eq!(ids, [entries[1].id, entries[2].id]);
+    let none = store
+        .search_queries(&Search {
+            until: Some(entries[2].time),
+            ..search(10)
+        })
+        .unwrap();
+    assert_eq!(none.entries.len(), 0);
 
     let stats = log.stats(24);
     assert_eq!(stats.totals.queries, 3);

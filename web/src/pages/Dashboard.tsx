@@ -1,29 +1,67 @@
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Link, useNavigate } from '@tanstack/react-router'
+import { Suspense, lazy, useMemo, useState } from 'react'
 
-import type { ClusterStatus, StatsReport, Status } from '../api/client'
-import { clientsQuery, listsQuery, statsQuery, statusQuery } from '../api/queries'
+import type { ClusterStatus, Status } from '../api/client'
+import { type LogSearch, clientsQuery, listsQuery, statsQuery, statusQuery } from '../api/queries'
+import { saveRule } from '../api/resources'
+import { ErrorBoundary } from '../components/ErrorBoundary'
+import { type Bucket, buckets } from '../dashboard/buckets'
 import { ErrorNotice, Panel, Stat } from '../components/ui'
 import { bytes, count, dateTime, millis, percent } from '../format'
 
-const HOURS = 24
-const HOUR_MS = 3_600_000
+/** The time ranges the dashboard shows, and the size of each bar. */
+export const RANGES = [
+	{ id: '24h', label: '24 hours', short: '24 h', hours: 24, each: 1, per: 'hour' },
+	{ id: '7d', label: '7 days', short: '7 days', hours: 168, each: 6, per: '6 hours' },
+	{ id: '30d', label: '30 days', short: '30 days', hours: 720, each: 24, per: 'day' },
+] as const
 
-/** Totals, trends, top lists and the node's health. */
-export function Dashboard() {
-	const stats = useQuery(statsQuery(HOURS))
+export type RangeId = (typeof RANGES)[number]['id']
+
+/** Totals, trends, top lists and the node's health, over a time range. */
+export function Dashboard({ range: rangeId }: { range: RangeId | undefined }) {
+	const range = RANGES.find((candidate) => candidate.id === rangeId) ?? RANGES[0]
+	const stats = useQuery(statsQuery(range.hours))
 	const status = useQuery(statusQuery)
 	const lists = useQuery(listsQuery)
 	const clients = useQuery(clientsQuery)
+	const navigate = useNavigate()
 	const totals = stats.data?.totals
+	const from = stats.data?.from
+	// The query log over the same range, narrowed by `filter`.
+	const log = (filter: LogSearch): LogSearch => ({ ...(from === undefined ? {} : { since: from }), ...filter })
+	const cluster = (stats.data?.nodes?.length ?? 0) > 1 ? ', cluster' : ''
+	// Kept between renders: the chart redraws when its data changes.
+	const report = stats.data
+	const series = useMemo(
+		() => (report === undefined ? undefined : buckets(report, range.hours, range.each)),
+		[report, range],
+	)
 
 	return (
 		<div className="grid-page">
-			<h1 className="sr-only">Dashboard</h1>
+			<div className="page-head">
+				<h1 className="sr-only">Dashboard</h1>
+				<nav className="segmented" aria-label="Time range">
+					{RANGES.map((candidate) => (
+						<Link
+							key={candidate.id}
+							to="/"
+							search={candidate.id === '24h' ? {} : { range: candidate.id }}
+							aria-current={candidate.id === range.id ? 'true' : undefined}
+						>
+							{candidate.label}
+						</Link>
+					))}
+				</nav>
+			</div>
 			<ErrorNotice error={stats.error ?? lists.error} />
 			<div className="stats">
 				<Stat
-					label={(stats.data?.nodes?.length ?? 0) > 1 ? 'Queries, 24 h, cluster' : 'Queries, 24 h'}
+					label={`Queries, ${range.short}${cluster}`}
 					value={totals ? count(totals.queries) : '…'}
+					search={log({})}
 					{...(totals && totals.queries > 0
 						? { detail: `${millis(totals.elapsed_us / totals.queries)} average` }
 						: {})}
@@ -32,30 +70,61 @@ export function Dashboard() {
 					label="Blocked"
 					tone="blocked"
 					value={totals ? count(totals.blocked) : '…'}
+					search={log({ outcome: 'blocked' })}
 					{...(totals ? { detail: percent(totals.blocked, totals.queries) } : {})}
 				/>
 				<Stat
 					label="Cached"
 					tone="cached"
 					value={totals ? count(totals.cached) : '…'}
+					search={log({ outcome: 'cached' })}
 					{...(totals ? { detail: percent(totals.cached, totals.queries) } : {})}
 				/>
-				<Stat label="Forwarded" value={totals ? count(totals.forwarded) : '…'} />
+				<Stat
+					label="Forwarded"
+					value={totals ? count(totals.forwarded) : '…'}
+					search={log({ outcome: 'forwarded' })}
+				/>
 				<Stat
 					label="Failed"
 					value={totals ? count(totals.failed) : '…'}
+					search={log({ outcome: 'failed' })}
 					{...(totals ? { detail: `${count(totals.safe_search)} safe search` } : {})}
 				/>
 			</div>
-			{stats.data ? (
-				<Panel title="Queries per hour">
-					<HourChart report={stats.data} />
+			{series ? (
+				<Panel title={`Queries per ${range.per}`}>
+					<TimeChart
+						data={series}
+						range={range.label}
+						onOpen={(bucket) =>
+							void navigate({
+								to: '/querylog',
+								search: { since: bucket.start.toISOString(), until: bucket.end.toISOString() },
+							})
+						}
+					/>
 				</Panel>
 			) : null}
 			<div className="grid">
-				<TopPanel title="Top blocked" entries={stats.data?.top_blocked} />
-				<TopPanel title="Top names" entries={stats.data?.top_names} />
-				<TopPanel title="Top clients" entries={stats.data?.top_clients} names={clients.data} />
+				<TopPanel
+					title="Top blocked"
+					entries={stats.data?.top_blocked}
+					search={(key) => log({ name: host(key), outcome: 'blocked' })}
+					action={{ label: 'Allow', verb: 'Allow', rule: (name) => `@@||${name}^` }}
+				/>
+				<TopPanel
+					title="Top names"
+					entries={stats.data?.top_names}
+					search={(key) => log({ name: host(key) })}
+					action={{ label: 'Block', verb: 'Block', rule: (name) => `||${name}^` }}
+				/>
+				<TopPanel
+					title="Top clients"
+					entries={stats.data?.top_clients}
+					names={clients.data}
+					search={(key) => log({ client: key })}
+				/>
 			</div>
 			{(stats.data?.unreachable?.length ?? 0) > 0 ? (
 				<div className="notice">
@@ -78,61 +147,60 @@ function listNames(lists: { id: string; spec: { name: string } }[] | undefined):
 	return new Map((lists ?? []).map((list) => [list.id, list.spec.name]))
 }
 
-/** Queries and blocked queries for each of the last 24 hours. */
-function HourChart({ report }: { report: StatsReport }) {
-	const end = Date.parse(report.to)
-	const first = Math.floor(end / HOUR_MS) * HOUR_MS - (HOURS - 1) * HOUR_MS
-	const slots = Array.from({ length: HOURS }, () => ({ queries: 0, blocked: 0 }))
-	for (const point of report.hours) {
-		const slot = slots[Math.floor((Date.parse(point.start) - first) / HOUR_MS)]
-		if (slot) {
-			slot.queries = point.counters.queries
-			slot.blocked = point.counters.blocked
-		}
-	}
-	const max = Math.max(1, ...slots.map((slot) => slot.queries))
-	const width = 24
-	const height = 100
-	const bar = (value: number) => (value / max) * (height - 4)
+/** A name from the statistics without its final dot: `ads.example`. */
+function host(name: string): string {
+	return name.endsWith('.') ? name.slice(0, -1) : name
+}
+
+// The chart library loads after the rest of the dashboard.
+const QueriesChart = lazy(() => import('../components/QueriesChart'))
+
+/** The chart, with a summary for screen readers and a hint for everyone. */
+function TimeChart({ data, range, onOpen }: { data: Bucket[]; range: string; onOpen: (bucket: Bucket) => void }) {
+	const busiest = data.reduce<Bucket | undefined>(
+		(best, bucket) => (best === undefined || bucket.queries > best.queries ? bucket : best),
+		undefined,
+	)
+	const total = data.reduce((sum, bucket) => sum + bucket.queries, 0)
+	const description =
+		busiest === undefined || total === 0
+			? `No queries in the last ${range}.`
+			: `${count(total)} queries in the last ${range}; the busiest was ${busiest.title} with ${count(busiest.queries)}.`
 	return (
 		<>
-			<svg
-				className="chart"
-				viewBox={`0 0 ${HOURS * width} ${height}`}
-				preserveAspectRatio="none"
-				role="img"
-				aria-label={`Queries per hour over the last ${HOURS} hours; the busiest hour had ${count(max)}.`}
-			>
-				{slots.map((slot, index) => {
-					const x = index * width + 3
-					return (
-						<g key={index}>
-							<title>
-								{`${dateTime(new Date(first + index * HOUR_MS).toISOString())}: ${count(slot.queries)} queries, ${count(slot.blocked)} blocked`}
-							</title>
-							<rect className="all" x={x} y={height - bar(slot.queries)} width={width - 6} height={bar(slot.queries)} />
-							<rect className="blocked" x={x} y={height - bar(slot.blocked)} width={width - 6} height={bar(slot.blocked)} />
-						</g>
-					)
-				})}
-				<line className="axis" x1="0" y1={height} x2={HOURS * width} y2={height} />
-			</svg>
+			<ErrorBoundary fallback={<p className="muted">The chart cannot be shown: {description}</p>}>
+				<Suspense fallback={<div className="chart-placeholder" aria-busy="true" />}>
+					<QueriesChart data={data} description={description} onOpen={onOpen} />
+				</Suspense>
+			</ErrorBoundary>
 			<div className="legend">
 				<span className="all">All queries</span>
 				<span className="blocked">Blocked</span>
+				<span className="hint">Click a bar to see its queries.</span>
 			</div>
 		</>
 	)
+}
+
+/** What a top list's rows can do, besides opening the query log. */
+interface QuickRule {
+	label: string
+	verb: string
+	rule: (name: string) => string
 }
 
 function TopPanel({
 	title,
 	entries,
 	names,
+	search,
+	action,
 }: {
 	title: string
 	entries: { key: string; count: number }[] | undefined
 	names?: Map<string, string> | undefined
+	search: (key: string) => LogSearch
+	action?: QuickRule
 }) {
 	return (
 		<Panel title={title}>
@@ -141,18 +209,109 @@ function TopPanel({
 			) : entries.length === 0 ? (
 				<p className="muted">Nothing yet.</p>
 			) : (
-				<table className="table">
+				<table className="table top">
 					<tbody>
 						{entries.slice(0, 10).map((entry) => (
-							<tr key={entry.key}>
-								<td className="num">{count(entry.count)}</td>
-								<td className="name">{names?.get(entry.key) ?? entry.key}</td>
-							</tr>
+							<TopRow
+								key={entry.key}
+								count={entry.count}
+								label={names?.get(entry.key) ?? host(entry.key)}
+								search={search(entry.key)}
+								name={host(entry.key)}
+								action={action}
+							/>
 						))}
 					</tbody>
 				</table>
 			)}
 		</Panel>
+	)
+}
+
+/**
+ * One entry of a top list: its count and a link to its queries, and its
+ * quick rule, asked for in a row of its own so the columns keep their
+ * widths.
+ */
+function TopRow({
+	count: hits,
+	label,
+	search,
+	name,
+	action,
+}: {
+	count: number
+	label: string
+	search: LogSearch
+	name: string
+	action: QuickRule | undefined
+}) {
+	const queryClient = useQueryClient()
+	const [asking, setAsking] = useState(false)
+	const rule = action?.rule(name) ?? ''
+	const add = useMutation({
+		mutationFn: () =>
+			saveRule(undefined, { rule, enabled: true, comment: 'Added from the dashboard.', managed_by: 'api' }),
+		onSuccess: async () => {
+			await queryClient.invalidateQueries({ queryKey: ['rules'] })
+			await queryClient.invalidateQueries({ queryKey: ['status'] })
+		},
+	})
+	const columns = action === undefined ? 2 : 3
+	return (
+		<>
+			<tr>
+				<td className="num">{count(hits)}</td>
+				<td className="name">
+					<Link to="/querylog" search={search}>
+						{label}
+					</Link>
+				</td>
+				{action === undefined ? null : (
+					<td className="actions-cell">
+						{add.isSuccess ? (
+							<span className="badge ok">ADDED</span>
+						) : (
+							<button
+								type="button"
+								className="button small"
+								aria-expanded={asking}
+								onClick={() => setAsking(!asking)}
+							>
+								{action.label}
+							</button>
+						)}
+					</td>
+				)}
+			</tr>
+			{action !== undefined && (asking || add.isSuccess) ? (
+				<tr className="follow-up">
+					<td colSpan={columns}>
+						{add.isSuccess ? (
+							<span role="status">
+								Added the rule <Link to="/rules">{rule}</Link>.
+							</span>
+						) : (
+							<div className="quick-rule" role="group" aria-label={`${action.verb} ${name}?`}>
+								<span className="mono">{rule}</span>
+								<button
+									type="button"
+									className="button small primary"
+									disabled={add.isPending}
+									onClick={() => add.mutate()}
+								>
+									{`${action.verb} ${name}`}
+								</button>
+								<button type="button" className="button small" onClick={() => setAsking(false)}>
+									Cancel
+								</button>
+							</div>
+						)}
+						<ErrorNotice error={add.error} />
+					</td>
+				</tr>
+			) : null}
+		</>
 	)
 }
 
@@ -210,7 +369,11 @@ function Filter({ status, names }: { status: Status; names: Map<string, string> 
 							const problem = list.error ?? list.download_error
 							return (
 								<tr key={list.id}>
-									<td>{names.get(list.id) ?? list.id}</td>
+									<td>
+										<Link to="/lists/$id" params={{ id: list.id }}>
+											{names.get(list.id) ?? list.id}
+										</Link>
+									</td>
 									<td className="num">{list.rules == null ? '–' : count(list.rules)}</td>
 									<td>
 										{problem == null ? (

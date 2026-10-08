@@ -1355,6 +1355,16 @@
               "type": "string",
               "format": "date-time"
             }
+          },
+          {
+            "name": "until",
+            "in": "query",
+            "description": "Only entries before this time (RFC 3339).",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
           }
         ],
         "responses": {

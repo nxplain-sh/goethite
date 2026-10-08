@@ -2133,6 +2133,8 @@ export interface operations {
                 outcome?: components["schemas"]["QueryOutcome"];
                 /** @description Only entries at or after this time (RFC 3339). */
                 since?: string;
+                /** @description Only entries before this time (RFC 3339). */
+                until?: string;
             };
             header?: never;
             path?: never;

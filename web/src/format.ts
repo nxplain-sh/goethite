@@ -28,6 +28,22 @@ export function clock(iso: string): string {
 	return new Date(iso).toLocaleTimeString([], { hour12: false })
 }
 
+/** 14:03:59 today, Oct 6, 14:03:59 on other days. */
+export function moment(iso: string): string {
+	const date = new Date(iso)
+	if (date.toDateString() === new Date().toDateString()) {
+		return clock(iso)
+	}
+	return date.toLocaleString([], {
+		month: 'short',
+		day: 'numeric',
+		hour: '2-digit',
+		minute: '2-digit',
+		second: '2-digit',
+		hour12: false,
+	})
+}
+
 /** Oct 8, 14:03 */
 export function dateTime(iso: string): string {
 	return new Date(iso).toLocaleString([], {

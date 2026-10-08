@@ -29,15 +29,20 @@ the network; otherwise the token crosses it in clear text.
 
 ## Screens
 
-- **Dashboard**: the last 24 hours (queries, blocked, cached, forwarded, failed, average answer
-  time), queries per hour, the top blocked names, names and clients, each upstream's health, the
-  filter and its lists, and the node's cache and query log. The header shows whether filtering is
-  on, and pauses it for 10 minutes or resumes it. In a [cluster](../ha/), the counts are both
+- **Dashboard**: the last 24 hours, 7 days or 30 days (queries, blocked, cached, forwarded,
+  failed, average answer time), a chart of queries per hour, 6 hours or day, the top blocked
+  names, names and clients, each upstream's health, the filter and its lists, and the node's cache
+  and query log. Everything leads to its queries: a tile opens the query log for that answer, a
+  name or client in a top list for that name or client, and a bar of the chart (hover or focus it
+  for its counts) for its time window. A top blocked name can be allowed, and a top name blocked,
+  in two clicks: that adds a custom rule. The range is part of the address. The header shows
+  whether filtering is on, and pauses it for 10 minutes or resumes it. In a [cluster](../ha/), the counts are both
   nodes' together, the header shows this node's role and its peer, a Cluster panel says whether
   changes are possible, and cluster problems appear at the top.
 - **Query log**: the newest queries, following new ones live, with the client, the answer and
   what decided it (the rule, a CNAME, the upstream). Search by name and by answer, and page back
-  through older entries. Searches are part of the address, so they can be bookmarked.
+  through older entries. Filters set from the dashboard (a client, a time window) show as chips
+  to remove. Searches are part of the address, so they can be bookmarked.
 - **Lists**: every filter list with its rule count and any problem, and a button to download
   them all again now. A new list can join the default group at once, so it filters straight
   away.

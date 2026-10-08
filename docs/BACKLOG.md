@@ -126,6 +126,12 @@ Phase 3's scope shipped in v0.3.0. These items came up along the way.
   (only connection-limited).
 - **[P4] Differential fuzzing** of `HickoryCodec` against the fast-path decoder, once it exists.
 
+- **[P4] Scalar's AI SDK advisory.** `npm audit` reports a low-severity resource consumption
+  issue (GHSA-866g-f22w-33x8) in `@ai-sdk/provider-utils`, which `@scalar/api-reference` pulls in
+  for its chat agent; goethite turns the agent off. Update Scalar once it ships a fixed version.
+- **[later] Ask TanStack Charts for a CSP-friendly root.** Its SVG root carries an inline style,
+  which goethite strips (ADR 0017); an option to leave it out would remove the workaround.
+
 ## Phase 5: 1.0
 
 - **[P5] Private fuzzing before the first release.** The weekly fuzz job runs in the public
