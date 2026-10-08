@@ -852,6 +852,8 @@ async fn recursion_asks_over_udp_and_tcp() {
         port: server.addr.port(),
         ipv6: false,
         total_timeout: Duration::from_secs(2),
+        // An unsigned test server.
+        dnssec: false,
         ..RecursorConfig::default()
     });
     let resolver = Resolver::new(Vec::new()).with_recursor(recursor);

@@ -14,13 +14,19 @@
 //! one client query, all lookups included; [`MAX_REFERRALS`] referrals for
 //! one name; name server address lookups nested [`MAX_DEPTH`] deep; the
 //! CNAME chain; exchanges in flight; and the infrastructure tables.
+//!
+//! Answers are validated with DNSSEC (RFC 4033 to 4035, RFC 5155) unless
+//! that is turned off or the client sets CD: secure ones get the AD bit,
+//! bogus ones become SERVFAIL. See `validate`.
 
 mod classify;
+mod dnssec;
 mod hints;
 mod infra;
 mod special;
 #[cfg(test)]
 mod tests;
+mod validate;
 
 use std::collections::HashSet;
 use std::future::Future;
@@ -42,7 +48,9 @@ use tracing::{debug, warn};
 
 use crate::exchange::{self, ExchangeError, OnCaseMismatch};
 use crate::{MAX_CNAME_CHAIN, restore_question_case};
+use dnssec::Security;
 use infra::Infra;
+use validate::Validation;
 
 /// The most queries sent for one client query, every lookup included.
 pub const MAX_SENT: u32 = 64;
@@ -86,6 +94,11 @@ pub struct RecursorConfig {
     /// Root server addresses to start from instead of IANA's root hints,
     /// for tests.
     pub roots: Option<Vec<IpAddr>>,
+    /// DNSSEC validation.
+    pub dnssec: bool,
+    /// DS records for the root zone to trust instead of IANA's trust
+    /// anchors, for tests.
+    pub anchors: Option<Vec<Record>>,
 }
 
 impl Default for RecursorConfig {
@@ -98,6 +111,8 @@ impl Default for RecursorConfig {
             infra_entries: 20_000,
             port: 53,
             roots: None,
+            dnssec: true,
+            anchors: None,
         }
     }
 }
@@ -111,8 +126,15 @@ pub struct RecursorStats {
     pub tcp: u64,
     /// Queries no server answered in time.
     pub timeouts: u64,
-    /// Client queries that could not be resolved (SERVFAIL).
+    /// Client queries that could not be resolved (SERVFAIL), bogus ones
+    /// included.
     pub failures: u64,
+    /// Answers DNSSEC proved authentic.
+    pub secure: u64,
+    /// Answers from unsigned zones.
+    pub insecure: u64,
+    /// Answers whose signatures or proofs failed: SERVFAIL.
+    pub bogus: u64,
     /// Zone cuts known.
     pub zones: usize,
     /// Servers with statistics.
@@ -198,14 +220,22 @@ impl Budget {
     }
 }
 
-/// What looking up one name found.
+/// What looking up one name found: one zone's servers' answer.
 struct Found {
+    /// The name and type asked.
+    name: Name,
+    qtype: RecordType,
     rcode: ResponseCode,
     records: Vec<Record>,
     /// Where a CNAME chain continues.
     next: Option<Name>,
     soa: Option<Record>,
-    server: Option<SocketAddr>,
+    server: SocketAddr,
+    /// The zone whose servers answered.
+    zone: Name,
+    /// The response's RRSIGs, NSEC and NSEC3 records and DNAMEs within
+    /// that zone, when validating.
+    evidence: Vec<Record>,
 }
 
 /// Resolves names from the root servers down.
@@ -215,6 +245,8 @@ pub struct Recursor {
     /// The root servers to start from, by name.
     roots: Vec<(Name, Arc<[IpAddr]>)>,
     root_names: Arc<[Name]>,
+    /// The root zone's trust anchors.
+    anchors: Vec<Record>,
     network: Arc<dyn Network>,
     in_flight: Semaphore,
     /// When priming was last tried.
@@ -223,6 +255,9 @@ pub struct Recursor {
     tcp: AtomicU64,
     timeouts: AtomicU64,
     failures: AtomicU64,
+    secure: AtomicU64,
+    insecure: AtomicU64,
+    bogus: AtomicU64,
 }
 
 impl std::fmt::Debug for Recursor {
@@ -260,8 +295,10 @@ impl Recursor {
                 .collect(),
         };
         let root_names = roots.iter().map(|(name, _)| name.clone()).collect();
+        let anchors = config.anchors.clone().unwrap_or_else(hints::root_anchors);
         Self {
             infra: Infra::new(config.infra_entries),
+            anchors,
             in_flight: Semaphore::new(config.max_in_flight.clamp(1, Semaphore::MAX_PERMITS)),
             config,
             roots,
@@ -272,6 +309,9 @@ impl Recursor {
             tcp: AtomicU64::new(0),
             timeouts: AtomicU64::new(0),
             failures: AtomicU64::new(0),
+            secure: AtomicU64::new(0),
+            insecure: AtomicU64::new(0),
+            bogus: AtomicU64::new(0),
         }
     }
 
@@ -288,6 +328,9 @@ impl Recursor {
             tcp: self.tcp.load(Ordering::Relaxed),
             timeouts: self.timeouts.load(Ordering::Relaxed),
             failures: self.failures.load(Ordering::Relaxed),
+            secure: self.secure.load(Ordering::Relaxed),
+            insecure: self.insecure.load(Ordering::Relaxed),
+            bogus: self.bogus.load(Ordering::Relaxed),
             zones,
             servers,
         }
@@ -300,41 +343,76 @@ impl Recursor {
     }
 
     /// Resolves `query`: the response for the client, and the server that
-    /// gave the last answer (`None` for SERVFAIL).
+    /// gave the last answer (`None` for SERVFAIL). Validated with DNSSEC
+    /// unless that is off or the client sets CD: AD if secure, SERVFAIL if
+    /// bogus. A client that sets DO gets the signatures and proofs too.
     pub async fn resolve(&self, query: &Query) -> (Response, Option<SocketAddr>) {
         let mut budget = Budget::new(self.config.total_timeout);
         let question = &query.question;
-        match self
-            .chase(&question.name, question.qtype, &mut budget, 0)
-            .await
-        {
-            Ok(found) => {
-                let mut response = Response::for_query(query, found.rcode);
-                response.recursion_available = true;
-                response.answers = found.records;
-                response.authority.extend(found.soa);
-                restore_question_case(&mut response, &question.name);
-                (response, found.server)
-            }
+        let validate = self.config.dnssec && !query.checking_disabled;
+        let resolved = async {
+            let mut segments = self
+                .chase(&question.name, question.qtype, &mut budget, 0)
+                .await?;
+            let security = if validate {
+                let mut validation = Validation::new();
+                Some(
+                    self.validate(&mut segments, &mut budget, &mut validation)
+                        .await?,
+                )
+            } else {
+                None
+            };
+            Ok::<_, RecurseError>((segments, security))
+        }
+        .await;
+        let servfail = || {
+            let mut response = Response::for_query(query, ResponseCode::SERV_FAIL);
+            response.recursion_available = true;
+            (response, None)
+        };
+        let (segments, security) = match resolved {
+            Ok(resolved) => resolved,
             Err(err) => {
                 self.failures.fetch_add(1, Ordering::Relaxed);
                 debug!(name = %question.name, qtype = %question.qtype, %err, "cannot resolve");
-                let mut response = Response::for_query(query, ResponseCode::SERV_FAIL);
-                response.recursion_available = true;
-                (response, None)
+                return servfail();
             }
-        }
+        };
+        match security {
+            Some(Security::Secure) => self.secure.fetch_add(1, Ordering::Relaxed),
+            Some(Security::Insecure) => self.insecure.fetch_add(1, Ordering::Relaxed),
+            Some(Security::Bogus) => {
+                self.bogus.fetch_add(1, Ordering::Relaxed);
+                self.failures.fetch_add(1, Ordering::Relaxed);
+                debug!(name = %question.name, qtype = %question.qtype, "DNSSEC validation failed");
+                return servfail();
+            }
+            None => 0,
+        };
+        let Some(last) = segments.last() else {
+            return servfail();
+        };
+        let mut response = Response::for_query(query, last.rcode);
+        response.recursion_available = true;
+        response.authentic_data = security == Some(Security::Secure);
+        let server = last.server;
+        let dnssec_ok = query.edns.is_some_and(|edns| edns.dnssec_ok);
+        (response.answers, response.authority) = sections(segments, dnssec_ok);
+        restore_question_case(&mut response, &question.name);
+        (response, Some(server))
     }
 
-    /// `name`'s records of `qtype`, following CNAMEs to the end.
+    /// `name`'s records of `qtype`, following CNAMEs to the end: the answer
+    /// of each zone on the way, the last one's at the end.
     async fn chase(
         &self,
         name: &Name,
         qtype: RecordType,
         budget: &mut Budget,
         depth: u8,
-    ) -> Result<Found, RecurseError> {
-        let mut records = Vec::new();
+    ) -> Result<Vec<Found>, RecurseError> {
+        let mut segments = Vec::new();
         let mut seen = HashSet::new();
         let mut at = name.clone();
         for _ in 0..=MAX_CNAME_CHAIN {
@@ -342,12 +420,11 @@ impl Recursor {
                 return Err(RecurseError::Chain);
             }
             let found = self.lookup(&at, qtype, budget, depth).await?;
-            records.extend(found.records);
-            match found.next {
+            let next = found.next.clone();
+            segments.push(found);
+            match next {
                 Some(next) => at = next,
-                None => {
-                    return Ok(Found { records, ..found });
-                }
+                None => return Ok(segments),
             }
         }
         Err(RecurseError::Chain)
@@ -385,8 +462,8 @@ impl Recursor {
                 }
                 None => (name.clone(), qtype),
             };
-            let (kind, server) = match self
-                .ask(&zone, &servers, &ask_name, ask_type, budget, depth)
+            let (kind, server, response) = match self
+                .ask_with_response(&zone, &servers, &ask_name, ask_type, budget, depth)
                 .await
             {
                 Ok(asked) => asked,
@@ -422,31 +499,29 @@ impl Recursor {
                     // some servers deny empty non-terminals.
                     minimise = false;
                 }
-                Kind::Answer { records, next } => {
+                Kind::Answer { .. } | Kind::NoData { .. } | Kind::NxDomain { .. } => {
+                    let (rcode, records, next, soa) = match kind {
+                        Kind::Answer { records, next } => {
+                            (ResponseCode::NO_ERROR, records, next, None)
+                        }
+                        Kind::NoData { soa } => (ResponseCode::NO_ERROR, Vec::new(), None, soa),
+                        _ => (ResponseCode::NX_DOMAIN, Vec::new(), None, kind_soa(kind)),
+                    };
+                    let evidence = if self.config.dnssec {
+                        dnssec::evidence(&zone, response.answers.iter().chain(&response.authority))
+                    } else {
+                        Vec::new()
+                    };
                     return Ok(Found {
-                        rcode: ResponseCode::NO_ERROR,
+                        name: name.clone(),
+                        qtype,
+                        rcode,
                         records,
                         next,
-                        soa: None,
-                        server: Some(server),
-                    });
-                }
-                Kind::NoData { soa } => {
-                    return Ok(Found {
-                        rcode: ResponseCode::NO_ERROR,
-                        records: Vec::new(),
-                        next: None,
                         soa,
-                        server: Some(server),
-                    });
-                }
-                Kind::NxDomain { soa } => {
-                    return Ok(Found {
-                        rcode: ResponseCode::NX_DOMAIN,
-                        records: Vec::new(),
-                        next: None,
-                        soa,
-                        server: Some(server),
+                        server,
+                        zone,
+                        evidence,
                     });
                 }
                 Kind::Lame | Kind::Failed(_) => return Err(RecurseError::NoServer),
@@ -542,20 +617,6 @@ impl Recursor {
 
     /// Asks `zone`'s servers about `name`, one after another, until one
     /// gives a usable response; looks up name server addresses as needed.
-    async fn ask(
-        &self,
-        zone: &Name,
-        servers: &[Name],
-        name: &Name,
-        qtype: RecordType,
-        budget: &mut Budget,
-        depth: u8,
-    ) -> Result<(Kind, SocketAddr), RecurseError> {
-        self.ask_with_response(zone, servers, name, qtype, budget, depth)
-            .await
-            .map(|(kind, server, _)| (kind, server))
-    }
-
     async fn ask_with_response(
         &self,
         zone: &Name,
@@ -632,8 +693,8 @@ impl Recursor {
         for &qtype in types {
             // Boxed: lookups nest.
             match Box::pin(self.chase(name, qtype, budget, depth)).await {
-                Ok(found) => {
-                    for record in &found.records {
+                Ok(segments) => {
+                    for record in segments.iter().flat_map(|found| &found.records) {
                         if record.record_type() == qtype
                             && let Some(ip) = record.ip()
                         {
@@ -666,7 +727,7 @@ impl Recursor {
         let mut tcp = false;
         loop {
             let left = budget.spend()?;
-            let outgoing = outgoing(name, qtype, randomize);
+            let outgoing = outgoing(name, qtype, randomize, self.config.dnssec);
             let wait = if tcp {
                 left
             } else {
@@ -727,6 +788,73 @@ impl Recursor {
     }
 }
 
+/// Runs every DNSSEC check on `response` as if from a server of `zone`
+/// asked about `name` / `qtype`, signed or not, keys taken from the
+/// response itself: for fuzzing, which checks that nothing panics and the
+/// work stays bounded. Returns how many records were kept as evidence and
+/// how many signature checks were spent.
+#[doc(hidden)]
+pub fn check_dnssec(
+    response: &Response,
+    zone: &Name,
+    name: &Name,
+    qtype: RecordType,
+) -> (usize, u32) {
+    use dnssec::{Checks, MAX_CHECKS};
+
+    let records: Vec<Record> = response
+        .answers
+        .iter()
+        .chain(&response.authority)
+        .chain(&response.additional)
+        .cloned()
+        .collect();
+    let evidence = dnssec::evidence(zone, response.answers.iter().chain(&response.authority));
+    let keys = dnssec::usable_keys(&records);
+    let mut checks = Checks::new(MAX_CHECKS);
+    let now = 1_800_000_000;
+    for rrset in dnssec::rrsets(&response.answers) {
+        let Some(first) = rrset.first() else {
+            continue;
+        };
+        if let Some(signer) = dnssec::signer(&evidence, first.name(), first.record_type(), zone) {
+            let _ = dnssec::verify_rrset(&rrset, &evidence, &signer, &keys, now, &mut checks);
+        }
+    }
+    let ds: Vec<Record> = records
+        .iter()
+        .filter(|r| r.record_type() == RecordType::DS)
+        .cloned()
+        .collect();
+    let _ = dnssec::keys_from_ds(zone, &ds, &records, now, &mut checks);
+    let _ = dnssec::verified_proofs(&evidence, zone, &keys, now, &mut checks);
+    let proofs: Vec<Record> = evidence
+        .iter()
+        .filter(|r| matches!(r.record_type(), RecordType::NSEC | RecordType::NSEC3))
+        .cloned()
+        .collect();
+    let _ = dnssec::nsec_nxdomain(name, &proofs);
+    let _ = dnssec::nsec_nodata(name, qtype, &proofs);
+    let _ = dnssec::nsec_wildcard(name, &proofs);
+    let _ = dnssec::nsec3_nxdomain(zone, name, &proofs);
+    let _ = dnssec::nsec3_nodata(zone, name, qtype, &proofs);
+    let _ = dnssec::nsec3_wildcard(zone, name, zone, &proofs);
+    let _ = dnssec::ds_denial(zone, name, &proofs);
+    for cname in response
+        .answers
+        .iter()
+        .filter(|r| r.record_type() == RecordType::CNAME)
+    {
+        for dname in evidence
+            .iter()
+            .filter(|r| r.record_type() == RecordType::DNAME)
+        {
+            let _ = dnssec::synthesized(cname, dname);
+        }
+    }
+    (evidence.len(), MAX_CHECKS.saturating_sub(checks.left()))
+}
+
 /// The next name to show the servers under QNAME minimisation, after
 /// `exposed` of `name`'s labels and `steps` minimised queries: one label
 /// more for the first few, then the rest spread over the remaining
@@ -751,8 +879,9 @@ fn next_child(name: &Name, exposed: usize, steps: usize) -> Option<Name> {
 }
 
 /// The query sent to an authoritative server: a fresh random ID, no
-/// recursion desired, the name in random case if `randomize`.
-fn outgoing(name: &Name, qtype: RecordType, randomize: bool) -> Query {
+/// recursion desired, the name in random case if `randomize`, and DO set
+/// when validating, for the signatures and proofs.
+fn outgoing(name: &Name, qtype: RecordType, randomize: bool, dnssec_ok: bool) -> Query {
     let name = if randomize {
         name.with_random_case(rand::random::<bool>)
     } else {
@@ -768,6 +897,76 @@ fn outgoing(name: &Name, qtype: RecordType, randomize: bool) -> Query {
             qtype,
             qclass: RecordClass::IN,
         },
-        edns: Some(Edns::ours()),
+        edns: Some(Edns {
+            dnssec_ok,
+            ..Edns::ours()
+        }),
     }
+}
+
+fn kind_soa(kind: Kind) -> Option<Record> {
+    match kind {
+        Kind::NoData { soa } | Kind::NxDomain { soa } => soa,
+        _ => None,
+    }
+}
+
+/// The answer and authority sections for the client: every zone's
+/// records and the last one's SOA; for a client that sets DO, also the
+/// RRSIGs covering them, the DNAMEs CNAMEs were synthesized from, and the
+/// NSEC and NSEC3 proofs, as far as the servers sent them.
+fn sections(segments: Vec<Found>, dnssec_ok: bool) -> (Vec<Record>, Vec<Record>) {
+    let mut answers = Vec::new();
+    let mut authority = Vec::new();
+    let mut soa = Vec::new();
+    for segment in segments {
+        let evidence = &segment.evidence;
+        let mut signed = Vec::new();
+        if dnssec_ok {
+            for rrset in dnssec::rrsets(&segment.records) {
+                let Some(first) = rrset.first() else {
+                    continue;
+                };
+                if first.record_type() == RecordType::CNAME
+                    && let Some(dname) = evidence.iter().find(|r| {
+                        r.record_type() == RecordType::DNAME && dnssec::synthesized(first, r)
+                    })
+                {
+                    signed.push(dname.clone());
+                    signed.extend(signatures(evidence, dname));
+                }
+                signed.extend(signatures(evidence, first));
+            }
+            let proofs = evidence
+                .iter()
+                .filter(|r| matches!(r.record_type(), RecordType::NSEC | RecordType::NSEC3));
+            for proof in proofs.take(dnssec::MAX_PROOFS) {
+                authority.push(proof.clone());
+                authority.extend(signatures(evidence, proof));
+            }
+        }
+        soa.clear();
+        if let Some(record) = &segment.soa {
+            soa.push(record.clone());
+            if dnssec_ok {
+                soa.extend(signatures(evidence, record));
+            }
+        }
+        answers.extend(segment.records);
+        answers.extend(signed);
+    }
+    soa.extend(authority);
+    (answers, soa)
+}
+
+/// The RRSIGs in `evidence` covering `record`'s RRset, with its TTL.
+fn signatures(evidence: &[Record], record: &Record) -> Vec<Record> {
+    dnssec::covering(evidence, record.name(), record.record_type())
+        .take(dnssec::MAX_SIGS_PER_RRSET)
+        .map(|(sig, _)| {
+            let mut sig = sig.clone();
+            sig.set_ttl(sig.ttl().min(record.ttl()));
+            sig
+        })
+        .collect()
 }

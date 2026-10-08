@@ -42,10 +42,16 @@ impl RecordType {
     pub const AAAA: Self = Self(28);
     /// Service locator.
     pub const SRV: Self = Self(33);
+    /// Redirection of a whole subtree (RFC 6672).
+    pub const DNAME: Self = Self(39);
     /// EDNS(0) pseudo-record.
     pub const OPT: Self = Self(41);
     /// Delegation signer.
     pub const DS: Self = Self(43);
+    /// Authenticated denial of existence.
+    pub const NSEC: Self = Self(47);
+    /// Hashed authenticated denial of existence (RFC 5155).
+    pub const NSEC3: Self = Self(50);
     /// DNSSEC signature.
     pub const RRSIG: Self = Self(46);
     /// DNSSEC public key.

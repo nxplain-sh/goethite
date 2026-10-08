@@ -752,6 +752,9 @@ pub struct RecursionSection {
     pub qname_minimisation: bool,
     /// Ask servers over IPv6 too. Unset: if this host has an IPv6 route.
     pub ipv6: Option<bool>,
+    /// DNSSEC validation: AD for answers proved authentic, SERVFAIL for
+    /// bogus ones.
+    pub dnssec: bool,
 }
 
 impl Default for RecursionSection {
@@ -760,6 +763,7 @@ impl Default for RecursionSection {
             enabled: false,
             qname_minimisation: true,
             ipv6: None,
+            dnssec: true,
         }
     }
 }
@@ -771,6 +775,7 @@ impl RecursionSection {
         RecursorConfig {
             qname_minimisation: self.qname_minimisation,
             ipv6: self.ipv6.unwrap_or_else(has_ipv6),
+            dnssec: self.dnssec,
             ..RecursorConfig::default()
         }
     }

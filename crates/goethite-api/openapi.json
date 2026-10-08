@@ -3775,10 +3775,26 @@
           "servers"
         ],
         "properties": {
+          "bogus": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Answers whose signatures or proofs failed, refused with SERVFAIL.",
+            "minimum": 0
+          },
+          "dnssec": {
+            "type": "boolean",
+            "description": "Whether answers are validated with DNSSEC."
+          },
           "failures": {
             "type": "integer",
             "format": "int64",
-            "description": "Client queries that could not be resolved (SERVFAIL).",
+            "description": "Client queries that could not be resolved (SERVFAIL), bogus ones\nincluded.",
+            "minimum": 0
+          },
+          "insecure": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Answers from unsigned zones.",
             "minimum": 0
           },
           "ipv6": {
@@ -3788,6 +3804,12 @@
           "qname_minimisation": {
             "type": "boolean",
             "description": "Whether servers are shown only as much of a name as they need\n(QNAME minimisation, RFC 9156)."
+          },
+          "secure": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Answers DNSSEC proved authentic (the AD bit).",
+            "minimum": 0
           },
           "sent": {
             "type": "integer",

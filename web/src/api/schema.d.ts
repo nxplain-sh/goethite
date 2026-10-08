@@ -1212,9 +1212,22 @@ export interface components {
         RecursionStatus: {
             /**
              * Format: int64
-             * @description Client queries that could not be resolved (SERVFAIL).
+             * @description Answers whose signatures or proofs failed, refused with SERVFAIL.
+             */
+            bogus?: number;
+            /** @description Whether answers are validated with DNSSEC. */
+            dnssec?: boolean;
+            /**
+             * Format: int64
+             * @description Client queries that could not be resolved (SERVFAIL), bogus ones
+             *     included.
              */
             failures: number;
+            /**
+             * Format: int64
+             * @description Answers from unsigned zones.
+             */
+            insecure?: number;
             /** @description Whether servers are asked over IPv6 too. */
             ipv6: boolean;
             /**
@@ -1222,6 +1235,11 @@ export interface components {
              *     (QNAME minimisation, RFC 9156).
              */
             qname_minimisation: boolean;
+            /**
+             * Format: int64
+             * @description Answers DNSSEC proved authentic (the AD bit).
+             */
+            secure?: number;
             /**
              * Format: int64
              * @description Queries sent to authoritative servers since start.

@@ -27,6 +27,7 @@ webpki-roots.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
+goethite-proto = { workspace = true, features = ["signing"] }
 hickory-proto.workspace = true
 hyper = { workspace = true, features = ["server"] }
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }

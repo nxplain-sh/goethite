@@ -1,7 +1,8 @@
 //! What a recursive resolver learns about the DNS's infrastructure: zone
-//! cuts and their name servers, the servers' addresses, and how each server
-//! is doing. Every table is bounded and evicts its oldest entries; locks
-//! are held only for map operations, never across an `.await`.
+//! cuts and their name servers, the servers' addresses, how each server is
+//! doing, and where names stand in the chain of trust. Every table is
+//! bounded and evicts its oldest entries; locks are held only for map
+//! operations, never across an `.await`.
 
 use std::collections::{HashMap, VecDeque};
 use std::hash::Hash;
@@ -9,7 +10,7 @@ use std::net::IpAddr;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
-use goethite_proto::Name;
+use goethite_proto::{Name, Record};
 use tokio::time::Instant;
 
 /// The shortest time infrastructure records are kept, so a zone with tiny
@@ -32,6 +33,11 @@ const DOWN_FOR: Duration = Duration::from_secs(60);
 /// The time to keep something with `ttl`.
 fn keep_for(ttl: u32) -> Duration {
     Duration::from_secs(u64::from(ttl.clamp(MIN_TTL, MAX_TTL)))
+}
+
+/// When something with `ttl` learned at `now` expires.
+pub(super) fn expiry(ttl: u32, now: Instant) -> Instant {
+    now.checked_add(keep_for(ttl)).unwrap_or(now)
 }
 
 /// A map of at most `capacity` entries that forgets the oldest first.
@@ -127,11 +133,35 @@ impl Default for Server {
     }
 }
 
+/// Where a name stands in the chain of trust (DNSSEC).
+#[derive(Clone, Debug)]
+pub(super) enum Trust {
+    /// In the signed zone `zone`, whose keys are `keys`.
+    Secure {
+        /// The zone.
+        zone: Name,
+        /// Its usable keys, anchored in its parent's DS records.
+        keys: Arc<[Record]>,
+    },
+    /// In an unsigned part of the DNS: below a delegation its signed
+    /// parent proves has no DS.
+    Insecure,
+    /// Where the chain of trust breaks.
+    Bogus,
+}
+
+#[derive(Clone)]
+struct Trusted {
+    trust: Trust,
+    expires: Instant,
+}
+
 /// The infrastructure tables.
 pub(super) struct Infra {
     delegations: Mutex<Bounded<Name, Delegation>>,
     addresses: Mutex<Bounded<Name, Addresses>>,
     servers: Mutex<Bounded<IpAddr, Server>>,
+    trust: Mutex<Bounded<Name, Trusted>>,
 }
 
 impl Infra {
@@ -141,7 +171,31 @@ impl Infra {
             delegations: Mutex::new(Bounded::new(entries)),
             addresses: Mutex::new(Bounded::new(entries)),
             servers: Mutex::new(Bounded::new(entries)),
+            trust: Mutex::new(Bounded::new(entries)),
         }
+    }
+
+    /// The deepest name at or above `name` whose trust is known and has not
+    /// expired: the name, its trust, and when that expires.
+    pub(super) fn closest_trust(
+        &self,
+        name: &Name,
+        now: Instant,
+    ) -> Option<(Name, Trust, Instant)> {
+        let trust = self.trust.lock().unwrap_or_else(PoisonError::into_inner);
+        (0..=name.label_count()).rev().find_map(|labels| {
+            let at = name.suffix(labels)?;
+            let entry = trust.get(&at)?;
+            (entry.expires > now).then(|| (at, entry.trust.clone(), entry.expires))
+        })
+    }
+
+    /// Remembers where `name` stands in the chain of trust, until `expires`.
+    pub(super) fn set_trust(&self, name: Name, trust: Trust, expires: Instant) {
+        self.trust
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(name, Trusted { trust, expires });
     }
 
     /// The known zone cut closest to `name` (`name` itself or an

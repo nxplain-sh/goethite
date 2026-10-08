@@ -315,6 +315,7 @@ fn resolver(config: &Config, state: &Arc<PolicyState>) -> Result<Resolver> {
         info!(
             qname_minimisation = recursion.qname_minimisation,
             ipv6 = recursion.ipv6,
+            dnssec = recursion.dnssec,
             "resolving from the root servers"
         );
         resolver = resolver.with_recursor(Recursor::new(recursion));

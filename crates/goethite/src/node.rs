@@ -140,10 +140,14 @@ impl goethite_api::Control for Node {
                 RecursionStatus {
                     qname_minimisation: recursor.config().qname_minimisation,
                     ipv6: recursor.config().ipv6,
+                    dnssec: recursor.config().dnssec,
                     sent: stats.sent,
                     tcp: stats.tcp,
                     timeouts: stats.timeouts,
                     failures: stats.failures,
+                    secure: stats.secure,
+                    insecure: stats.insecure,
+                    bogus: stats.bogus,
                     zones: as_u64(stats.zones),
                     servers: as_u64(stats.servers),
                 }

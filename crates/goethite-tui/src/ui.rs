@@ -241,6 +241,33 @@ fn totals(app: &App) -> Vec<Line<'static>> {
     lines
 }
 
+/// What the Recursion panel says.
+fn recursion_lines(recursion: &goethite_api::RecursionStatus) -> Vec<Line<'static>> {
+    vec![
+        Line::from("From the root servers down"),
+        Line::from(format!(
+            "{} queries sent, {} over TCP",
+            recursion.sent, recursion.tcp
+        )),
+        Line::from(format!(
+            "{} timed out, {} unresolved",
+            recursion.timeouts, recursion.failures
+        )),
+        Line::from(format!(
+            "{} zones and {} servers known",
+            recursion.zones, recursion.servers
+        )),
+        Line::from(if recursion.dnssec {
+            format!(
+                "DNSSEC: {} secure, {} insecure, {} bogus",
+                recursion.secure, recursion.insecure, recursion.bogus
+            )
+        } else {
+            "DNSSEC validation off".to_owned()
+        }),
+    ]
+}
+
 fn render_dashboard(frame: &mut Frame<'_>, area: Rect, app: &App) {
     let [left, right] =
         Layout::horizontal([Constraint::Percentage(40), Constraint::Percentage(60)]).areas(area);
@@ -257,23 +284,8 @@ fn render_dashboard(frame: &mut Frame<'_>, area: Rect, app: &App) {
         .as_ref()
         .and_then(|status| status.recursion.as_ref())
     {
-        let lines = vec![
-            Line::from("From the root servers down"),
-            Line::from(format!(
-                "{} queries sent, {} over TCP",
-                recursion.sent, recursion.tcp
-            )),
-            Line::from(format!(
-                "{} timed out, {} unresolved",
-                recursion.timeouts, recursion.failures
-            )),
-            Line::from(format!(
-                "{} zones and {} servers known",
-                recursion.zones, recursion.servers
-            )),
-        ];
         frame.render_widget(
-            Paragraph::new(lines).block(block("Recursion")),
+            Paragraph::new(recursion_lines(recursion)).block(block("Recursion")),
             upstreams_area,
         );
     } else {
@@ -845,10 +857,14 @@ mod tests {
         status.recursion = Some(goethite_api::RecursionStatus {
             qname_minimisation: true,
             ipv6: false,
+            dnssec: true,
             sent: 1234,
             tcp: 5,
             timeouts: 7,
             failures: 1,
+            secure: 900,
+            insecure: 300,
+            bogus: 1,
             zones: 300,
             servers: 80,
         });
@@ -857,6 +873,10 @@ mod tests {
         assert!(dashboard.contains("Recursion"), "{dashboard}");
         assert!(
             dashboard.contains("1234 queries sent, 5 over TCP"),
+            "{dashboard}"
+        );
+        assert!(
+            dashboard.contains("DNSSEC: 900 secure, 300 insecure, 1 bogus"),
             "{dashboard}"
         );
         assert!(!dashboard.contains("Upstreams"), "{dashboard}");

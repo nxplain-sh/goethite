@@ -9,7 +9,10 @@
 //! CNAME chain that answers the question and the records at its end, never
 //! unrelated records from the answer, authority or additional sections. A
 //! negative answer is cached only with an SOA record for a zone the name is
-//! in, and for no longer than that SOA allows (RFC 2308).
+//! in, and for no longer than that SOA allows (RFC 2308). For clients that
+//! set DO, the DNSSEC records that go with those are kept too: the RRSIGs
+//! covering them, DNAMEs behind their CNAMEs, and NSEC and NSEC3 proofs.
+//! Whether DNSSEC proved an answer authentic (AD) is kept with it.
 
 use std::collections::hash_map::RandomState;
 use std::collections::{HashMap, VecDeque};
@@ -97,6 +100,8 @@ struct Answer {
     rcode: ResponseCode,
     answers: Vec<Record>,
     authority: Vec<Record>,
+    /// Whether DNSSEC proved it authentic.
+    authentic: bool,
     stored: Instant,
     expires: Instant,
 }
@@ -220,6 +225,7 @@ impl Cache {
         };
         let mut response = Response::for_query(query, answer.rcode);
         response.recursion_available = true;
+        response.authentic_data = answer.authentic;
         response.answers = age(&answer.answers);
         response.authority = age(&answer.authority);
         restore_question_case(&mut response, &query.question.name);
@@ -331,15 +337,82 @@ fn cacheable(query: &Query, response: &Response, config: &CacheConfig) -> Option
     if answers.len().saturating_add(authority.len()) > MAX_CACHED_RECORDS {
         return None;
     }
+    let (answers, authority) = if query.edns.is_some_and(|edns| edns.dnssec_ok) {
+        with_dnssec(response, answers, authority, ttl)?
+    } else {
+        (answers, authority)
+    };
     let stored = Instant::now();
     let expires = stored.checked_add(Duration::from_secs(u64::from(ttl)))?;
     Some(Answer {
         rcode: response.rcode,
         answers,
         authority,
+        authentic: response.authentic_data,
         stored,
         expires,
     })
+}
+
+/// For a client that set DO: `answers` and `authority` with the DNSSEC
+/// records of `response` that go with them, at most
+/// [`MAX_CACHED_RECORDS`]: RRSIGs covering their RRsets, DNAMEs above
+/// their CNAMEs, and NSEC and NSEC3 proofs with their RRSIGs; none kept
+/// longer than `ttl`.
+fn with_dnssec(
+    response: &Response,
+    mut answers: Vec<Record>,
+    mut authority: Vec<Record>,
+    ttl: u32,
+) -> Option<(Vec<Record>, Vec<Record>)> {
+    let covers = |sig: &Record, records: &[Record]| {
+        sig.rrsig().is_some_and(|rrsig| {
+            records
+                .iter()
+                .any(|r| r.name() == sig.name() && r.record_type() == rrsig.type_covered)
+        })
+    };
+    let dnames: Vec<Record> = response
+        .answers
+        .iter()
+        .filter(|dname| {
+            dname.record_type() == RecordType::DNAME
+                && answers.iter().any(|cname| {
+                    cname.record_type() == RecordType::CNAME
+                        && cname.name().is_within(dname.name())
+                        && cname.name() != dname.name()
+                })
+        })
+        .cloned()
+        .collect();
+    let signed: Vec<Record> = answers.iter().chain(&dnames).cloned().collect();
+    let mut extra = dnames;
+    extra.extend(
+        response
+            .answers
+            .iter()
+            .filter(|sig| covers(sig, &signed))
+            .cloned(),
+    );
+    let proofs: Vec<Record> = response
+        .authority
+        .iter()
+        .filter(|r| matches!(r.record_type(), RecordType::NSEC | RecordType::NSEC3))
+        .cloned()
+        .collect();
+    let mut negative: Vec<Record> = response
+        .authority
+        .iter()
+        .filter(|sig| covers(sig, &authority) || covers(sig, &proofs))
+        .cloned()
+        .collect();
+    negative.extend(proofs);
+    if extra.len().saturating_add(negative.len()) > MAX_CACHED_RECORDS {
+        return None;
+    }
+    answers.extend(with_ttl(extra, |record_ttl| record_ttl.min(ttl)));
+    authority.extend(with_ttl(negative, |record_ttl| record_ttl.min(ttl)));
+    Some((answers, authority))
 }
 
 fn with_ttl(mut records: Vec<Record>, ttl: impl Fn(u32) -> u32) -> Vec<Record> {
@@ -648,5 +721,53 @@ mod tests {
         assert_eq!(cache.get(&q).unwrap().answers[0].ttl(), 1);
         std::thread::sleep(Duration::from_millis(1_000));
         assert!(cache.get(&q).is_none());
+    }
+
+    #[test]
+    fn dnssec_records_and_ad_are_kept_for_clients_with_do() {
+        use goethite_proto::dnssec::signing::{self, Key};
+
+        let key = Key::generate(&name("example."));
+        let www = a("www.example.", 300, 1);
+        let sig = key.sign(std::slice::from_ref(&www), 0, u32::MAX);
+        let stray = key.sign(&[a("other.example.", 300, 2)], 0, u32::MAX);
+        let mut q = query("www.example.", RecordType::A);
+        q.edns = Some(Edns {
+            udp_payload_size: 1232,
+            dnssec_ok: true,
+        });
+        let mut response = answer(&q, vec![www, sig.clone(), stray]);
+        response.authentic_data = true;
+        let cache = cache();
+        cache.insert(&q, &response);
+        let hit = cache.get(&q).unwrap();
+        assert!(hit.authentic_data);
+        assert_eq!(hit.answers.len(), 2, "the A record and its RRSIG only");
+        assert_eq!(hit.answers[1].record_type(), RecordType::RRSIG);
+        // Without DO, the RRSIG is not kept.
+        let plain = query("www.example.", RecordType::A);
+        cache.insert(&plain, &response);
+        assert_eq!(cache.get(&plain).unwrap().answers.len(), 1);
+
+        // A negative answer keeps its proof, signed.
+        let mut nx = query("nope.example.", RecordType::A);
+        nx.edns = q.edns;
+        let soa = Record::soa(name("example."), 900, name("ns.example."), 300);
+        let proof = signing::nsec(
+            &name("example."),
+            300,
+            &name("www.example."),
+            &[RecordType::SOA, RecordType::NSEC, RecordType::RRSIG],
+        );
+        let mut negative = negative(&nx, ResponseCode::NX_DOMAIN, Some(soa.clone()));
+        negative.authority.extend([
+            key.sign(std::slice::from_ref(&soa), 0, u32::MAX),
+            proof.clone(),
+            key.sign(std::slice::from_ref(&proof), 0, u32::MAX),
+        ]);
+        cache.insert(&nx, &negative);
+        let hit = cache.get(&nx).unwrap();
+        assert_eq!(hit.authority.len(), 4);
+        assert!(!hit.authentic_data);
     }
 }

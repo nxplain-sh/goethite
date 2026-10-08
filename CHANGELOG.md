@@ -29,6 +29,12 @@ configuration format.
   Special-use names and private reverse zones are answered without asking anyone. The query log
   shows the server that answered, and the status API, metrics, web UI and TUI show recursion's
   counters.
+- **DNSSEC validation** of recursive answers, on by default (`[recursion] dnssec`): signed
+  answers get the AD flag, bogus ones are refused with SERVFAIL, and clients that set DO get the
+  signatures and NSEC/NSEC3 proofs. Built-in root trust anchors (KSK-2017 and KSK-2024); RSA,
+  ECDSA and Ed25519; bounded against KeyTrap and costly NSEC3. New metric
+  `goethite_recursion_dnssec_total`; status, web UI and TUI show secure, insecure and bogus
+  counts.
 - **Oblivious DNS over HTTPS** (RFC 9230), as a target: `odoh = true` in `[server.tls]` answers
   encrypted queries a proxy forwards at `/dns-query`, and serves the public key at
   `/.well-known/odohconfigs`. Keys are kept in memory only and rotated daily; the previous key is

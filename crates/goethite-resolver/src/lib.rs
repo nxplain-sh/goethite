@@ -344,6 +344,10 @@ impl Resolver {
         let asker = self.asker(client, client_id);
         let (mut response, outcome, filter) = self.answer(query, &asker).await;
         response.recursion_available = self.resolves();
+        // AD only for a client that shows it understands it, with AD or DO
+        // (RFC 6840, 5.7 and 5.8).
+        response.authentic_data &=
+            query.authentic_data || query.edns.is_some_and(|edns| edns.dnssec_ok);
         Resolution {
             response,
             outcome,
@@ -502,6 +506,8 @@ impl Resolver {
         if let Some(protection) = &self.rebinding {
             let removed = protection.apply(&query.question.name, &mut response);
             if removed > 0 {
+                // No longer what was signed.
+                response.authentic_data = false;
                 debug!(
                     name = %query.question.name,
                     removed,

@@ -195,6 +195,22 @@ fn recursion_metrics(out: &mut Out, stats: &RecursorStats) {
         "Client queries recursion could not resolve (SERVFAIL).",
         stats.failures,
     );
+    out.family(
+        "goethite_recursion_dnssec_total",
+        "counter",
+        "Answers DNSSEC validation found secure, insecure or bogus (bogus ones are SERVFAIL).",
+    );
+    for (result, count) in [
+        ("secure", stats.secure),
+        ("insecure", stats.insecure),
+        ("bogus", stats.bogus),
+    ] {
+        out.sample(
+            "goethite_recursion_dnssec_total",
+            &format!("result=\"{result}\""),
+            count,
+        );
+    }
     out.single(
         "goethite_recursion_zones",
         "gauge",
@@ -434,6 +450,7 @@ mod tests {
             recursion: Some(RecursorStats {
                 sent: 10,
                 tcp: 1,
+                bogus: 3,
                 ..RecursorStats::default()
             }),
             filter_rules: 1234,
@@ -460,6 +477,7 @@ mod tests {
             "goethite_upstream_up{upstream=\"9.9.9.9:53\",protocol=\"udp\"} 0",
             "goethite_recursion_queries_total{protocol=\"udp\"} 9",
             "goethite_recursion_queries_total{protocol=\"tcp\"} 1",
+            "goethite_recursion_dnssec_total{result=\"bogus\"} 3",
             "goethite_filter_rules 1234",
             "goethite_filter_lists{state=\"disabled\"} 1",
             "# TYPE goethite_query_duration_seconds histogram",

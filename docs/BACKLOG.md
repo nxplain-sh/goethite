@@ -107,7 +107,17 @@ Phase 3's scope shipped in v0.3.0. These items came up along the way.
   everything else from the root down, like AdGuard Home's per-domain upstreams.
 - **[later] Recursion extras:** coalescing identical queries in flight, prefetching popular
   names before they expire, serving stale answers when servers are unreachable (RFC 8767),
-  NXDOMAIN cuts (RFC 8020) and aggressive use of NSEC (RFC 8198, after DNSSEC).
+  NXDOMAIN cuts (RFC 8020) and aggressive use of NSEC and NSEC3 (RFC 8198), now that proofs are
+  validated.
+- **[later] Extended DNS Errors (RFC 8914):** say why an answer is SERVFAIL (DNSSEC bogus,
+  signature expired, no reachable authority) or blocked (filtered), for clients and the query
+  log.
+- **[later] More DNSSEC controls:** negative trust anchors (RFC 7646) for domains whose DNSSEC
+  is broken, configurable trust anchors and RFC 5011 tracking of root key rollovers (the anchors
+  are built in today), and the bogus count per domain in the query log.
+- **[later] Validating forwarded answers:** forwarding neither validates nor passes on an
+  upstream's AD flag; validating with the upstream's DS and DNSKEY answers would let forwarding
+  nodes set AD too.
 - **[later] Oblivious DoH upstreams:** goethite's own queries to an upstream through an ODoH
   proxy, so the upstream does not learn the network's address. And being a proxy itself.
 - **[later] ODoH configurations in DNS:** an `HTTPS` record carrying the target's key, so

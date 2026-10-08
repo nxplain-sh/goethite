@@ -367,6 +367,12 @@ function Recursion({ recursion }: { recursion: NonNullable<Status['recursion']> 
 				<dd className="mono">{count(recursion.timeouts)}</dd>
 				<dt>Unresolved</dt>
 				<dd className="mono">{count(recursion.failures)}</dd>
+				<dt>DNSSEC</dt>
+				<dd className="mono">
+					{recursion.dnssec
+						? `${count(recursion.secure ?? 0)} secure, ${count(recursion.insecure ?? 0)} insecure, ${count(recursion.bogus ?? 0)} bogus`
+						: 'not validated'}
+				</dd>
 				<dt>Known</dt>
 				<dd className="mono">
 					{count(recursion.zones)} zones, {count(recursion.servers)} servers

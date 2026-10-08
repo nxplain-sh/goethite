@@ -15,6 +15,7 @@
 #![forbid(unsafe_code)]
 
 mod codec;
+pub mod dnssec;
 mod hickory_codec;
 mod message;
 mod name;

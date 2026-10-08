@@ -40,6 +40,42 @@ for a name nearby goes straight to the right server.
 - **IPv6.** goethite asks servers over IPv6 too when this host has an IPv6 route; set
   `ipv6 = true` or `false` to decide yourself.
 
+## DNSSEC
+
+With recursion, goethite validates answers with DNSSEC: it checks each signature back to the
+root zone's keys, which are built in. Every answer is one of three kinds:
+
+- **Secure:** signed, and every signature and proof checks. The answer carries the AD
+  (authentic data) flag, for clients that ask for it with AD or DO.
+- **Insecure:** the domain is not signed, and its signed parent proves that. Most of the DNS
+  is still like this. The answer is passed on without AD.
+- **Bogus:** the domain should be signed but the signatures are missing, wrong or expired, or
+  the proof that a name does not exist does not check. The client gets SERVFAIL, as from any
+  validating resolver. Someone may be changing answers on the way, or the domain's owner broke
+  its DNSSEC.
+
+```console
+$ dig @127.0.0.1 -p 15353 +adflag www.isc.org | grep flags
+;; flags: qr rd ra ad; QUERY: 1, ANSWER: 4, AUTHORITY: 0, ADDITIONAL: 1
+$ dig @127.0.0.1 -p 15353 dnssec-failed.org | grep status
+;; ->>HEADER<<- opcode: QUERY, status: SERVFAIL, id: 3141
+```
+
+A client that sets DO (`dig +dnssec`) also gets the signatures, and the NSEC or NSEC3 records
+that prove a name or type does not exist, so it can check them itself. A client that sets CD
+(`dig +cd`) gets answers without validation, bogus ones included.
+
+- Only signed proofs make a domain insecure. An attacker who strips signatures or forges them
+  gets SERVFAIL, never an answer that looks unsigned.
+- The algorithms checked are RSA/SHA-256, RSA/SHA-512, ECDSA P-256 and P-384, and Ed25519.
+  Zones signed only with SHA-1 algorithms are treated as unsigned.
+- NSEC3 proofs with more than 150 iterations count as unsigned, as RFC 9276 recommends.
+- Signatures are checked against this host's clock, with up to an hour of slack. A clock that
+  is far off makes signed domains bogus, so keep it synchronized (NTP).
+
+Turn validation off with `dnssec = false` under `[recursion]`. Forwarding to `[[upstream]]`
+resolvers does not validate, and does not pass on an upstream's AD flag.
+
 ## Names that stay home
 
 Some names are never asked about on the internet, since the answer is known and the question
@@ -56,8 +92,10 @@ sending chosen domains to the router while resolving the rest is planned.
 
 ## Limits
 
-One client query may send at most 64 queries to authoritative servers, every lookup included,
-and take at most 6 seconds; after that it is answered with SERVFAIL. At most 32 referrals are
+One client query may send at most 64 queries to authoritative servers, every lookup included
+(DNSSEC's too), and take at most 6 seconds; after that it is answered with SERVFAIL. DNSSEC
+checks at most 64 signatures for one client query, so a zone built to waste a validator's time
+(KeyTrap) cannot. At most 32 referrals are
 followed for one name, and name server addresses are looked up at most four levels deep. 1,024
 queries to authoritative servers may be in flight at once. The tables of zones, addresses and
 servers hold at most 20,000 entries each.
@@ -67,7 +105,6 @@ expect tens to hundreds of milliseconds where a large public resolver would answ
 cache; after that, answers come from goethite's cache.
 
 The [metrics](../api/#metrics) count the queries sent (`goethite_recursion_queries_total`),
-timeouts, unresolved queries and the zones known; `/api/v1/status`, the web UI's dashboard and
-the TUI show the same.
-
-DNSSEC validation is not done yet: it comes in a later version.
+timeouts, unresolved queries, the zones known, and DNSSEC's verdicts
+(`goethite_recursion_dnssec_total` with `result` `secure`, `insecure` or `bogus`).
+`/api/v1/status`, the web UI's dashboard and the TUI show the same.

@@ -32,6 +32,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "check_dnssec"
+path = "fuzz_targets/check_dnssec.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "decode_query"
 path = "fuzz_targets/decode_query.rs"
 test = false

@@ -88,6 +88,7 @@ Resolve every name from the root servers down instead of asking `[[upstream]]` r
 | `enabled` | `false` | Resolve recursively. With it, there must be no `[[upstream]]` tables. |
 | `qname_minimisation` | `true` | Show each server only as much of a name as it needs (RFC 9156). |
 | `ipv6` | unset | Ask servers over IPv6 too. Unset: when this host has an IPv6 route. |
+| `dnssec` | `true` | Validate answers with DNSSEC: AD for secure ones, SERVFAIL for bogus ones. See [DNSSEC](../recursion/#dnssec). |
 
 ## `[cache]`
 

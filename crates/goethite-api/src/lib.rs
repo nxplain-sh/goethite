@@ -317,14 +317,27 @@ pub struct RecursionStatus {
     pub qname_minimisation: bool,
     /// Whether servers are asked over IPv6 too.
     pub ipv6: bool,
+    /// Whether answers are validated with DNSSEC.
+    #[serde(default)]
+    pub dnssec: bool,
     /// Queries sent to authoritative servers since start.
     pub sent: u64,
     /// Of them, over TCP.
     pub tcp: u64,
     /// Queries no server answered in time.
     pub timeouts: u64,
-    /// Client queries that could not be resolved (SERVFAIL).
+    /// Client queries that could not be resolved (SERVFAIL), bogus ones
+    /// included.
     pub failures: u64,
+    /// Answers DNSSEC proved authentic (the AD bit).
+    #[serde(default)]
+    pub secure: u64,
+    /// Answers from unsigned zones.
+    #[serde(default)]
+    pub insecure: u64,
+    /// Answers whose signatures or proofs failed, refused with SERVFAIL.
+    #[serde(default)]
+    pub bogus: u64,
     /// Zone cuts known.
     pub zones: u64,
     /// Authoritative servers with statistics.

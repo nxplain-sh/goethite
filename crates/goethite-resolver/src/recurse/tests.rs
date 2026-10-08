@@ -4,7 +4,8 @@
 #![allow(
     clippy::arithmetic_side_effects,
     clippy::struct_excessive_bools,
-    reason = "test helpers; the no-panic rules cover non-test code"
+    clippy::too_many_lines,
+    reason = "test helpers and fixtures; the no-panic rules cover non-test code"
 )]
 
 use std::collections::HashMap;
@@ -41,12 +42,59 @@ struct Quirks {
     /// Adds these records to every answer and referral, in the answer and
     /// additional sections: attempted poisoning.
     poison: &'static [(&'static str, [u8; 4])],
+    /// Changes the addresses in its answers, keeping their signatures.
+    tampers: bool,
+    /// Sends no RRSIG, NSEC or NSEC3 records.
+    strips: bool,
 }
 
 /// One zone's records.
 struct Zone {
     origin: Name,
     records: Vec<Record>,
+}
+
+impl Zone {
+    /// The wildcard that answers for `name`, which does not exist: the one
+    /// at its closest encloser.
+    fn wildcard_for(&self, name: &Name) -> Option<Name> {
+        let exists = |n: &Name| self.records.iter().any(|r| r.name().is_within(n));
+        if exists(name) {
+            return None;
+        }
+        let encloser = (self.origin.label_count()..name.label_count())
+            .rev()
+            .filter_map(|labels| name.suffix(labels))
+            .find(|n| exists(n))?;
+        let wild = Name::from_labels(std::iter::once(&b"*"[..]).chain(encloser.labels())).ok()?;
+        self.records
+            .iter()
+            .any(|r| r.name() == &wild)
+            .then_some(wild)
+    }
+
+    /// The RRSIGs covering `owner`'s `rtype` records.
+    fn signatures(&self, owner: &Name, rtype: RecordType) -> impl Iterator<Item = &Record> {
+        self.records.iter().filter(move |r| {
+            r.name() == owner && r.rrsig().is_some_and(|sig| sig.type_covered == rtype)
+        })
+    }
+
+    /// Every NSEC and NSEC3 record, with its RRSIGs: proof enough for
+    /// anything in a small zone.
+    fn proofs(&self) -> Vec<Record> {
+        let mut proofs = Vec::new();
+        for record in &self.records {
+            if matches!(record.record_type(), RecordType::NSEC | RecordType::NSEC3) {
+                proofs.push(record.clone());
+                proofs.extend(
+                    self.signatures(record.name(), record.record_type())
+                        .cloned(),
+                );
+            }
+        }
+        proofs
+    }
 }
 
 #[derive(Default)]
@@ -67,7 +115,9 @@ impl Fake {
     fn serve(&mut self, address: &str, origin: &str, records: Vec<Record>) -> &mut Self {
         let origin = name(origin);
         let mut records = records;
-        records.push(Record::soa(origin.clone(), 3600, name("ns.invalid."), 300));
+        if !records.iter().any(|r| r.record_type() == RecordType::SOA) {
+            records.push(Record::soa(origin.clone(), 3600, name("ns.invalid."), 300));
+        }
         self.servers
             .entry(ip(address))
             .or_default()
@@ -134,13 +184,35 @@ impl Fake {
             return Some(Self::finish(server, response, tcp));
         }
         response.authoritative = true;
+        let dnssec_ok = query.edns.is_some_and(|edns| edns.dnssec_ok);
         let mut at = qname.clone();
+        let mut wildcard = None;
         for _ in 0..8 {
-            let here: Vec<&Record> = zone.records.iter().filter(|r| r.name() == &at).collect();
+            let mut here: Vec<Record> = zone
+                .records
+                .iter()
+                .filter(|r| r.name() == &at)
+                .cloned()
+                .collect();
+            if here.is_empty()
+                && let Some(wild) = zone.wildcard_for(&at)
+            {
+                here = zone
+                    .records
+                    .iter()
+                    .filter(|r| r.name() == &wild)
+                    .cloned()
+                    .map(|mut r| {
+                        r.set_name(at.clone());
+                        r
+                    })
+                    .collect();
+                wildcard = Some(wild);
+            }
             let wanted: Vec<Record> = here
                 .iter()
                 .filter(|r| r.record_type() == qtype)
-                .map(|r| (*r).clone())
+                .cloned()
                 .collect();
             if !wanted.is_empty() {
                 response.answers.extend(wanted);
@@ -148,13 +220,33 @@ impl Fake {
             }
             match here.iter().find(|r| r.record_type() == RecordType::CNAME) {
                 Some(cname) => {
-                    response.answers.push((*cname).clone());
+                    response.answers.push(cname.clone());
                     at = cname.cname_target().unwrap();
                     if !at.is_within(&zone.origin) {
                         break;
                     }
                 }
                 None => break,
+            }
+        }
+        if dnssec_ok {
+            let mut sigs = Vec::new();
+            for record in &response.answers {
+                let owner = match &wildcard {
+                    Some(wild) if record.name() == qname => wild,
+                    _ => record.name(),
+                };
+                for sig in zone.signatures(owner, record.record_type()) {
+                    let mut sig = sig.clone();
+                    sig.set_name(record.name().clone());
+                    if !sigs.contains(&sig) {
+                        sigs.push(sig);
+                    }
+                }
+            }
+            response.answers.extend(sigs);
+            if wildcard.is_some() {
+                response.authority.extend(zone.proofs());
             }
         }
         // Addresses for name servers in an answer, as priming expects.
@@ -175,7 +267,8 @@ impl Fake {
                 .records
                 .iter()
                 .any(|r| r.name().is_within(qname) && r.name() != qname);
-            if !exists && (!below || server.quirks.denies_empty_non_terminals) {
+            if !exists && wildcard.is_none() && (!below || server.quirks.denies_empty_non_terminals)
+            {
                 response.rcode = ResponseCode::NX_DOMAIN;
             }
             response.authority.extend(
@@ -184,6 +277,12 @@ impl Fake {
                     .filter(|r| r.record_type() == RecordType::SOA)
                     .cloned(),
             );
+            if dnssec_ok {
+                response
+                    .authority
+                    .extend(zone.signatures(&zone.origin, RecordType::SOA).cloned());
+                response.authority.extend(zone.proofs());
+            }
         } else {
             response.answers.extend(poison);
         }
@@ -191,6 +290,31 @@ impl Fake {
     }
 
     fn finish(server: &Server, mut response: Response, tcp: bool) -> Response {
+        if server.quirks.strips {
+            for section in [
+                &mut response.answers,
+                &mut response.authority,
+                &mut response.additional,
+            ] {
+                section.retain(|r| {
+                    !matches!(
+                        r.record_type(),
+                        RecordType::RRSIG | RecordType::NSEC | RecordType::NSEC3
+                    )
+                });
+            }
+        }
+        if server.quirks.tampers {
+            for record in &mut response.answers {
+                if record.record_type() == RecordType::A {
+                    *record = Record::a(
+                        record.name().clone(),
+                        record.ttl(),
+                        Ipv4Addr::new(6, 6, 6, 6),
+                    );
+                }
+            }
+        }
         if server.quirks.truncates && !tcp {
             response.answers.clear();
             response.authority.clear();
@@ -325,11 +449,13 @@ fn internet() -> Fake {
     fake
 }
 
+/// Recursion in the unsigned simulated internet: no validation.
 fn config() -> RecursorConfig {
     RecursorConfig {
         roots: Some(vec![ip("10.0.0.1")]),
         total_timeout: Duration::from_secs(3),
         ipv6: false,
+        dnssec: false,
         ..RecursorConfig::default()
     }
 }
@@ -509,7 +635,15 @@ async fn silent_and_truncating_servers_and_lost_case() {
             ..Quirks::default()
         },
     );
-    let (recursor, fake) = recursor(fake, config());
+    // The root is shown the whole name: `com.` alone comes out all
+    // lowercase from 0x20 one time in eight.
+    let (recursor, fake) = recursor(
+        fake,
+        RecursorConfig {
+            qname_minimisation: false,
+            ..config()
+        },
+    );
     let (response, _) = recursor
         .resolve(&query("www.example.com.", RecordType::A))
         .await;
@@ -636,3 +770,5 @@ fn minimisation_spreads_long_names() {
     );
     assert_eq!(super::next_child(&srv, 3, 1), None);
 }
+
+mod signed;
