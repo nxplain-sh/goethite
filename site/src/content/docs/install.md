@@ -115,7 +115,8 @@ are all managed through the API (see [Clients and groups](../groups/)).
 ## Point your network at it
 
 Hand out goethite's address as the DNS server in your router's DHCP settings, or configure it on
-each device. Two goethite nodes with a floating address arrive with clustering in a later release.
+each device. Two goethite nodes can share one address that whichever is healthy holds: see
+[High availability](../ha/#a-floating-ip).
 
 Keep goethite on your network: do not expose port 53 to the internet. Rate limiting stops the
 worst abuse, but an open resolver still attracts it.

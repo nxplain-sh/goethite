@@ -13,6 +13,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use goethite_api::TokenHash;
+use goethite_cluster::vrrp::VrrpConfig;
+use goethite_cluster::vrrp::packet::MAX_INTERVAL;
 use goethite_cluster::{NodeId, Role};
 use goethite_filter::{LineKind, parse_line};
 use goethite_proto::Name;
@@ -64,6 +66,9 @@ pub struct Config {
     /// The `[cluster]` table; absent for a node on its own.
     #[serde(default)]
     pub cluster: Option<ClusterSection>,
+    /// The `[vrrp]` table: the floating IP, held by `goethite vrrp`.
+    #[serde(default)]
+    pub vrrp: Option<VrrpSection>,
     /// The absolute directory of the config file, which relative paths are
     /// relative to. Set by [`Config::load`].
     #[serde(skip)]
@@ -121,6 +126,141 @@ impl ClusterSection {
             if path.is_relative() {
                 *path = base.join(&*path);
             }
+        }
+    }
+}
+
+/// The `[vrrp]` table: a floating IP that whichever node is healthy holds,
+/// moved between the nodes with VRRP by `goethite vrrp`.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct VrrpSection {
+    /// The network interface the address lives on.
+    pub interface: String,
+    /// The floating IP.
+    pub address: Ipv4Addr,
+    /// The other node's address on the interface.
+    pub peer: Ipv4Addr,
+    /// The virtual router's ID, 1 to 255: the same on both nodes, and
+    /// unique on the network.
+    pub router_id: u8,
+    /// This node's priority, 1 to 254: of two healthy nodes, the higher
+    /// holds the address.
+    pub priority: u8,
+    /// How often the node holding the address announces itself.
+    #[serde(default = "default_vrrp_interval_ms")]
+    pub interval_ms: u32,
+    /// Whether to take the address back from a peer of lower priority.
+    #[serde(default = "enabled")]
+    pub preempt: bool,
+    /// Advertise to the peer directly instead of by multicast.
+    #[serde(default)]
+    pub unicast: bool,
+    /// Where to check that goethite answers; a `[server] listen` address
+    /// other than the floating IP if unset.
+    #[serde(default)]
+    pub check: Option<SocketAddr>,
+}
+
+fn default_vrrp_interval_ms() -> u32 {
+    1000
+}
+
+/// The longest name Linux gives an interface (`IFNAMSIZ` - 1).
+const MAX_INTERFACE_NAME_LEN: usize = 15;
+
+impl VrrpSection {
+    fn validate(&self, server: &ServerSection) -> Result<()> {
+        let name = &self.interface;
+        if name.is_empty()
+            || name.len() > MAX_INTERFACE_NAME_LEN
+            || name == "."
+            || name == ".."
+            || name.contains(['/', ':', '\0'])
+            || name.contains(char::is_whitespace)
+        {
+            bail!("vrrp.interface {name:?} is not an interface name");
+        }
+        for (key, address) in [("address", self.address), ("peer", self.peer)] {
+            if address.is_unspecified()
+                || address.is_loopback()
+                || address.is_multicast()
+                || address.is_broadcast()
+            {
+                bail!("vrrp.{key} {address} is not a unicast address");
+            }
+        }
+        if self.peer == self.address {
+            bail!("vrrp.peer must be the other node's own address, not the floating IP");
+        }
+        if self.router_id == 0 {
+            bail!("vrrp.router_id must be between 1 and 255");
+        }
+        if !(1..=254).contains(&self.priority) {
+            bail!(
+                "vrrp.priority is {}; it must be between 1 and 254",
+                self.priority
+            );
+        }
+        if !(100..=40_950).contains(&self.interval_ms) || !self.interval_ms.is_multiple_of(10) {
+            bail!(
+                "vrrp.interval_ms is {}; it must be a multiple of 10 between 100 and 40950",
+                self.interval_ms
+            );
+        }
+        let covered = server.listen.iter().any(|listen| {
+            listen.ip() == IpAddr::V4(self.address)
+                || listen.ip() == IpAddr::V4(Ipv4Addr::UNSPECIFIED)
+        });
+        if !covered {
+            bail!(
+                "server.listen does not include the floating IP: add \"{}:53\" (or listen on \
+                 0.0.0.0) so goethite answers on it",
+                self.address
+            );
+        }
+        if self.check_address(server).is_none() {
+            bail!(
+                "nothing to check goethite on: add an address other than the floating IP to \
+                 server.listen, such as \"127.0.0.1:53\", or set vrrp.check"
+            );
+        }
+        Ok(())
+    }
+
+    /// Where `goethite vrrp` checks that goethite answers: `check`, or the
+    /// first listen address that is always there (not the floating IP),
+    /// with loopback for an unspecified one.
+    pub fn check_address(&self, server: &ServerSection) -> Option<SocketAddr> {
+        if self.check.is_some() {
+            return self.check;
+        }
+        server
+            .listen
+            .iter()
+            .find(|listen| listen.ip() != IpAddr::V4(self.address))
+            .map(|&listen| match listen.ip() {
+                IpAddr::V4(ip) if ip.is_unspecified() => {
+                    SocketAddr::from((Ipv4Addr::LOCALHOST, listen.port()))
+                }
+                IpAddr::V6(ip) if ip.is_unspecified() => {
+                    SocketAddr::from((std::net::Ipv6Addr::LOCALHOST, listen.port()))
+                }
+                _ => listen,
+            })
+    }
+
+    /// The settings `goethite vrrp` runs with.
+    pub fn to_vrrp_config(&self) -> VrrpConfig {
+        VrrpConfig {
+            interface: self.interface.clone(),
+            address: self.address,
+            router_id: self.router_id,
+            priority: self.priority,
+            interval: u16::try_from(self.interval_ms / 10).unwrap_or(MAX_INTERVAL),
+            preempt: self.preempt,
+            peer: self.peer,
+            unicast: self.unicast,
         }
     }
 }
@@ -985,6 +1125,12 @@ impl Config {
                     .as_ref()
                     .map_or(Ok(()), ClusterSection::validate)
             })
+            .and_then(|()| {
+                config
+                    .vrrp
+                    .as_ref()
+                    .map_or(Ok(()), |vrrp| vrrp.validate(&config.server))
+            })
             .and_then(|()| config.security.rebinding_protection().map(drop))
             .with_context(|| format!("invalid config file {}", path.display()))?;
         let mut config = config;
@@ -1022,6 +1168,16 @@ impl Config {
             })?;
         }
         Ok(config)
+    }
+
+    /// The DNS listener settings, with the floating IP (if any) bound
+    /// before this node holds it.
+    pub fn server_config(&self) -> ServerConfig {
+        let mut server = self.server.to_server_config();
+        if let Some(vrrp) = &self.vrrp {
+            server.freebind = vec![IpAddr::V4(vrrp.address)];
+        }
+        server
     }
 
     /// Parses configuration from TOML text.
@@ -1399,6 +1555,113 @@ mod tests {
         let server = off.server.to_server_config();
         assert_eq!(server.rate_limit.queries_per_second, 0);
         assert!(server.rate_limit.exempt_loopback);
+    }
+
+    /// A config file with these listen addresses and a valid `[vrrp]`
+    /// table, with `changes` (`key = value` lines) applied, if it is valid.
+    fn with_vrrp(listen: &str, changes: &str) -> Result<Config> {
+        let mut lines: Vec<String> = [
+            r#"interface = "eth0""#,
+            r#"address = "192.0.2.53""#,
+            r#"peer = "192.0.2.12""#,
+            "router_id = 53",
+            "priority = 150",
+        ]
+        .map(String::from)
+        .to_vec();
+        for change in changes.lines() {
+            let key = format!("{} ", change.split(" = ").next().unwrap());
+            lines.retain(|line| !line.starts_with(&key));
+            lines.push(change.to_owned());
+        }
+        let config = Config::parse(&format!(
+            "[server]\nlisten = {listen}\n[vrrp]\n{}\n",
+            lines.join("\n")
+        ))?;
+        if let Some(section) = &config.vrrp {
+            section.validate(&config.server)?;
+        }
+        Ok(config)
+    }
+
+    #[test]
+    fn vrrp_settings() {
+        let config = with_vrrp(r#"["192.0.2.53:53", "127.0.0.1:53"]"#, "").unwrap();
+        let section = config.vrrp.as_ref().unwrap();
+        assert_eq!(
+            section.to_vrrp_config(),
+            VrrpConfig {
+                interface: "eth0".into(),
+                address: Ipv4Addr::new(192, 0, 2, 53),
+                router_id: 53,
+                priority: 150,
+                interval: 100,
+                preempt: true,
+                peer: Ipv4Addr::new(192, 0, 2, 12),
+                unicast: false,
+            }
+        );
+        assert_eq!(
+            section.check_address(&config.server),
+            Some("127.0.0.1:53".parse().unwrap())
+        );
+        // The floating IP is bound before the node holds it.
+        assert_eq!(
+            config.server_config().freebind,
+            [IpAddr::V4(Ipv4Addr::new(192, 0, 2, 53))]
+        );
+
+        // Listening everywhere covers the floating IP, and is checked on
+        // loopback.
+        let config = with_vrrp(r#""0.0.0.0:53""#, "interval_ms = 250\npreempt = false").unwrap();
+        let section = config.vrrp.as_ref().unwrap();
+        assert_eq!(section.to_vrrp_config().interval, 25);
+        assert!(!section.preempt);
+        assert_eq!(
+            section.check_address(&config.server),
+            Some("127.0.0.1:53".parse().unwrap())
+        );
+        let config = with_vrrp(r#""192.0.2.53:53""#, r#"check = "[::1]:53""#).unwrap();
+        assert_eq!(
+            config.vrrp.unwrap().check_address(&config.server),
+            Some("[::1]:53".parse().unwrap())
+        );
+        // No [vrrp]: nothing bound early.
+        assert_eq!(
+            Config::default().server_config().freebind,
+            Vec::<IpAddr>::new()
+        );
+    }
+
+    #[test]
+    fn vrrp_settings_are_checked() {
+        let listen = r#"["192.0.2.53:53", "127.0.0.1:53"]"#;
+        for (change, expected) in [
+            ("router_id = 0", "router_id"),
+            ("priority = 0", "priority"),
+            ("priority = 255", "priority"),
+            ("interval_ms = 50", "interval_ms"),
+            ("interval_ms = 1005", "interval_ms"),
+            ("interval_ms = 41000", "interval_ms"),
+            (r#"interface = """#, "interface"),
+            (r#"interface = "eth0:1""#, "interface"),
+            (r#"interface = "a-very-long-name0""#, "interface"),
+            (r#"address = "127.0.0.1""#, "vrrp.address"),
+            (r#"address = "224.0.0.18""#, "vrrp.address"),
+            (r#"peer = "0.0.0.0""#, "vrrp.peer"),
+            (r#"peer = "192.0.2.53""#, "vrrp.peer"),
+        ] {
+            let err = with_vrrp(listen, change)
+                .err()
+                .unwrap_or_else(|| panic!("{change} was accepted"));
+            assert!(format!("{err:#}").contains(expected), "{change}: {err:#}");
+        }
+        let err = with_vrrp(r#""127.0.0.1:53""#, "").unwrap_err();
+        assert!(format!("{err:#}").contains("does not include the floating IP"));
+        let err = with_vrrp(r#""192.0.2.53:53""#, "").unwrap_err();
+        assert!(format!("{err:#}").contains("nothing to check"));
+        assert!(with_vrrp(listen, "router_id = 256").is_err(), "not a byte");
+        assert!(with_vrrp(listen, "unknown = 1").is_err());
     }
 
     #[test]

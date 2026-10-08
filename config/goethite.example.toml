@@ -191,3 +191,19 @@ web_ui = true
 # [cluster.peer]
 # node = "dns2"
 # address = "192.0.2.12:8054"
+
+# [vrrp]
+# A floating IP: clients use this one address for DNS, and whichever node
+# is healthy holds it. Run `goethite vrrp` (goethite-vrrp.service) on both
+# nodes, and add the address to [server] listen on both, beside an address
+# that is always there for the health check, such as
+# listen = ["192.0.2.53:53", "127.0.0.1:53"].
+# interface = "eth0"
+# address = "192.0.2.53"
+# peer = "192.0.2.12"         # the other node's own address on the interface
+# router_id = 53              # 1-255: the same on both nodes, unique on the network
+# priority = 150              # 1-254: the healthy node with the higher one holds it
+# interval_ms = 1000          # how often the holder says so; failover takes ~3.5x
+# preempt = true              # take the address back when healthy again
+# unicast = false             # advertise to the peer, for networks without multicast
+# check = "127.0.0.1:53"      # where to check goethite; defaults from [server] listen

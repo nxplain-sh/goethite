@@ -11,6 +11,7 @@ cargo-fuzz = true
 
 [dependencies]
 goethite-api = { path = "../crates/goethite-api" }
+goethite-cluster = { path = "../crates/goethite-cluster" }
 goethite-filter = { path = "../crates/goethite-filter" }
 goethite-proto = { path = "../crates/goethite-proto" }
 goethite-resolver = { path = "../crates/goethite-resolver" }
@@ -44,6 +45,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "parse_netlink"
+path = "fuzz_targets/parse_netlink.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "parse_cidr"
 path = "fuzz_targets/parse_cidr.rs"
 test = false
@@ -60,6 +68,13 @@ bench = false
 [[bin]]
 name = "parse_name"
 path = "fuzz_targets/parse_name.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_vrrp"
+path = "fuzz_targets/parse_vrrp.rs"
 test = false
 doc = false
 bench = false

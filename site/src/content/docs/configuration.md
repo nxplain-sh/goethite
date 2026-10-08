@@ -135,6 +135,23 @@ filtering configuration and the replica copies it. See [High availability](../ha
 | `peer.node` | required | The other node's name. Only a certificate with that name is accepted. |
 | `peer.address` | required | The other node's `listen` address. |
 
+## `[vrrp]`
+
+Absent unless the node shares a floating IP with another: the address that whichever node is
+healthy holds, moved by `goethite vrrp`. See [High availability](../ha/#a-floating-ip).
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `interface` | required | The network interface the floating IP lives on, such as `"eth0"`. |
+| `address` | required | The floating IP (IPv4). It must be in `[server] listen`, or `[server] listen` must include `0.0.0.0`. |
+| `peer` | required | The other node's own address on the interface. Announcements from anyone else are ignored. |
+| `router_id` | required | 1 to 255: the same on both nodes, and used by no other VRRP pair on the network. |
+| `priority` | required | 1 to 254. Of two healthy nodes, the one with the higher priority holds the address. |
+| `interval_ms` | `1000` | How often the holder announces itself, a multiple of 10 from 100 to 40950. The other node takes over after about 3.6 intervals of silence. |
+| `preempt` | `true` | Whether a node takes the address back when it is healthy again and has the higher priority. |
+| `unicast` | `false` | Send announcements straight to `peer` instead of to the multicast group 224.0.0.18, for networks that drop multicast. Set it on both nodes. |
+| `check` | from `[server] listen` | Where `goethite vrrp` checks that goethite answers. By default the first listen address other than the floating IP, with `127.0.0.1` or `::1` for `0.0.0.0` or `::`. |
+
 ## `[querylog]`
 
 | Key | Default | Meaning |

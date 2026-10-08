@@ -56,6 +56,11 @@ pub const TEST_TTL: u32 = 60;
 /// Time to live of the CNAME that sends a search host to its safe endpoint.
 const SAFE_SEARCH_TTL: u32 = 60;
 
+/// The name `goethite vrrp` checks the server with, once a second. It is
+/// answered like [`TEST_NAME`], and the binary leaves it out of the query
+/// log and the statistics.
+pub const HEALTH_NAME: &str = "health.goethite.test.";
+
 /// The built-in record `goethite.test. 60 IN A 127.0.0.53`.
 ///
 /// # Errors
@@ -64,6 +69,16 @@ const SAFE_SEARCH_TTL: u32 = 60;
 /// parsing panic-free.
 pub fn test_record() -> Result<Record, NameError> {
     Ok(Record::a(TEST_NAME.parse::<Name>()?, TEST_TTL, TEST_ADDR))
+}
+
+/// The built-in record `health.goethite.test. 0 IN A 127.0.0.53`: never
+/// cached, so every check reaches the server.
+///
+/// # Errors
+///
+/// Never in practice; [`HEALTH_NAME`] is a valid name.
+pub fn health_record() -> Result<Record, NameError> {
+    Ok(Record::a(HEALTH_NAME.parse::<Name>()?, 0, TEST_ADDR))
 }
 
 /// Gives records whose owner is the question name the client's own case,

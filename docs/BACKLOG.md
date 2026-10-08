@@ -68,7 +68,6 @@ Phase 1's scope shipped in v0.1.0. These items came up along the way; they are c
   the query was sent to. Needs `IP_PKTINFO` / `IPV6_RECVPKTINFO`; until then, list specific
   addresses on multihomed hosts.
 - **[P2] Rate limiting exemptions for trusted networks** (beyond loopback).
-- **[P3] Binding the floating IP before it is assigned** (`IP_FREEBIND`), for VRRP backups.
 
 ## Phase 2: v0.2 control
 
@@ -93,6 +92,18 @@ releases.
 - **[P5] `cargo-semver-checks`** if any crate is published (the HTTP API is already checked
   with oasdiff).
 - **[P2] JSON log format option** (for example `--log-format json`) for log shippers.
+
+## Phase 3: v0.3 HA
+
+- **[P4] An IPv6 floating IP:** VRRPv3 over IPv6 (link-local sources, `ff02::12`), with
+  unsolicited neighbor advertisements instead of gratuitous ARP, and `IPV6_FREEBIND`.
+- **[P4] Several floating IPs per pair,** for example one per VLAN, or a second address so each
+  node normally holds one and clients spread over both.
+- **[P4] The floating IP in the API, TUI and web UI.** `goethite vrrp` is a separate process; the
+  node could report whether it holds the address (it can see that from its interfaces) and the
+  helper's state, for example through a status file in the runtime directory.
+- **[P4] Link state in VRRP.** A node whose interface goes down keeps the address until the link
+  returns and it hears the peer; watching link events over netlink would release it at once.
 
 ## Phase 4: v0.4
 

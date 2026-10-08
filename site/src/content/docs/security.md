@@ -111,7 +111,14 @@ thread, then gives the privileges up:
   that it cannot become root again. Started as root without `user`, it logs a warning.
 
 Either way, goethite then empties its capability sets and sets `no_new_privs`, so it cannot gain
-privileges again, even by running a program. The filter lists and their `cache_dir` must be
+privileges again, even by running a program.
+
+A [floating IP](../ha/#a-floating-ip) needs privileges the DNS server never gets, so a separate
+process holds them: `goethite vrrp`, under
+[`dist/systemd/goethite-vrrp.service`](https://github.com/nxplain-sh/goethite/blob/main/dist/systemd/goethite-vrrp.service).
+It starts with `CAP_NET_RAW` and `CAP_NET_ADMIN`, opens its raw sockets, then keeps only
+`CAP_NET_ADMIN` (to add and remove the address) and sets `no_new_privs`. Its sandbox matches the
+DNS server's, with netlink and packet sockets allowed and nothing writable. The filter lists and their `cache_dir` must be
 readable, and the `cache_dir` writable, by the user goethite runs as. Dropping privileges is
 supported on Linux; on other platforms, which are for development only, `server.user` is an error.
 

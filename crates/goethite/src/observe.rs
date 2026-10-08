@@ -4,7 +4,8 @@ use std::sync::Arc;
 
 use arc_swap::ArcSwapOption;
 
-use goethite_resolver::Outcome;
+use goethite_proto::Name;
+use goethite_resolver::{HEALTH_NAME, Outcome};
 use goethite_server::{QueryEvent, QueryObserver, Transport};
 use goethite_store::{LogEvent, NameBuf, Protocol, QueryLog, QueryOutcome, RuleHit};
 use jiff::Timestamp;
@@ -16,9 +17,30 @@ use crate::metrics::Metrics;
 pub struct Observer {
     /// The query log, while the control plane runs: it can stop and start
     /// again (on an upgrade) while queries go on.
-    pub log: Arc<ArcSwapOption<QueryLog>>,
+    log: Arc<ArcSwapOption<QueryLog>>,
     /// The metrics.
-    pub metrics: Arc<Metrics>,
+    metrics: Arc<Metrics>,
+    /// [`HEALTH_NAME`]: health checks are counted in the metrics, but kept
+    /// out of the query log, which they would fill.
+    health: Name,
+}
+
+impl Observer {
+    /// Reports to `log` and `metrics`.
+    ///
+    /// # Errors
+    ///
+    /// Never in practice: [`HEALTH_NAME`] is a valid name.
+    pub fn new(
+        log: Arc<ArcSwapOption<QueryLog>>,
+        metrics: Arc<Metrics>,
+    ) -> Result<Self, goethite_proto::NameError> {
+        Ok(Self {
+            log,
+            metrics,
+            health: HEALTH_NAME.parse()?,
+        })
+    }
 }
 
 impl QueryObserver for Observer {
@@ -38,6 +60,9 @@ impl QueryObserver for Observer {
             Transport::Tcp => Protocol::Tcp,
         };
         self.metrics.observe(outcome, protocol, event.elapsed);
+        if outcome == QueryOutcome::Local && event.query.question.name == self.health {
+            return;
+        }
         let log = self.log.load();
         let Some(log) = log.as_ref() else {
             return;

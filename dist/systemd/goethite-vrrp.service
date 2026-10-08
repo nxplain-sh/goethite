@@ -1,0 +1,77 @@
+# Hardened systemd unit for goethite's floating IP (VRRP).
+#
+# Install it beside goethite.service on both nodes of a pair, set up the
+# [vrrp] table in /etc/goethite/goethite.toml, then run
+# `systemctl enable --now goethite-vrrp`.
+#
+# `goethite vrrp` checks the DNS server once a second and moves the floating
+# IP to whichever node is healthy. It is a separate service so the DNS
+# server never holds what this one needs: CAP_NET_RAW to open its raw and
+# packet sockets, which it gives up once they are open, and CAP_NET_ADMIN
+# to add and remove the address. Stopping it on the node holding the
+# address hands the address over at once.
+# `systemd-analyze security goethite-vrrp` reviews the sandbox.
+
+[Unit]
+Description=goethite floating IP (VRRP)
+Documentation=https://nxplain-sh.github.io/goethite/ha/
+Wants=network-online.target
+After=network-online.target goethite.service
+# Stopped and restarted with the DNS server: the peer takes over meanwhile.
+PartOf=goethite.service
+
+[Service]
+Type=notify
+ExecStart=/usr/bin/goethite vrrp --config /etc/goethite/goethite.toml
+Restart=on-failure
+RestartSec=2s
+
+# Identity: nothing to write.
+DynamicUser=yes
+ConfigurationDirectory=goethite
+UMask=0077
+
+# Privileges: raw sockets and address changes, and no way to gain more.
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+NoNewPrivileges=yes
+SecureBits=noroot-locked
+
+# File system.
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectProc=invisible
+ProcSubset=pid
+
+# Kernel and host.
+ProtectHostname=yes
+ProtectClock=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+DevicePolicy=closed
+
+# Network: IPv4 for VRRP and health checks (IPv6 too, if goethite is
+# checked over it), netlink for the address, packet sockets for gratuitous
+# ARP, and a Unix socket for telling systemd how it is doing.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_NETLINK AF_PACKET AF_UNIX
+
+# System calls: what services usually need, minus the privileged ones.
+# capset stays allowed: goethite vrrp uses it to give up CAP_NET_RAW.
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallFilter=capset
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target

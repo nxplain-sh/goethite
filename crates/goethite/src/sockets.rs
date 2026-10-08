@@ -42,7 +42,7 @@ impl Sockets {
     ///
     /// If one cannot be bound.
     pub fn bind(config: &Config) -> Result<Self> {
-        let dns = Listeners::bind(&config.server.to_server_config())?;
+        let dns = Listeners::bind(&config.server_config())?;
         let api = if config.api.enabled {
             config
                 .api
@@ -79,7 +79,7 @@ impl Sockets {
                 )
             })
         };
-        let server = config.server.to_server_config();
+        let server = config.server_config();
         let mut addresses = Vec::with_capacity(server.listen.len());
         for (n, &addr) in server.listen.iter().enumerate() {
             let mut udp = Vec::new();

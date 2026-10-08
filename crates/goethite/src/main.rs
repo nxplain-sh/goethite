@@ -15,6 +15,7 @@ mod plane;
 mod privileges;
 mod secrets;
 mod sockets;
+mod vrrp;
 
 use std::future::Future;
 use std::io::IsTerminal;
@@ -27,7 +28,7 @@ use arc_swap::ArcSwapOption;
 use clap::{Parser, Subcommand};
 use goethite_api::{Api, ApiConfig, EmbeddedWeb, WebAssets};
 use goethite_resolver::{
-    Cache, Forwarder, ForwarderConfig, Policy, PolicyState, Resolver, test_record,
+    Cache, Forwarder, ForwarderConfig, Policy, PolicyState, Resolver, health_record, test_record,
 };
 use goethite_server::Server;
 use goethite_store::{Actor, Import, Store};
@@ -88,6 +89,14 @@ enum Command {
         #[command(subcommand)]
         command: ClusterCommand,
     },
+    /// Hold the floating IP of the `[vrrp]` table while this node should:
+    /// run beside `goethite run`, with `CAP_NET_ADMIN` and `CAP_NET_RAW`
+    /// (Linux), until SIGINT or SIGTERM.
+    Vrrp {
+        /// Path to the TOML configuration file.
+        #[arg(long, short, value_name = "PATH")]
+        config: PathBuf,
+    },
     /// Open the terminal UI for a goethite node, through its API.
     Tui {
         /// The API's address. Defaults to `GOETHITE_API`, then
@@ -137,6 +146,7 @@ fn main() -> ExitCode {
         Command::Run { config } => run(&config),
         Command::CheckConfig { config } => check_config(&config),
         Command::Import { config } => import(&config),
+        Command::Vrrp { config } => vrrp::run(&config),
         Command::Token => token(),
         Command::Openapi => print(&goethite_api::openapi_json()),
         Command::Cluster { command } => match command {
@@ -302,7 +312,7 @@ fn resolver(config: &Config, state: &Arc<PolicyState>) -> Result<Resolver> {
         .context("invalid [[upstream]] configuration")?;
     let cache = Cache::new(config.cache.to_cache_config());
     info!(max_entries = config.cache.max_entries, "cache");
-    let mut resolver = Resolver::new(vec![test_record()?])
+    let mut resolver = Resolver::new(vec![test_record()?, health_record()?])
         .with_cache(cache)
         .with_forwarder(forwarder)
         .with_policy(Arc::clone(state))
@@ -341,13 +351,13 @@ async fn serve(
     let observer_log = Arc::new(ArcSwapOption::empty());
     let server = Server::new(
         sockets.take_dns().context("the DNS sockets are missing")?,
-        config.server.to_server_config(),
+        config.server_config(),
         Arc::clone(&resolver),
     )?
-    .with_observer(Arc::new(observe::Observer {
-        log: Arc::clone(&observer_log),
-        metrics: Arc::clone(&metrics),
-    }));
+    .with_observer(Arc::new(observe::Observer::new(
+        Arc::clone(&observer_log),
+        Arc::clone(&metrics),
+    )?));
     let data = plane::DataPlane {
         resolver,
         state,

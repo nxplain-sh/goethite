@@ -78,7 +78,7 @@ cd web && npm ci --ignore-scripts && npm run build
 | `web/`                      | Web UI (Vite, React, TanStack), embedded into the binary                |
 | `site/`                     | Project website and docs (Astro Starlight), deployed to GitHub Pages    |
 | `fuzz/`                     | cargo-fuzz targets                                                      |
-| `dist/`                     | Deployment files: the hardened systemd unit                             |
+| `dist/`                     | Deployment files: the hardened systemd units                            |
 | `docs/`                     | Threat model, ADRs, backlog                                             |
 
 Several crates are still empty skeletons. Benchmarks and how to record them are in

@@ -1,6 +1,6 @@
 ---
 title: High availability
-description: Run two goethite nodes that share one configuration.
+description: Run two goethite nodes that share one configuration and one floating IP.
 ---
 
 Two goethite nodes can form a cluster. Each answers DNS on its own, so either one can serve your
@@ -136,13 +136,121 @@ It becomes a replica and copies the new primary's configuration, replacing its o
 on it while the two were apart are lost, which is why both nodes warn as long as two primaries
 exist. A demote is refused unless the other node is a reachable primary (`force` overrides).
 
+## A floating IP
+
+Many clients use only their first DNS server, or wait seconds before trying the second. A
+floating IP gives them one address that whichever node is healthy holds. `goethite vrrp` moves it
+between the nodes with VRRP version 3 (RFC 5798), the protocol routers use for the same job. It
+runs beside the DNS server on each node:
+
+- once a second it asks its own node for `health.goethite.test`, which goethite answers itself
+  and leaves out of the query log;
+- the healthy node with the higher priority holds the address and says so once a second;
+- after three failed health checks in a row, a node hands the address over at once. After two
+  good ones, it can hold the address again;
+- when the holder falls silent, the other node takes over within 3.6 seconds and announces the
+  move with gratuitous ARP, so switches and clients follow straight away.
+
+The floating IP has nothing to do with which node is primary: either node can hold it, with or
+without a `[cluster]` table. Both nodes must be on the same network segment, since VRRP and ARP
+do not cross routers.
+
+### Setting it up
+
+On `dns1` at 192.0.2.11, with the floating IP 192.0.2.53:
+
+```toml
+[server]
+# The floating IP, and an address that is always there for the health check.
+listen = ["192.0.2.53:53", "127.0.0.1:53"]
+
+[vrrp]
+interface = "eth0"
+address = "192.0.2.53"
+peer = "192.0.2.12"
+router_id = 53
+priority = 150
+```
+
+On `dns2`, the same with `peer = "192.0.2.11"` and a lower priority, such as `100`. goethite
+listens on the floating IP even while the other node holds it, and answers on it as soon as it
+arrives. All the settings are in the [configuration reference](../configuration/#vrrp).
+
+Then install
+[`dist/systemd/goethite-vrrp.service`](https://github.com/nxplain-sh/goethite/blob/main/dist/systemd/goethite-vrrp.service)
+beside `goethite.service` on both nodes:
+
+```sh
+sudo install -m 0644 dist/systemd/goethite-vrrp.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl restart goethite
+sudo systemctl enable --now goethite-vrrp
+```
+
+It is a separate service so the DNS server never holds what it needs: `CAP_NET_RAW` for its raw
+sockets, which it gives up once they are open, and `CAP_NET_ADMIN` to add and remove the address.
+Its log says what it does:
+
+```
+INFO goethite answers its health checks; standing by as backup
+INFO the peer is silent or has lower priority; taking over
+INFO this node holds the floating IP now address=192.0.2.53 interface=eth0
+```
+
+`ip -4 addr show eth0` lists the floating IP on the node that holds it. Hand it out as the DNS
+server in your DHCP settings.
+
+### How fast it moves
+
+With the default one-second interval, measured between Linux network namespaces:
+
+| What happens on the node holding the address | The other node holds it after |
+| --- | --- |
+| `goethite-vrrp` stops, or `goethite` stops (which stops it too) | 0.7 s: it hands over at once |
+| goethite stops answering | about 3 s: three failed health checks |
+| The node fails, or is cut off | 3.6 s: three missed announcements, plus a little |
+
+When the node with the higher priority is healthy again, it takes the address back after about
+5 seconds. Set `preempt = false` on both nodes to leave it where it is instead, saving a second
+move. A lower `interval_ms` makes everything faster, at the risk of a busy network delaying
+announcements enough to move the address for nothing.
+
+### Networks without multicast
+
+VRRP announces itself to the multicast group 224.0.0.18. Some virtual switches and Wi-Fi bridges
+drop multicast: then both nodes take the address. Set `unicast = true` on both nodes to send the
+announcements straight to the peer.
+
+### Security
+
+VRRP has no authentication: version 3 dropped it, since a password sent in the clear protected
+nothing. goethite accepts announcements only from the configured `peer`, only from the same
+network segment (with a TTL of 255), and only for the configured `router_id` and address. Any
+host on that segment can still forge an announcement and take the address, just as it could take
+any address there with forged ARP. Run the floating IP on a network you trust, and give it a
+`router_id` no other VRRP pair on the network uses.
+
+## Upgrading the pair
+
+Upgrade one node at a time, as in [Upgrade](../install/#upgrade): the handover drops no query,
+and the floating IP stays where it is. Upgrade the replica first. While the two versions differ,
+both nodes report it in `problems`, and a replica refuses a configuration from another store
+schema until it runs the same version.
+
+`goethite vrrp` runs the old binary until it restarts. `sudo systemctl restart goethite-vrrp`
+hands the floating IP to the other node and, with `preempt`, takes it back about 5 seconds
+later. A query sent at the moment of a move can go unanswered and be retried by the client, so
+restart it when that does not matter, or on the node that does not hold the address.
+
 ## When something fails
 
 | What happens | What goethite does |
 | --- | --- |
 | The primary goes down | The replica keeps answering with its last copy, logs once that it cannot reach the primary, refuses configuration changes, and copies again as soon as the primary is back. Promote the replica to change the configuration meanwhile. |
 | The replica goes down | Nothing changes on the primary. The replica copies the latest configuration when it starts. |
-| The network between them fails | Both keep answering. Changes on the primary reach the replica when the network is back. |
+| The network between them fails | Both keep answering. Changes on the primary reach the replica when the network is back. If the nodes cannot hear each other's VRRP announcements, both take the floating IP until the network is back. |
+| The node holding the floating IP fails | The other node takes the address within 3.6 seconds, and clients keep using it. |
+| `goethite vrrp` crashes on the node holding the address | The other node takes over within 3.6 seconds. The crashed one's copy of the address stays until systemd restarts it, 2 seconds later, and it removes the copy first thing. |
 
 The cluster network carries configuration only. Keep it private anyway, and allow the cluster
 port only between the two nodes.

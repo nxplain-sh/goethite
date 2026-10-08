@@ -17,7 +17,7 @@ mod limits;
 use std::fmt;
 use std::future::Future;
 use std::io;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime};
@@ -69,6 +69,10 @@ pub struct ServerConfig {
     pub tcp_idle_timeout: Duration,
     /// How long shutdown waits for queries in progress before abandoning them.
     pub shutdown_grace: Duration,
+    /// Listen addresses that may not be on this host yet, such as a
+    /// floating IP the peer holds: bound with `IP_FREEBIND` (Linux), and
+    /// answered on once the address arrives. Other addresses must exist.
+    pub freebind: Vec<IpAddr>,
 }
 
 impl ServerConfig {
@@ -83,6 +87,7 @@ impl ServerConfig {
             max_tcp_connections_per_client: 16,
             tcp_idle_timeout: Duration::from_secs(10),
             shutdown_grace: Duration::from_secs(5),
+            freebind: Vec::new(),
         }
     }
 }

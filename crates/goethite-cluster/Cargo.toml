@@ -23,12 +23,18 @@ rustls.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["net", "sync", "time"] }
+tokio = { workspace = true, features = ["macros", "net", "sync", "time"] }
 tokio-rustls.workspace = true
 tracing.workspace = true
 
+# The floating IP: raw sockets, netlink and packet sockets.
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix.workspace = true
+socket2.workspace = true
+
 [dev-dependencies]
 goethite-api.workspace = true
+proptest.workspace = true
 tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
 
 [lints]

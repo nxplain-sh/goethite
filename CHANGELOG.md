@@ -33,6 +33,13 @@ configuration format.
 - **Cluster statistics.** `GET /api/v1/stats?scope=cluster` adds up both nodes' counts and
   merges their top lists, naming any node it could not ask. The TUI and the web UI show the
   cluster's statistics and state.
+- **A floating IP.** `goethite vrrp`, run by the new `goethite-vrrp.service` beside goethite on
+  both nodes, moves one IPv4 address (the `[vrrp]` table) to whichever node is healthy, with VRRP
+  version 3: within 3.6 seconds when the holder fails, in under a second when it stops. It checks
+  its node's DNS server every second, announces moves with gratuitous ARP, accepts announcements
+  only from the configured peer on the same link, and interoperates with keepalived. It runs
+  with `CAP_NET_ADMIN` only once its sockets are open; the DNS server still runs with no
+  capabilities, and binds the floating IP before holding it (`IP_FREEBIND`).
 
 ### Fixed
 

@@ -143,6 +143,46 @@ pub fn drop_privileges(account: Option<&Account>) -> Result<()> {
     Ok(())
 }
 
+/// Keeps only `CAP_NET_ADMIN`, for `goethite vrrp` once its sockets are
+/// open, and sets `no_new_privs`. Call it before starting any thread.
+#[cfg(target_os = "linux")]
+pub fn keep_net_admin() -> Result<()> {
+    use rustix::process::geteuid;
+    use rustix::thread::{
+        CapabilitySet, CapabilitySets, capabilities, set_capabilities, set_no_new_privs,
+    };
+    use tracing::{info, warn};
+
+    let threads = std::fs::read_dir("/proc/self/task")
+        .context("cannot count the process's threads in /proc/self/task")?
+        .count();
+    if threads != 1 {
+        bail!("cannot drop privileges: the process already runs {threads} threads");
+    }
+    let keep = CapabilitySet::NET_ADMIN;
+    let held = capabilities(None).context("cannot read capabilities")?;
+    if !held.permitted.contains(keep) {
+        bail!("goethite vrrp needs CAP_NET_ADMIN to add and remove the floating IP");
+    }
+    // The ambient set follows: it cannot hold what is not inheritable.
+    let only = CapabilitySets {
+        effective: keep,
+        permitted: keep,
+        inheritable: CapabilitySet::empty(),
+    };
+    set_capabilities(None, only).context("cannot give up capabilities")?;
+    set_no_new_privs(true).context("cannot set no_new_privs")?;
+    let left = capabilities(None).context("cannot read capabilities")?;
+    if left.effective != keep || left.permitted != keep {
+        bail!("capabilities other than CAP_NET_ADMIN remain: {left:?}");
+    }
+    if geteuid().is_root() {
+        warn!("running as root: the systemd unit runs goethite vrrp as an unprivileged user");
+    }
+    info!("kept only CAP_NET_ADMIN");
+    Ok(())
+}
+
 /// Other platforms are for development only: `server.user` is refused.
 #[cfg(not(target_os = "linux"))]
 pub fn drop_privileges(account: Option<&Account>) -> Result<()> {

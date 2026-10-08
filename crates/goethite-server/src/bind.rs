@@ -79,7 +79,7 @@ impl Listeners {
         let addresses = config
             .listen
             .iter()
-            .map(|&addr| bind_address(addr, udp_sockets))
+            .map(|&addr| bind_address(addr, udp_sockets, config.freebind.contains(&addr.ip())))
             .collect::<Result<_, _>>()?;
         Ok(Self { addresses })
     }
@@ -150,7 +150,11 @@ impl Listeners {
     }
 }
 
-fn bind_address(addr: SocketAddr, udp_sockets: usize) -> Result<Bound, ServerError> {
+fn bind_address(
+    addr: SocketAddr,
+    udp_sockets: usize,
+    freebind: bool,
+) -> Result<Bound, ServerError> {
     let error = |transport| {
         move |source| ServerError::Bind {
             transport,
@@ -159,30 +163,43 @@ fn bind_address(addr: SocketAddr, udp_sockets: usize) -> Result<Bound, ServerErr
         }
     };
     let reuse_port = udp_sockets > 1;
-    let first = udp_socket(addr, reuse_port).map_err(error(Transport::Udp))?;
+    let first = udp_socket(addr, reuse_port, freebind).map_err(error(Transport::Udp))?;
     // With port 0 the first socket picks the port; the others join it.
     let actual = first.local_addr().map_err(error(Transport::Udp))?;
     let mut udp = Vec::with_capacity(udp_sockets);
     udp.push(first);
     for _ in 1..udp_sockets {
-        udp.push(udp_socket(actual, reuse_port).map_err(error(Transport::Udp))?);
+        udp.push(udp_socket(actual, reuse_port, freebind).map_err(error(Transport::Udp))?);
     }
-    let tcp = tcp_listener(addr).map_err(error(Transport::Tcp))?;
+    let tcp = tcp_listener(addr, freebind).map_err(error(Transport::Tcp))?;
     Ok(Bound { udp, tcp })
 }
 
-fn socket(addr: SocketAddr, kind: Type, protocol: Protocol) -> io::Result<Socket> {
+fn socket(addr: SocketAddr, kind: Type, protocol: Protocol, freebind: bool) -> io::Result<Socket> {
     let socket = Socket::new(Domain::for_address(addr), kind, Some(protocol))?;
     if addr.is_ipv6() {
         socket.set_only_v6(true)?;
     }
+    // An address that comes and goes, such as a floating IP: bind it even
+    // while another host holds it. Development platforms bind only
+    // addresses they have.
+    #[cfg(target_os = "linux")]
+    if freebind {
+        if addr.is_ipv6() {
+            socket.set_freebind_v6(true)?;
+        } else {
+            socket.set_freebind_v4(true)?;
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = freebind;
     // tokio needs non-blocking sockets.
     socket.set_nonblocking(true)?;
     Ok(socket)
 }
 
-fn udp_socket(addr: SocketAddr, reuse_port: bool) -> io::Result<UdpSocket> {
-    let socket = socket(addr, Type::DGRAM, Protocol::UDP)?;
+fn udp_socket(addr: SocketAddr, reuse_port: bool, freebind: bool) -> io::Result<UdpSocket> {
+    let socket = socket(addr, Type::DGRAM, Protocol::UDP, freebind)?;
     // Only set when there are several sockets: it would also let another
     // process of the same user bind the port and receive part of the queries.
     #[cfg(target_os = "linux")]
@@ -195,12 +212,30 @@ fn udp_socket(addr: SocketAddr, reuse_port: bool) -> io::Result<UdpSocket> {
     Ok(socket.into())
 }
 
-fn tcp_listener(addr: SocketAddr) -> io::Result<TcpListener> {
-    let socket = socket(addr, Type::STREAM, Protocol::TCP)?;
+fn tcp_listener(addr: SocketAddr, freebind: bool) -> io::Result<TcpListener> {
+    let socket = socket(addr, Type::STREAM, Protocol::TCP, freebind)?;
     // As the standard library does: restarting must not wait for TIME_WAIT.
     #[cfg(unix)]
     socket.set_reuse_address(true)?;
     socket.bind(&addr.into())?;
     socket.listen(TCP_BACKLOG)?;
     Ok(socket.into())
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+
+    /// A floating IP is bound before this host holds it.
+    #[test]
+    fn binds_a_floating_ip_before_it_arrives() {
+        // TEST-NET-1: no host here has it.
+        let addr: SocketAddr = "192.0.2.53:0".parse().unwrap();
+        let mut config = ServerConfig::new(vec![addr]);
+        assert!(Listeners::bind(&config).is_err(), "not on this host");
+        config.freebind = vec![addr.ip()];
+        let listeners = Listeners::bind(&config).unwrap();
+        assert_eq!(listeners.udp_local_addrs().unwrap()[0].ip(), addr.ip());
+        assert_eq!(listeners.tcp_local_addrs().unwrap()[0].ip(), addr.ip());
+    }
 }
