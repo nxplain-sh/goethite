@@ -549,6 +549,7 @@ mod tests {
                 entries: 3,
                 dropped: 0,
             },
+            cluster: None,
         }
     }
 

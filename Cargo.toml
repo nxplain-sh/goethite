@@ -53,6 +53,7 @@ thiserror = "2.0.21"
 tokio = "1.53.2"
 tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12"] }
 toml = { version = "1.1.6", default-features = false, features = ["std", "parse", "serde"] }
+tower = { version = "0.5.3", default-features = false, features = ["util"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["std", "fmt", "ansi", "smallvec", "env-filter"] }
 utoipa = { version = "6.0.0", features = ["jiff_0_2"] }

@@ -17,6 +17,10 @@ pub const NODE_PATH: &str = "/cluster/v1/node";
 /// The path of the configuration a replica follows.
 pub const CONFIG_PATH: &str = "/cluster/v1/config";
 
+/// The path a replica forwards configuration changes to; the binary
+/// serves it, since it runs them through the API.
+pub const API_PATH: &str = "/cluster/v1/api";
+
 /// The longest a configuration request waits for a change, in seconds.
 pub const MAX_WAIT_SECS: u64 = 55;
 

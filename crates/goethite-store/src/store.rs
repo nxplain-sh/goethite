@@ -208,16 +208,21 @@ pub enum AuditAction {
     Refresh,
     /// The configuration was copied from the cluster's primary.
     Replicate,
+    /// This node became the cluster's primary.
+    Promote,
+    /// This node became a replica of the cluster's primary.
+    Demote,
 }
 
 extensible_enum!(
     AuditAction,
     "What an audit entry records: `create`, `update` or `delete` (a resource or the settings), \
      `import` (the config file's `[filter]` table), `pause` or `resume` (filtering), `refresh` \
-     (a list download) or `replicate` (a copy of the cluster primary's configuration). More may \
-     be added: show unknown values as they are.",
+     (a list download), `replicate` (a copy of the cluster primary's configuration), `promote` \
+     or `demote` (this node became the cluster's primary or a replica). More may be added: show \
+     unknown values as they are.",
     [
-        Create, Update, Delete, Import, Pause, Resume, Refresh, Replicate
+        Create, Update, Delete, Import, Pause, Resume, Refresh, Replicate, Promote, Demote
     ]
 );
 
@@ -887,6 +892,43 @@ impl Store {
             incoming.version,
         )?;
         Ok(Some(summary))
+    }
+
+    /// Starts a new epoch: this node's configuration becomes the cluster's,
+    /// and a replica that copied another primary takes it whole. For a node
+    /// that becomes the primary.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn start_epoch(&self, actor: &Actor) -> Result<ConfigVersion, StoreError> {
+        let _writer = self.writer.lock().unwrap_or_else(PoisonError::into_inner);
+        let current = self.current();
+        let mut epoch = new_epoch();
+        while epoch == current.version.epoch {
+            epoch = new_epoch();
+        }
+        let next = ConfigVersion {
+            epoch,
+            version: current.version.version.saturating_add(1),
+        };
+        let mut batch = Batch::default();
+        batch.audit.push(Pending {
+            action: AuditAction::Promote,
+            kind: None,
+            resource: None,
+            before: serde_json::to_value(current.version).ok(),
+            after: serde_json::to_value(next).ok(),
+            detail: Some("this node is now the cluster's primary".into()),
+        });
+        self.commit(
+            (*current.config).clone(),
+            batch,
+            actor,
+            Timestamp::now(),
+            next,
+        )?;
+        Ok(next)
     }
 
     /// Records an action that is not a configuration change, such as

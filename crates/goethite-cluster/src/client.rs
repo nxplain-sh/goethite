@@ -9,13 +9,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use goethite_store::{ConfigExport, ConfigVersion};
-use http_body_util::{BodyExt, Empty, Limited};
+use http_body_util::{BodyExt, Full, Limited};
 use hyper::body::Bytes;
+use hyper::header::CONTENT_TYPE;
 use hyper::header::HOST;
 use hyper::{Method, Request, StatusCode};
 use hyper_util::rt::TokioIo;
 use rustls::ClientConfig;
 use rustls::pki_types::ServerName;
+use serde::Serialize;
 use serde::de::DeserializeOwned;
 use tokio::net::TcpStream;
 use tokio::time::timeout;
@@ -146,8 +148,38 @@ impl PeerClient {
         self.decode(&body).map(Some)
     }
 
+    /// Sends `body` as JSON to `path` and decodes the JSON answer.
+    ///
+    /// # Errors
+    ///
+    /// A [`ClientError`].
+    pub async fn post<B: Serialize, T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> Result<T, ClientError> {
+        let bytes = serde_json::to_vec(body).map_err(|err| ClientError::Decode {
+            peer: self.peer.clone(),
+            reason: err.to_string(),
+        })?;
+        let (_, answer) = self
+            .send(Method::POST, path, Some(Bytes::from(bytes)), TIMEOUT)
+            .await?;
+        self.decode(&answer)
+    }
+
     async fn get(&self, path: &str, limit: Duration) -> Result<(StatusCode, Bytes), ClientError> {
-        let (status, body) = timeout(limit, self.exchange(path))
+        self.send(Method::GET, path, None, limit).await
+    }
+
+    async fn send(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<Bytes>,
+        limit: Duration,
+    ) -> Result<(StatusCode, Bytes), ClientError> {
+        let (status, body) = timeout(limit, self.exchange(method, path, body))
             .await
             .map_err(|_| self.connect_error("timed out"))??;
         if status.is_success() {
@@ -165,7 +197,12 @@ impl PeerClient {
         })
     }
 
-    async fn exchange(&self, path: &str) -> Result<(StatusCode, Bytes), ClientError> {
+    async fn exchange(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<Bytes>,
+    ) -> Result<(StatusCode, Bytes), ClientError> {
         let stream = timeout(TIMEOUT, TcpStream::connect(self.address))
             .await
             .map_err(|_| self.connect_error("connecting timed out"))?
@@ -178,11 +215,15 @@ impl PeerClient {
             .await
             .map_err(|err| self.connect_error(err))?;
         tokio::spawn(connection);
-        let request = Request::builder()
-            .method(Method::GET)
+        let mut request = Request::builder()
+            .method(method)
             .uri(path)
-            .header(HOST, self.peer.cert_name())
-            .body(Empty::<Bytes>::new())
+            .header(HOST, self.peer.cert_name());
+        if body.is_some() {
+            request = request.header(CONTENT_TYPE, "application/json");
+        }
+        let request = request
+            .body(Full::new(body.unwrap_or_default()))
             .map_err(|err| self.connect_error(err))?;
         let response = sender
             .send_request(request)

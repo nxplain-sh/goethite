@@ -23,6 +23,7 @@ use goethite_store::{Actor, ActorKind};
 use ring::digest::{SHA256, digest};
 
 use crate::Api;
+use crate::cluster::TrustedActor;
 use crate::error::ApiError;
 
 /// Tokens start with this, so they are easy to recognize (and to find if
@@ -113,6 +114,12 @@ pub(crate) async fn authenticate(
     mut request: Request,
     next: Next,
 ) -> Result<Response, ApiError> {
+    // A change forwarded by the cluster's replica, run by this node itself:
+    // the replica authenticated the caller.
+    if let Some(TrustedActor(actor)) = request.extensions().get::<TrustedActor>().cloned() {
+        request.extensions_mut().insert(actor);
+        return Ok(next.run(request).await);
+    }
     let peer = request
         .extensions()
         .get::<PeerAddr>()

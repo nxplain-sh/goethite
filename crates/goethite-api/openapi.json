@@ -372,6 +372,154 @@
         ]
       }
     },
+    "/api/v1/cluster": {
+      "get": {
+        "tags": [
+          "cluster"
+        ],
+        "summary": "This node's cluster: its role, the other node, and how following the\nprimary goes.",
+        "operationId": "get_cluster",
+        "responses": {
+          "200": {
+            "description": "The cluster",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterStatus"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "This node is not in a cluster",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/cluster/demote": {
+      "post": {
+        "tags": [
+          "cluster"
+        ],
+        "summary": "Makes this node a replica: it copies the other node's configuration\nfrom then on, replacing its own. Refused unless the other node is\nreachable and primary, unless forced.",
+        "operationId": "demote",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RoleChange"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "This node is a replica",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterStatus"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "This node is not in a cluster",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The other node is not a reachable primary",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/cluster/promote": {
+      "post": {
+        "tags": [
+          "cluster"
+        ],
+        "summary": "Makes this node the primary. Its configuration becomes the cluster's,\nin a new epoch. Refused while the current primary is reachable, unless\nforced: demote that one first.",
+        "operationId": "promote",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RoleChange"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "This node is the primary",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterStatus"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "This node is not in a cluster",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The other node is reachable and primary",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      }
+    },
     "/api/v1/groups": {
       "get": {
         "tags": [
@@ -2066,7 +2214,7 @@
       },
       "AuditAction": {
         "type": "string",
-        "description": "What an audit entry records: `create`, `update` or `delete` (a resource or the settings), `import` (the config file's `[filter]` table), `pause` or `resume` (filtering), `refresh` (a list download) or `replicate` (a copy of the cluster primary's configuration). More may be added: show unknown values as they are.",
+        "description": "What an audit entry records: `create`, `update` or `delete` (a resource or the settings), `import` (the config file's `[filter]` table), `pause` or `resume` (filtering), `refresh` (a list download), `replicate` (a copy of the cluster primary's configuration), `promote` or `demote` (this node became the cluster's primary or a replica). More may be added: show unknown values as they are.",
         "x-extensible-enum": [
           "create",
           "update",
@@ -2075,7 +2223,9 @@
           "pause",
           "resume",
           "refresh",
-          "replicate"
+          "replicate",
+          "promote",
+          "demote"
         ]
       },
       "AuditEntry": {
@@ -2252,6 +2402,88 @@
           }
         },
         "additionalProperties": false
+      },
+      "ClusterRole": {
+        "type": "string",
+        "description": "A node's role in its cluster.",
+        "enum": [
+          "primary",
+          "replica"
+        ]
+      },
+      "ClusterStatus": {
+        "type": "object",
+        "description": "This node's cluster.",
+        "required": [
+          "node",
+          "role",
+          "config",
+          "writable",
+          "peer",
+          "problems"
+        ],
+        "properties": {
+          "config": {
+            "$ref": "#/components/schemas/ConfigVersion",
+            "description": "Its configuration's version."
+          },
+          "node": {
+            "type": "string",
+            "description": "This node's name."
+          },
+          "peer": {
+            "$ref": "#/components/schemas/PeerStatus",
+            "description": "The other node, as last seen."
+          },
+          "problems": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Things someone should look at, in words, such as both nodes being\nprimary."
+          },
+          "role": {
+            "$ref": "#/components/schemas/ClusterRole",
+            "description": "Its role."
+          },
+          "sync": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SyncStatus",
+                "description": "On a replica, how following the primary goes."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "writable": {
+            "type": "boolean",
+            "description": "Whether configuration changes can be made through this node now:\non the primary, or on a replica that reaches the primary."
+          }
+        }
+      },
+      "ConfigVersion": {
+        "type": "object",
+        "description": "Which configuration a store holds.\n\n`epoch` names a line of history: it is chosen at random when a store is\ncreated and again when a node becomes the cluster's primary. `version`\ncounts the changes along it. A replica takes a configuration whose epoch\ndiffers from its own, or whose version is newer.",
+        "required": [
+          "epoch",
+          "version"
+        ],
+        "properties": {
+          "epoch": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The line of history: a random number below 2^53, so it is exact in\nJSON.",
+            "minimum": 0
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Changes so far along it.",
+            "minimum": 0
+          }
+        }
       },
       "Counters": {
         "type": "object",
@@ -2690,6 +2922,73 @@
         },
         "additionalProperties": false
       },
+      "PeerStatus": {
+        "type": "object",
+        "description": "The other node, as last seen.",
+        "required": [
+          "node",
+          "address",
+          "reachable"
+        ],
+        "properties": {
+          "address": {
+            "type": "string",
+            "description": "Its cluster address."
+          },
+          "checked_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was last checked."
+          },
+          "config": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ConfigVersion",
+                "description": "Its configuration's version, when last reached."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the last check failed, if it did."
+          },
+          "node": {
+            "type": "string",
+            "description": "Its name."
+          },
+          "reachable": {
+            "type": "boolean",
+            "description": "Whether it answered the last check."
+          },
+          "role": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ClusterRole",
+                "description": "Its role, when last reached."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its goethite version, when last reached."
+          }
+        }
+      },
       "Protocol": {
         "type": "string",
         "description": "How a query reached goethite.",
@@ -2862,6 +3161,17 @@
             "minimum": 0
           }
         }
+      },
+      "RoleChange": {
+        "type": "object",
+        "description": "How to change a node's role.",
+        "properties": {
+          "force": {
+            "type": "boolean",
+            "description": "Change it even though the other node is reachable and would\ndisagree, leaving two primaries (or two replicas) until one changes."
+          }
+        },
+        "additionalProperties": false
       },
       "Rule": {
         "type": "object",
@@ -3131,6 +3441,17 @@
               }
             ]
           },
+          "cluster": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ClusterStatus",
+                "description": "This node's cluster, if it is in one."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "filter": {
             "$ref": "#/components/schemas/FilterStatus",
             "description": "The compiled filter."
@@ -3173,6 +3494,35 @@
           "version": {
             "type": "string",
             "description": "The running version."
+          }
+        }
+      },
+      "SyncStatus": {
+        "type": "object",
+        "description": "How a replica follows the primary.",
+        "properties": {
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the last attempt failed, if it did."
+          },
+          "last_contact": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the primary last answered."
+          },
+          "last_copy": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When its configuration was last copied."
           }
         }
       },
@@ -3311,6 +3661,10 @@
     {
       "name": "audit",
       "description": "Every configuration change"
+    },
+    {
+      "name": "cluster",
+      "description": "This node's cluster: roles, the other node, following the primary"
     }
   ]
 }

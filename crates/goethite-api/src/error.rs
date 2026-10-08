@@ -71,6 +71,26 @@ impl ApiError {
         Self::new(StatusCode::NOT_FOUND, "not_found", message)
     }
 
+    /// 409: the change conflicts with the node's state.
+    pub fn conflict(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::CONFLICT, "conflict", message)
+    }
+
+    /// 413: the body is too large.
+    pub fn payload_too_large() -> Self {
+        Self::new(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "bad_request",
+            "the request body is too large",
+        )
+    }
+
+    /// 503: not possible right now, such as a configuration change on a
+    /// replica that cannot reach the primary.
+    pub fn unavailable(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::SERVICE_UNAVAILABLE, "unavailable", message)
+    }
+
     /// 500, logged.
     pub fn internal(message: impl Into<String>) -> Self {
         let message = message.into();

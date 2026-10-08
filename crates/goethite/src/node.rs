@@ -4,15 +4,16 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use goethite_api::{
-    BoxFuture, CacheStatus, Change, FilterStatus, ListStatus, QueryLogStatus, Status,
-    UpstreamStatus,
+    BoxFuture, BoxResult, CacheStatus, Change, ClusterRole, ClusterStatus, FilterStatus, Forwarded,
+    ForwardedAnswer, ListStatus, QueryLogStatus, Status, UpstreamStatus, Writes,
 };
 use goethite_resolver::{Resolver, Transport};
 use goethite_server::ServerStats;
-use goethite_store::QueryLog;
+use goethite_store::{Actor, QueryLog};
 use jiff::Timestamp;
 use tracing::warn;
 
+use crate::cluster::Cluster;
 use crate::control::Control;
 use crate::metrics::{self, Metrics};
 
@@ -32,6 +33,8 @@ pub struct Node {
     pub querylog_enabled: bool,
     /// When goethite started.
     pub started: Timestamp,
+    /// This node's cluster, if it is in one.
+    pub cluster: Option<Arc<Cluster>>,
 }
 
 fn as_u64(value: usize) -> u64 {
@@ -109,6 +112,7 @@ impl goethite_api::Control for Node {
                 entries,
                 dropped: self.log.dropped(),
             },
+            cluster: self.cluster.as_ref().map(|cluster| cluster.status()),
         }
     }
 
@@ -131,6 +135,43 @@ impl goethite_api::Control for Node {
 
     fn paused_until(&self) -> Option<SystemTime> {
         self.control.state().paused_until()
+    }
+
+    fn cluster(&self) -> Option<ClusterStatus> {
+        self.cluster.as_ref().map(|cluster| cluster.status())
+    }
+
+    fn writes(&self) -> Writes {
+        self.cluster
+            .as_ref()
+            .map_or(Writes::Local, |cluster| cluster.writes())
+    }
+
+    fn forward(&self, forwarded: Forwarded) -> BoxResult<'_, ForwardedAnswer> {
+        Box::pin(async move {
+            match &self.cluster {
+                Some(cluster) => cluster.forward(forwarded).await,
+                None => Err(goethite_api::ApiError::not_found(
+                    "this node is not in a cluster",
+                )),
+            }
+        })
+    }
+
+    fn set_role(
+        &self,
+        role: ClusterRole,
+        force: bool,
+        actor: Actor,
+    ) -> BoxResult<'_, ClusterStatus> {
+        Box::pin(async move {
+            match &self.cluster {
+                Some(cluster) => cluster.set_role(role, force, actor).await,
+                None => Err(goethite_api::ApiError::not_found(
+                    "this node is not in a cluster",
+                )),
+            }
+        })
     }
 
     fn metrics(&self) -> String {

@@ -14,6 +14,11 @@ configuration format.
   and keeps resolving with its last copy while the primary is unreachable. `goethite cluster
   init` and `goethite cluster cert <node>` create the cluster's CA and node certificates; each
   node accepts only its configured peer.
+- **Changes through either node.** The replica forwards configuration changes to the primary
+  with the caller's identity and answers once it has the change itself; while the primary is
+  unreachable, they are refused rather than lost. `GET /api/v1/cluster` (and `cluster` in
+  `/api/v1/status`) reports both nodes, sync state and problems such as two primaries.
+  `POST /api/v1/cluster/promote` and `/demote` change roles; a promoted role survives restarts.
 
 ### Changed
 

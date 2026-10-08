@@ -299,8 +299,7 @@ async fn serve(config: &Config, prepared: Prepared) -> Result<()> {
     }
     reload_on_hangup(Arc::clone(&control))?;
     let started = Timestamp::now();
-    // Held until shutdown: dropping it would stop following the primary.
-    let _cluster = prepared
+    let cluster = prepared
         .cluster
         .map(|cluster| cluster::start(cluster, &control, started, &stopped))
         .transpose()?;
@@ -317,25 +316,31 @@ async fn serve(config: &Config, prepared: Prepared) -> Result<()> {
         log: Arc::clone(&prepared.query_log),
         metrics: Arc::clone(&metrics),
     }));
-    let api = prepared.api_listeners.map(|listeners| {
-        let node = node::Node {
-            control: Arc::clone(&control),
-            resolver: Arc::clone(&resolver),
-            server: server.stats(),
-            metrics,
-            log: Arc::clone(&prepared.query_log),
-            querylog_enabled: config.querylog.enabled,
-            started,
-        };
-        let api = api(
-            config,
-            &control,
-            &prepared.query_log,
-            node,
-            prepared.api_tls,
-        );
-        tokio::spawn(goethite_api::serve(listeners, api, until(stopped.clone())))
-    });
+    let node = node::Node {
+        control: Arc::clone(&control),
+        resolver: Arc::clone(&resolver),
+        server: server.stats(),
+        metrics,
+        log: Arc::clone(&prepared.query_log),
+        querylog_enabled: config.querylog.enabled,
+        started,
+        cluster: cluster.clone(),
+    };
+    // The API exists even when it is not served: the primary runs the
+    // replica's forwarded changes through it.
+    let api = api(
+        config,
+        &control,
+        &prepared.query_log,
+        node,
+        prepared.api_tls,
+    );
+    if let Some(cluster) = &cluster {
+        cluster.set_api(Arc::clone(&api));
+    }
+    let api = prepared
+        .api_listeners
+        .map(|listeners| tokio::spawn(goethite_api::serve(listeners, api, until(stopped.clone()))));
     server.run(until(stopped)).await?;
     if let Some(api) = api {
         api.await.context("the API task failed")??;

@@ -16,6 +16,7 @@
 //! The same listener serves the web UI ([`WebAssets`]) for every other path.
 
 mod auth;
+mod cluster;
 mod error;
 mod handlers;
 mod openapi;
@@ -36,12 +37,16 @@ use axum::http::header::{
 use axum::http::{HeaderValue, Request};
 use axum::middleware::{self, Next};
 use axum::response::Response;
-use goethite_store::{QueryLog, Store};
+use goethite_store::{Actor, QueryLog, Store};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 pub use auth::{PeerAddr, TOKEN_PREFIX, TokenHash, TokenHashError, generate_token, hash_token};
+pub use cluster::{
+    ClusterRole, ClusterStatus, Forwarded, ForwardedAnswer, PeerStatus, RoleChange, SyncStatus,
+    Writes, execute,
+};
 pub use error::{ApiError, ErrorBody, ErrorDetail};
 pub use openapi::{openapi, openapi_json};
 pub use serve::{ApiListeners, MAX_CONNECTIONS, Serving, serve, serve_router};
@@ -81,6 +86,9 @@ pub enum Change {
 /// A boxed future, for the object-safe [`Control`] trait.
 pub type BoxFuture<'a> = Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
 
+/// A boxed future with a result, for the object-safe [`Control`] trait.
+pub type BoxResult<'a, T> = Pin<Box<dyn Future<Output = Result<T, ApiError>> + Send + 'a>>;
+
 /// The data plane, as the API sees it. The binary implements this.
 pub trait Control: Send + Sync + 'static {
     /// How the node is doing.
@@ -95,6 +103,33 @@ pub trait Control: Send + Sync + 'static {
     fn paused_until(&self) -> Option<SystemTime>;
     /// The metrics in the Prometheus text format.
     fn metrics(&self) -> String;
+
+    /// This node's cluster, if it is in one.
+    fn cluster(&self) -> Option<ClusterStatus> {
+        None
+    }
+
+    /// Where configuration changes made through this node go.
+    fn writes(&self) -> Writes {
+        Writes::Local
+    }
+
+    /// Sends a configuration change to the cluster's primary.
+    fn forward(&self, forwarded: Forwarded) -> BoxResult<'_, ForwardedAnswer> {
+        let _ = forwarded;
+        Box::pin(async { Err(ApiError::not_found("this node is not in a cluster")) })
+    }
+
+    /// Makes this node the cluster's primary or a replica.
+    fn set_role(
+        &self,
+        role: ClusterRole,
+        force: bool,
+        actor: Actor,
+    ) -> BoxResult<'_, ClusterStatus> {
+        let _ = (role, force, actor);
+        Box::pin(async { Err(ApiError::not_found("this node is not in a cluster")) })
+    }
 }
 
 /// How the node is doing.
@@ -120,6 +155,9 @@ pub struct Status {
     pub cache: Option<CacheStatus>,
     /// The query log.
     pub query_log: QueryLogStatus,
+    /// This node's cluster, if it is in one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cluster: Option<ClusterStatus>,
 }
 
 /// The compiled filter.
@@ -211,10 +249,25 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The routes, with authentication, limits and security headers.
 pub fn router(api: &Arc<Api>) -> Router {
-    let protected = handlers::routes().route_layer(middleware::from_fn_with_state(
-        Arc::clone(api),
-        auth::authenticate,
-    ));
+    // Authentication runs first, then forwarding a replica's changes.
+    let protected = handlers::routes()
+        .route("/api/v1/cluster", axum::routing::get(cluster::get_cluster))
+        .route(
+            "/api/v1/cluster/promote",
+            axum::routing::post(cluster::promote),
+        )
+        .route(
+            "/api/v1/cluster/demote",
+            axum::routing::post(cluster::demote),
+        )
+        .route_layer(middleware::from_fn_with_state(
+            Arc::clone(api),
+            cluster::forward_writes,
+        ))
+        .route_layer(middleware::from_fn_with_state(
+            Arc::clone(api),
+            auth::authenticate,
+        ));
     Router::new()
         .route("/api/v1/health", axum::routing::get(handlers::health))
         .merge(protected)

@@ -17,10 +17,10 @@ use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
 use goethite_api::{
-    Api, ApiConfig, ApiListeners, BoxFuture, Change, Control, FilterStatus, QueryLogStatus, Status,
-    WebAssets, generate_token,
+    Api, ApiConfig, ApiListeners, BoxFuture, BoxResult, Change, Control, FilterStatus, Forwarded,
+    ForwardedAnswer, QueryLogStatus, Status, WebAssets, Writes, generate_token,
 };
-use goethite_store::{QueryLogConfig, Store};
+use goethite_store::{Actor, ActorKind, ConfigVersion, QueryLogConfig, Store};
 use http_body_util::{BodyExt, Full};
 use hyper::body::Bytes;
 use hyper::header::{HeaderMap, HeaderValue};
@@ -37,6 +37,12 @@ struct FakeControl {
     applied: Mutex<Vec<Change>>,
     paused: Mutex<Option<SystemTime>>,
     refreshed: Mutex<usize>,
+    /// Where changes go; local when unset.
+    writes: Mutex<Option<Writes>>,
+    /// Changes forwarded to the "primary".
+    forwarded: Mutex<Vec<Forwarded>>,
+    /// The version the "primary" reports after a forwarded change.
+    answer_version: Mutex<ConfigVersion>,
 }
 
 impl Control for FakeControl {
@@ -58,6 +64,7 @@ impl Control for FakeControl {
                 entries: 0,
                 dropped: 0,
             },
+            cluster: None,
         }
     }
 
@@ -81,6 +88,24 @@ impl Control for FakeControl {
     fn metrics(&self) -> String {
         "goethite_up 1\n".into()
     }
+
+    fn writes(&self) -> Writes {
+        self.writes.lock().unwrap().clone().unwrap_or(Writes::Local)
+    }
+
+    fn forward(&self, forwarded: Forwarded) -> BoxResult<'_, ForwardedAnswer> {
+        self.forwarded.lock().unwrap().push(forwarded);
+        let version = *self.answer_version.lock().unwrap();
+        Box::pin(async move {
+            Ok(ForwardedAnswer {
+                status: 201,
+                etag: Some("\"1\"".into()),
+                location: Some("/api/v1/rules/ru_primary".into()),
+                body: Some(r#"{"id":"ru_primary","revision":1}"#.into()),
+                version,
+            })
+        })
+    }
 }
 
 /// A web UI of three files.
@@ -101,6 +126,7 @@ impl WebAssets for FakeWeb {
 
 struct Server {
     addr: SocketAddr,
+    api: Arc<Api>,
     control: Arc<FakeControl>,
     stop: Option<oneshot::Sender<()>>,
     path: PathBuf,
@@ -149,11 +175,12 @@ fn start_with(with_token: bool, web: Option<Arc<dyn WebAssets>>) -> Server {
     let listeners = ApiListeners::bind(&["127.0.0.1:0".parse().unwrap()]).unwrap();
     let addr = listeners.local_addrs().unwrap()[0];
     let (stop, stopped) = oneshot::channel::<()>();
-    tokio::spawn(goethite_api::serve(listeners, api, async {
+    tokio::spawn(goethite_api::serve(listeners, Arc::clone(&api), async {
         let _ = stopped.await;
     }));
     Server {
         addr,
+        api,
         control,
         stop: Some(stop),
         path,
@@ -680,4 +707,146 @@ async fn browsers_cannot_be_turned_against_the_api() {
         )
         .await;
     assert_eq!(accepted.status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn replicas_forward_configuration_changes() {
+    let server = start(false);
+    *server.control.writes.lock().unwrap() = Some(Writes::Forward);
+    *server.control.answer_version.lock().unwrap() = server.api.store.version();
+
+    let rule = json!({"rule": "||ads.example^"});
+    let created = server.post("/api/v1/rules", rule.clone()).await;
+    assert_eq!(created.status, StatusCode::CREATED);
+    assert_eq!(
+        created.text, r#"{"id":"ru_primary","revision":1}"#,
+        "the primary's answer, as sent"
+    );
+    assert_eq!(created.headers["etag"], "\"1\"");
+    assert_eq!(created.headers["location"], "/api/v1/rules/ru_primary");
+    {
+        let forwarded = server.control.forwarded.lock().unwrap();
+        assert_eq!(forwarded.len(), 1);
+        assert_eq!(
+            (forwarded[0].method.as_str(), forwarded[0].path.as_str()),
+            ("POST", "/api/v1/rules")
+        );
+        assert_eq!(
+            forwarded[0].body.as_deref(),
+            Some(rule.to_string().as_str())
+        );
+        assert_eq!(forwarded[0].actor.kind, ActorKind::Unauthenticated);
+        assert_eq!(forwarded[0].actor.address.as_deref(), Some("127.0.0.1"));
+    }
+    assert!(
+        server.api.store.config().rules.is_empty(),
+        "nothing written here"
+    );
+
+    // Reads, pausing and list downloads stay on this node.
+    assert_eq!(server.get("/api/v1/rules").await.status, StatusCode::OK);
+    assert_eq!(
+        server
+            .send(Method::POST, "/api/v1/lists/refresh", None, &[])
+            .await
+            .status,
+        StatusCode::ACCEPTED
+    );
+    let paused = server
+        .send(
+            Method::PUT,
+            "/api/v1/pause",
+            Some(json!({"seconds": 5})),
+            &[],
+        )
+        .await;
+    assert_eq!(paused.status, StatusCode::OK);
+    assert_eq!(server.control.forwarded.lock().unwrap().len(), 1);
+
+    // A replica that cannot reach the primary is read-only.
+    *server.control.writes.lock().unwrap() =
+        Some(Writes::ReadOnly("the primary dns1 is unreachable".into()));
+    let refused = server.post("/api/v1/rules", rule).await;
+    assert_eq!(refused.status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(refused.body["error"]["code"], "unavailable");
+    assert!(refused.text.contains("dns1"));
+
+    // Not in a cluster: no cluster endpoints.
+    assert_eq!(
+        server.get("/api/v1/cluster").await.status,
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[tokio::test]
+async fn the_primary_runs_forwarded_changes_as_their_caller() {
+    let server = start(true);
+    let caller = Actor {
+        kind: ActorKind::Token,
+        address: Some("192.0.2.7".into()),
+        node: None,
+    };
+    let forwarded =
+        |method: &str, path: &str, body: Option<&str>, if_match: Option<&str>| Forwarded {
+            method: method.into(),
+            path: path.into(),
+            if_match: if_match.map(str::to_owned),
+            body: body.map(str::to_owned),
+            actor: caller.clone(),
+        };
+    let created = goethite_api::execute(
+        &server.api,
+        "dns2",
+        forwarded(
+            "POST",
+            "/api/v1/rules",
+            Some(r#"{"rule":"||ads.example^"}"#),
+            None,
+        ),
+    )
+    .await
+    .unwrap();
+    assert_eq!(created.status, 201);
+    assert_eq!(created.version, server.api.store.version());
+    let id = serde_json::from_str::<Value>(created.body.as_deref().unwrap()).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        created.location.as_deref(),
+        Some(format!("/api/v1/rules/{id}").as_str())
+    );
+    let audit = server.api.store.audit(None, 1).unwrap();
+    assert_eq!(audit[0].actor.kind, ActorKind::Token);
+    assert_eq!(audit[0].actor.address.as_deref(), Some("192.0.2.7"));
+    assert_eq!(audit[0].actor.node.as_deref(), Some("dns2"));
+
+    // Revisions are checked as for any caller.
+    let stale = goethite_api::execute(
+        &server.api,
+        "dns2",
+        forwarded(
+            "PUT",
+            &format!("/api/v1/rules/{id}"),
+            Some(r#"{"rule":"||ads.example^","comment":"x"}"#),
+            Some("\"9\""),
+        ),
+    )
+    .await
+    .unwrap();
+    assert_eq!(stale.status, 412);
+
+    // Only configuration changes are forwarded.
+    for (method, path) in [
+        ("PUT", "/api/v1/pause"),
+        ("GET", "/api/v1/rules"),
+        ("POST", "/api/v1/cluster/promote"),
+    ] {
+        assert!(
+            goethite_api::execute(&server.api, "dns2", forwarded(method, path, None, None))
+                .await
+                .is_err(),
+            "{method} {path}"
+        );
+    }
 }

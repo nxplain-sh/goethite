@@ -58,6 +58,68 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/cluster": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * This node's cluster: its role, the other node, and how following the
+         *     primary goes.
+         */
+        get: operations["get_cluster"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/cluster/demote": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Makes this node a replica: it copies the other node's configuration
+         *     from then on, replacing its own. Refused unless the other node is
+         *     reachable and primary, unless forced.
+         */
+        post: operations["demote"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/cluster/promote": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Makes this node the primary. Its configuration becomes the cluster's,
+         *     in a new epoch. Refused while the current primary is reachable, unless
+         *     forced: demote that one first.
+         */
+        post: operations["promote"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/groups": {
         parameters: {
             query?: never;
@@ -389,7 +451,7 @@ export interface components {
         };
         /** @description Who made a change: `token` (an API client with the admin token), `unauthenticated` (an API client on loopback while no admin token is configured), `cli` (the goethite command line), `system` (goethite itself) or `replication` (copied from the cluster's primary). More may be added: show unknown values as they are. */
         ActorKind: string;
-        /** @description What an audit entry records: `create`, `update` or `delete` (a resource or the settings), `import` (the config file's `[filter]` table), `pause` or `resume` (filtering), `refresh` (a list download) or `replicate` (a copy of the cluster primary's configuration). More may be added: show unknown values as they are. */
+        /** @description What an audit entry records: `create`, `update` or `delete` (a resource or the settings), `import` (the config file's `[filter]` table), `pause` or `resume` (filtering), `refresh` (a list download), `replicate` (a copy of the cluster primary's configuration), `promote` or `demote` (this node became the cluster's primary or a replica). More may be added: show unknown values as they are. */
         AuditAction: string;
         /** @description One entry of the audit log. */
         AuditEntry: {
@@ -479,6 +541,54 @@ export interface components {
             managed_by?: components["schemas"]["ManagedBy"];
             /** @description A name for people. */
             name: string;
+        };
+        /**
+         * @description A node's role in its cluster.
+         * @enum {string}
+         */
+        ClusterRole: "primary" | "replica";
+        /** @description This node's cluster. */
+        ClusterStatus: {
+            /** @description Its configuration's version. */
+            config: components["schemas"]["ConfigVersion"];
+            /** @description This node's name. */
+            node: string;
+            /** @description The other node, as last seen. */
+            peer: components["schemas"]["PeerStatus"];
+            /**
+             * @description Things someone should look at, in words, such as both nodes being
+             *     primary.
+             */
+            problems: string[];
+            /** @description Its role. */
+            role: components["schemas"]["ClusterRole"];
+            sync?: components["schemas"]["SyncStatus"] | null;
+            /**
+             * @description Whether configuration changes can be made through this node now:
+             *     on the primary, or on a replica that reaches the primary.
+             */
+            writable: boolean;
+        };
+        /**
+         * @description Which configuration a store holds.
+         *
+         *     `epoch` names a line of history: it is chosen at random when a store is
+         *     created and again when a node becomes the cluster's primary. `version`
+         *     counts the changes along it. A replica takes a configuration whose epoch
+         *     differs from its own, or whose version is newer.
+         */
+        ConfigVersion: {
+            /**
+             * Format: int64
+             * @description The line of history: a random number below 2^53, so it is exact in
+             *     JSON.
+             */
+            epoch: number;
+            /**
+             * Format: int64
+             * @description Changes so far along it.
+             */
+            version: number;
         };
         /** @description Counts of queries by outcome. */
         Counters: {
@@ -719,6 +829,26 @@ export interface components {
              */
             seconds: number;
         };
+        /** @description The other node, as last seen. */
+        PeerStatus: {
+            /** @description Its cluster address. */
+            address: string;
+            /**
+             * Format: date-time
+             * @description When it was last checked.
+             */
+            checked_at?: string | null;
+            config?: components["schemas"]["ConfigVersion"] | null;
+            /** @description Why the last check failed, if it did. */
+            error?: string | null;
+            /** @description Its name. */
+            node: string;
+            /** @description Whether it answered the last check. */
+            reachable: boolean;
+            role?: components["schemas"]["ClusterRole"] | null;
+            /** @description Its goethite version, when last reached. */
+            version?: string | null;
+        };
         /**
          * @description How a query reached goethite.
          * @enum {string}
@@ -796,6 +926,14 @@ export interface components {
              * @description Pass as `before` for the next page; absent at the end of the log.
              */
             next?: number | null;
+        };
+        /** @description How to change a node's role. */
+        RoleChange: {
+            /**
+             * @description Change it even though the other node is reachable and would
+             *     disagree, leaving two primaries (or two replicas) until one changes.
+             */
+            force?: boolean;
         };
         /** @description A stored custom rule. */
         Rule: {
@@ -923,6 +1061,7 @@ export interface components {
         /** @description How the node is doing. */
         Status: {
             cache?: components["schemas"]["CacheStatus"] | null;
+            cluster?: components["schemas"]["ClusterStatus"] | null;
             /** @description The compiled filter. */
             filter: components["schemas"]["FilterStatus"];
             /** @description Each list, by ID. */
@@ -945,6 +1084,21 @@ export interface components {
             upstreams: components["schemas"]["UpstreamStatus"][];
             /** @description The running version. */
             version: string;
+        };
+        /** @description How a replica follows the primary. */
+        SyncStatus: {
+            /** @description Why the last attempt failed, if it did. */
+            error?: string | null;
+            /**
+             * Format: date-time
+             * @description When the primary last answered.
+             */
+            last_contact?: string | null;
+            /**
+             * Format: date-time
+             * @description When its configuration was last copied.
+             */
+            last_copy?: string | null;
         };
         /** @description A name or client and how often it was seen. */
         TopEntry: {
@@ -1232,6 +1386,119 @@ export interface operations {
             };
             /** @description It changed since that revision */
             412: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    get_cluster: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The cluster */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClusterStatus"];
+                };
+            };
+            /** @description This node is not in a cluster */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    demote: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RoleChange"];
+            };
+        };
+        responses: {
+            /** @description This node is a replica */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClusterStatus"];
+                };
+            };
+            /** @description This node is not in a cluster */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The other node is not a reachable primary */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    promote: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RoleChange"];
+            };
+        };
+        responses: {
+            /** @description This node is the primary */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClusterStatus"];
+                };
+            };
+            /** @description This node is not in a cluster */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The other node is reachable and primary */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

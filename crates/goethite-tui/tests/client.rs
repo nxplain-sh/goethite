@@ -40,6 +40,7 @@ impl Control for Idle {
                 entries: 0,
                 dropped: 0,
             },
+            cluster: None,
         }
     }
     fn apply(&self, _change: Change) -> BoxFuture<'_> {

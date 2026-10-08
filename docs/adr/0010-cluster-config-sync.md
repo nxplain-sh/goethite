@@ -17,9 +17,22 @@ architecture principles set the bounds:
 ## Decision
 
 **Primary and replica.** One node is the primary: configuration changes happen there. The other
-is a replica that copies the primary's configuration. In Phase 3's second milestone, the replica
-also forwards API writes to the primary, and `goethite cluster promote` turns a replica into the
-primary when the old one is gone. A node's role comes from its `[cluster]` table.
+is a replica that copies the primary's configuration. A node's role comes from its `[cluster]`
+table, or from `POST /api/v1/cluster/promote` and `/demote`. A role changed that way is kept in
+the store and survives restarts, until the config file's `role` itself changes. Promotion starts
+a new epoch. It is refused while the other node is a reachable primary, and a demotion is
+refused unless it is, unless forced, so two primaries arise only by force or a partition. Both
+nodes then report it.
+
+**Forwarding.** A configuration change made through the replica's API (a `POST`, `PUT` or
+`DELETE` of lists, rules, groups, clients, schedules or settings) is forwarded over the cluster
+channel to `/cluster/v1/api` on the primary. The body travels as sent, with the caller's
+authenticated identity. The primary runs it through its own routes as that caller, marked with
+the replica's node name: an in-process extension no HTTP client can set takes the place of
+authentication. The replica returns the primary's answer, byte for byte, after waiting (at most
+3 s) until it has copied the resulting version, so callers read their own writes. While a
+heartbeat (every 5 s) says the primary is unreachable, such changes are refused with 503;
+everything else, including pausing and list downloads, stays local.
 
 **Whole snapshots, versioned.** Every store change that writes resources bumps a
 `ConfigVersion { epoch, version }`, in the same transaction. The *epoch* is random. It is chosen
@@ -67,6 +80,8 @@ handshake and header timeouts).
 
 - While the primary is down, the configuration cannot change; DNS is unaffected. Promotion is a
   deliberate act until Raft automates it safely.
+- A change made on a node while it was a second primary is lost when it is demoted: its
+  configuration is replaced by the other's.
 - Two nodes both configured as primary would each accept changes. The replica's sync answers
   `not_primary`, so this shows up at once in the logs and the cluster status.
 - Each node downloads filter lists itself. Lists given by `path` must exist on both nodes.

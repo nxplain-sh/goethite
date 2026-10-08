@@ -798,6 +798,7 @@ name = "goethite"
 version = "0.2.0"
 dependencies = [
  "anyhow",
+ "axum",
  "clap",
  "goethite-api",
  "goethite-cluster",
@@ -844,6 +845,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-rustls",
+ "tower",
  "tracing",
  "utoipa",
 ]

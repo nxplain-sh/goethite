@@ -3,7 +3,7 @@
 use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme};
 use utoipa::{Modify, OpenApi};
 
-use crate::handlers;
+use crate::{cluster, handlers};
 
 #[derive(OpenApi)]
 #[openapi(
@@ -56,6 +56,9 @@ use crate::handlers;
         handlers::get_querylog,
         handlers::get_stats,
         handlers::get_audit,
+        cluster::get_cluster,
+        cluster::promote,
+        cluster::demote,
     ),
     modifiers(&BearerToken),
     tags(
@@ -68,6 +71,7 @@ use crate::handlers;
         (name = "schedules", description = "Weekly time windows for scheduled lists"),
         (name = "querylog", description = "The query log and statistics"),
         (name = "audit", description = "Every configuration change"),
+        (name = "cluster", description = "This node's cluster: roles, the other node, following the primary"),
     ),
 )]
 struct ApiDoc;
