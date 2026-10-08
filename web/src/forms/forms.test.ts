@@ -72,12 +72,33 @@ describe('groups', () => {
 		])
 	})
 
+	it('drops repeated blocked services', () => {
+		const form = {
+			...groupForm(),
+			name: 'Kids',
+			blockedServices: [
+				{ service: 'tiktok', schedule: '' },
+				{ service: 'tiktok', schedule: '' },
+				{ service: '', schedule: '' },
+				{ service: 'youtube', schedule: 'sc_school' },
+			],
+		}
+		expect(groupSpec(form).blocked_services).toEqual([
+			{ service: 'tiktok', schedule: null },
+			{ service: 'youtube', schedule: 'sc_school' },
+		])
+	})
+
 	it('round-trips', () => {
 		const spec = {
 			name: 'Kids',
 			filtering: true,
 			safe_search: true,
 			lists: [{ list: 'li_a', schedule: 'sc_school' }],
+			blocked_services: [
+				{ service: 'tiktok', schedule: null },
+				{ service: 'youtube', schedule: 'sc_school' },
+			],
 			comment: '',
 			managed_by: 'api' as const,
 		}

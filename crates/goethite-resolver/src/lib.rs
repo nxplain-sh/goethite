@@ -16,6 +16,7 @@ mod guard;
 mod policy;
 mod rebinding;
 mod safe_search;
+mod services;
 mod tls;
 
 use std::net::{IpAddr, Ipv4Addr};
@@ -39,9 +40,13 @@ pub use forward::{
 pub use guard::FailMode;
 pub use policy::{
     ClientPolicy, GroupPolicy, MAX_CLIENT_ID_LEN, MAX_SCHEDULES, Policy, PolicyError, PolicyParts,
-    PolicyState, ScheduledSources, is_client_id,
+    PolicyState, ScheduledServices, ScheduledSources, is_client_id,
 };
 pub use rebinding::{DEFAULT_PRIVATE_DOMAINS, RebindingProtection, is_private};
+pub use services::{
+    MAX_SERVICE_ID_LEN, MAX_SERVICES, ServiceError, ServiceFilter, ServiceMask, ServiceRules,
+    is_service_id,
+};
 pub use tls::{TlsError, TlsRoots, tls_client_config};
 
 /// The name every build answers itself, to check that the server is alive.
@@ -162,6 +167,7 @@ struct Asker {
     filtering: bool,
     safe_search: bool,
     sources: Sources,
+    services: ServiceMask,
 }
 
 /// Answers queries.
@@ -336,6 +342,7 @@ impl Resolver {
                 filtering: false,
                 safe_search: false,
                 sources: Sources::NONE,
+                services: ServiceMask::NONE,
             };
         };
         let policy = state.policy();
@@ -347,6 +354,7 @@ impl Resolver {
             filtering: on && group.filtering,
             safe_search: on && group.safe_search,
             sources: group.sources_now(state.active_schedules()),
+            services: group.services_now(state.active_schedules()),
             policy: None,
         };
         Asker {
@@ -372,6 +380,22 @@ impl Resolver {
         }
         let mut exception = None;
         if let (true, Some(policy)) = (asker.filtering, &asker.policy) {
+            // A blocked service is the group's own choice: no list's
+            // exception undoes it.
+            if !asker.services.is_empty() {
+                match guard::guarded(|| policy.services().check(&question.name, &asker.services)) {
+                    Some(Some((service, matched))) => {
+                        debug!(name = %question.name, qtype = %question.qtype, "blocked service");
+                        return blocked_service(query, policy, service, matched);
+                    }
+                    Some(None) => {}
+                    None => {
+                        if let Some(answer) = self.filter_failed(query) {
+                            return answer;
+                        }
+                    }
+                }
+            }
             match Self::check(policy, &question.name, asker.sources) {
                 Some(Verdict::Blocked(matched)) => {
                     debug!(name = %question.name, qtype = %question.qtype, "blocked");
@@ -536,6 +560,23 @@ fn blocked(
 ) -> (Response, Outcome, Option<FilterHit>) {
     let response = blocking::blocked_response(query, policy.block_response(), policy.blocked_ttl());
     let hit = hit(policy, Action::Block, matched, cname);
+    (response, Outcome::Blocked, Some(hit))
+}
+
+/// The answer to a name a blocked service uses.
+fn blocked_service(
+    query: &Query,
+    policy: &Policy,
+    service: usize,
+    matched: Match,
+) -> (Response, Outcome, Option<FilterHit>) {
+    let response = blocking::blocked_response(query, policy.block_response(), policy.blocked_ttl());
+    let hit = FilterHit {
+        action: Action::Block,
+        matched,
+        source: policy.services().source_id(service).cloned(),
+        cname: None,
+    };
     (response, Outcome::Blocked, Some(hit))
 }
 

@@ -103,6 +103,11 @@ the browser, and keeps it for a day. Names, descriptions and licenses come from 
 its contributors and may be out of date: check a list's home page. `directory = false` in
 `[filter]` turns the directory off.
 
+## Blocking whole services
+
+To block a service such as TikTok or YouTube for some devices, without hunting for its domains,
+use a group's [blocked services](../groups/#blocked-services) instead of a list.
+
 ## Downloaded lists
 
 Lists with a `url` are downloaded at startup and then every `update_hours`, with up to 10% random

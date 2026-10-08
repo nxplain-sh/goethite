@@ -48,6 +48,14 @@ export const directoryListQuery = (id: number) =>
 		retry: false,
 	})
 
+/** The services groups can block, from the catalog the node downloads. */
+export const servicesQuery = queryOptions({
+	queryKey: ['services'],
+	queryFn: () => call(api.GET('/api/v1/services')),
+	staleTime: 3_600_000,
+	retry: false,
+})
+
 export const clientsQuery = queryOptions({
 	queryKey: ['clients'],
 	queryFn: () => call(api.GET('/api/v1/clients')),

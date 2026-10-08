@@ -23,6 +23,7 @@ use goethite_filter::{Filter, Source, Sources};
 
 use crate::blocking::BlockResponse;
 use crate::cidr::{Cidr, canonical, mask};
+use crate::services::{ServiceFilter, ServiceMask};
 
 /// The most schedules a policy tells apart.
 pub const MAX_SCHEDULES: usize = 64;
@@ -53,6 +54,15 @@ pub struct ScheduledSources {
     pub sources: Sources,
 }
 
+/// Services a group blocks while a schedule is active.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ScheduledServices {
+    /// The schedule's index, below [`MAX_SCHEDULES`].
+    pub schedule: u8,
+    /// The services, by index in the policy's [`ServiceFilter`].
+    pub services: ServiceMask,
+}
+
 /// What applies to the clients of one group.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GroupPolicy {
@@ -66,6 +76,10 @@ pub struct GroupPolicy {
     pub sources: Sources,
     /// Sources that apply while a schedule is active.
     pub scheduled: Vec<ScheduledSources>,
+    /// Services it always blocks.
+    pub services: ServiceMask,
+    /// Services it blocks while a schedule is active.
+    pub scheduled_services: Vec<ScheduledServices>,
 }
 
 impl GroupPolicy {
@@ -77,6 +91,8 @@ impl GroupPolicy {
             safe_search: false,
             sources,
             scheduled: Vec::new(),
+            services: ServiceMask::NONE,
+            scheduled_services: Vec::new(),
         }
     }
 
@@ -90,6 +106,18 @@ impl GroupPolicy {
                     .is_some_and(|bit| active & bit != 0)
             })
             .fold(self.sources, |all, entry| all.union(entry.sources))
+    }
+
+    /// The services blocked while the schedules in `active` are on.
+    pub fn services_now(&self, active: u64) -> ServiceMask {
+        self.scheduled_services
+            .iter()
+            .filter(|entry| {
+                1_u64
+                    .checked_shl(u32::from(entry.schedule))
+                    .is_some_and(|bit| active & bit != 0)
+            })
+            .fold(self.services, |all, entry| all.union(entry.services))
     }
 }
 
@@ -125,6 +153,9 @@ pub struct PolicyParts {
     pub blocked_ttl: u32,
     /// The master switch: when off, nothing is filtered for anyone.
     pub protection: bool,
+    /// The blocked services catalog, compiled: the groups' service masks
+    /// index into it.
+    pub services: Arc<ServiceFilter>,
 }
 
 /// Why a policy could not be built.
@@ -261,6 +292,7 @@ pub struct Policy {
     block_response: BlockResponse,
     blocked_ttl: u32,
     protection: bool,
+    services: Arc<ServiceFilter>,
 }
 
 impl Policy {
@@ -285,7 +317,9 @@ impl Policy {
             if group
                 .scheduled
                 .iter()
-                .any(|entry| usize::from(entry.schedule) >= MAX_SCHEDULES)
+                .map(|entry| entry.schedule)
+                .chain(group.scheduled_services.iter().map(|entry| entry.schedule))
+                .any(|schedule| usize::from(schedule) >= MAX_SCHEDULES)
             {
                 return Err(PolicyError::ScheduleOutOfRange(group.id.to_string()));
             }
@@ -301,6 +335,7 @@ impl Policy {
             block_response: parts.block_response,
             blocked_ttl: parts.blocked_ttl,
             protection: parts.protection,
+            services: parts.services,
         })
     }
 
@@ -324,6 +359,7 @@ impl Policy {
             block_response,
             blocked_ttl,
             protection,
+            services: Arc::new(ServiceFilter::empty()),
         }
     }
 
@@ -382,6 +418,11 @@ impl Policy {
     /// Whether filtering is on at all.
     pub fn protection(&self) -> bool {
         self.protection
+    }
+
+    /// The blocked services catalog, compiled.
+    pub fn services(&self) -> &ServiceFilter {
+        &self.services
     }
 }
 
@@ -476,6 +517,7 @@ mod tests {
             block_response: BlockResponse::NullIp,
             blocked_ttl: 10,
             protection: true,
+            services: Arc::new(ServiceFilter::empty()),
         }
     }
 

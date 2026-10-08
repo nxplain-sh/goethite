@@ -2114,6 +2114,42 @@
         ]
       }
     },
+    "/api/v1/services": {
+      "get": {
+        "tags": [
+          "groups"
+        ],
+        "summary": "The services groups can block (`blocked_services`), such as TikTok or\nYouTube, with the rules that block them. The catalog is AdGuard's\nHostlistsRegistry (GPL-3.0), which the node downloads and refreshes with\nthe filter lists.",
+        "operationId": "get_services",
+        "responses": {
+          "200": {
+            "description": "The services",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Services"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Turned off on this node",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      }
+    },
     "/api/v1/settings": {
       "get": {
         "tags": [
@@ -2440,6 +2476,27 @@
           "nxdomain",
           "refused"
         ]
+      },
+      "BlockedService": {
+        "type": "object",
+        "description": "A service a group blocks, always or while a schedule is active.",
+        "required": [
+          "service"
+        ],
+        "properties": {
+          "schedule": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The schedule's ID: the service is blocked only while the schedule is\nactive. Without one it is always blocked."
+          },
+          "service": {
+            "type": "string",
+            "description": "The service's ID in the services catalog (`GET /api/v1/services`),\nsuch as `tiktok`. An ID the catalog does not have blocks nothing."
+          }
+        },
+        "additionalProperties": false
       },
       "CacheStatus": {
         "type": "object",
@@ -2989,6 +3046,13 @@
           "name"
         ],
         "properties": {
+          "blocked_services": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BlockedService"
+            },
+            "description": "The services the group blocks, such as TikTok or YouTube: every name\nthe service uses, whatever the lists say. They apply while filtering\nis on."
+          },
           "comment": {
             "type": "string",
             "description": "Free text."
@@ -3679,6 +3743,78 @@
           }
         },
         "additionalProperties": false
+      },
+      "Service": {
+        "type": "object",
+        "description": "A service a group can block.",
+        "required": [
+          "id",
+          "name",
+          "group",
+          "rules"
+        ],
+        "properties": {
+          "group": {
+            "type": "string",
+            "description": "What kind of service it is, such as `social_network` or `gaming`."
+          },
+          "id": {
+            "type": "string",
+            "description": "Its ID, such as `tiktok`: what groups' `blocked_services` name."
+          },
+          "name": {
+            "type": "string",
+            "description": "Its name, such as `TikTok`."
+          },
+          "rules": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The rules that block it, in adblock-style syntax. Rules goethite\ncannot read are left out."
+          }
+        }
+      },
+      "Services": {
+        "type": "object",
+        "description": "The services groups can block, and how the catalog is doing.",
+        "required": [
+          "source",
+          "license",
+          "services"
+        ],
+        "properties": {
+          "downloaded_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When this node saved its copy; `None` until it has one."
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the last download or read failed, if it did; the last good copy\nstays in use."
+          },
+          "license": {
+            "type": "string",
+            "description": "The catalog's license."
+          },
+          "services": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Service"
+            },
+            "description": "The services, by name."
+          },
+          "source": {
+            "type": "string",
+            "description": "Where the catalog comes from."
+          }
+        }
       },
       "Settings": {
         "type": "object",

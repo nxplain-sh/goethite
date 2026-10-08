@@ -209,6 +209,20 @@ pub enum Downloaded {
 /// Downloads `url` into `lists` if it changed, validating it before it
 /// replaces the last good copy.
 pub async fn download(url: &str, lists: &ListStore, downloader: &Downloader) -> Downloaded {
+    download_checked(url, lists, downloader, |bytes| {
+        validate(bytes).map(|stats| stats.rules)
+    })
+    .await
+}
+
+/// Downloads `url` into `lists` if it changed, keeping it only if `check`
+/// accepts it; `check` says how many rules or entries it holds.
+pub async fn download_checked(
+    url: &str,
+    lists: &ListStore,
+    downloader: &Downloader,
+    check: fn(&[u8]) -> Result<usize>,
+) -> Downloaded {
     let validators = lists.validators(url);
     match downloader.fetch(url, &validators).await {
         Ok(Fetched::NotModified) => {
@@ -219,14 +233,14 @@ pub async fn download(url: &str, lists: &ListStore, downloader: &Downloader) -> 
             let lists = lists.clone();
             let owned = url.to_owned();
             let saved = tokio::task::spawn_blocking(move || {
-                let stats = validate(&bytes)?;
+                let count = check(&bytes)?;
                 lists.save(&owned, &bytes, &validators)?;
-                Ok::<_, anyhow::Error>(stats)
+                Ok::<_, anyhow::Error>(count)
             })
             .await;
             match saved {
-                Ok(Ok(stats)) => {
-                    info!(list = %url, rules = stats.rules, "list downloaded");
+                Ok(Ok(count)) => {
+                    info!(list = %url, entries = count, "list downloaded");
                     Downloaded::Changed
                 }
                 Ok(Err(err)) => {

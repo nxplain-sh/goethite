@@ -427,6 +427,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/services": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The services groups can block (`blocked_services`), such as TikTok or
+         *     YouTube, with the rules that block them. The catalog is AdGuard's
+         *     HostlistsRegistry (GPL-3.0), which the node downloads and refreshes with
+         *     the filter lists.
+         */
+        get: operations["get_services"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/settings": {
         parameters: {
             query?: never;
@@ -548,6 +570,19 @@ export interface components {
          * @enum {string}
          */
         BlockResponseKind: "null_ip" | "nxdomain" | "refused";
+        /** @description A service a group blocks, always or while a schedule is active. */
+        BlockedService: {
+            /**
+             * @description The schedule's ID: the service is blocked only while the schedule is
+             *     active. Without one it is always blocked.
+             */
+            schedule?: string | null;
+            /**
+             * @description The service's ID in the services catalog (`GET /api/v1/services`),
+             *     such as `tiktok`. An ID the catalog does not have blocks nothing.
+             */
+            service: string;
+        };
         /** @description The cache. */
         CacheStatus: {
             /**
@@ -840,6 +875,12 @@ export interface components {
         };
         /** @description A group of clients with the same filtering. */
         GroupSpec: {
+            /**
+             * @description The services the group blocks, such as TikTok or YouTube: every name
+             *     the service uses, whatever the lists say. They apply while filtering
+             *     is on.
+             */
+            blocked_services?: components["schemas"]["BlockedService"][];
             /** @description Free text. */
             comment?: string;
             /** @description Whether the group's clients are filtered at all. */
@@ -1164,6 +1205,39 @@ export interface components {
             time_zone?: string;
             /** @description The windows. */
             windows: components["schemas"]["Window"][];
+        };
+        /** @description A service a group can block. */
+        Service: {
+            /** @description What kind of service it is, such as `social_network` or `gaming`. */
+            group: string;
+            /** @description Its ID, such as `tiktok`: what groups' `blocked_services` name. */
+            id: string;
+            /** @description Its name, such as `TikTok`. */
+            name: string;
+            /**
+             * @description The rules that block it, in adblock-style syntax. Rules goethite
+             *     cannot read are left out.
+             */
+            rules: string[];
+        };
+        /** @description The services groups can block, and how the catalog is doing. */
+        Services: {
+            /**
+             * Format: date-time
+             * @description When this node saved its copy; `None` until it has one.
+             */
+            downloaded_at?: string | null;
+            /**
+             * @description Why the last download or read failed, if it did; the last good copy
+             *     stays in use.
+             */
+            error?: string | null;
+            /** @description The catalog's license. */
+            license: string;
+            /** @description The services, by name. */
+            services: components["schemas"]["Service"][];
+            /** @description Where the catalog comes from. */
+            source: string;
         };
         /** @description The settings, with their revision. */
         Settings: {
@@ -2801,6 +2875,35 @@ export interface operations {
             };
             /** @description It changed since that revision */
             412: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    get_services: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The services */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Services"];
+                };
+            };
+            /** @description Turned off on this node */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

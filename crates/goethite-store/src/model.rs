@@ -8,7 +8,7 @@
 use std::collections::HashSet;
 
 use goethite_filter::{LineKind, parse_line};
-use goethite_resolver::{Cidr, MAX_SCHEDULES, is_client_id};
+use goethite_resolver::{Cidr, MAX_SCHEDULES, MAX_SERVICES, is_client_id, is_service_id};
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use serde::{Deserialize, Serialize};
@@ -32,6 +32,8 @@ pub const MAX_CLIENT_ADDRESSES: usize = 64;
 pub const MAX_CLIENT_IDS: usize = 16;
 /// The most schedules.
 pub const MAX_SCHEDULE_COUNT: usize = MAX_SCHEDULES;
+/// The most blocked services one group names, schedules included.
+pub const MAX_BLOCKED_SERVICES: usize = MAX_SERVICES;
 /// The most time windows in one schedule.
 pub const MAX_WINDOWS: usize = 32;
 /// The longest name, in characters.
@@ -161,6 +163,19 @@ pub struct GroupList {
     pub schedule: Option<String>,
 }
 
+/// A service a group blocks, always or while a schedule is active.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BlockedService {
+    /// The service's ID in the services catalog (`GET /api/v1/services`),
+    /// such as `tiktok`. An ID the catalog does not have blocks nothing.
+    pub service: String,
+    /// The schedule's ID: the service is blocked only while the schedule is
+    /// active. Without one it is always blocked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schedule: Option<String>,
+}
+
 /// A group of clients with the same filtering.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
@@ -177,6 +192,11 @@ pub struct GroupSpec {
     /// is on.
     #[serde(default)]
     pub lists: Vec<GroupList>,
+    /// The services the group blocks, such as TikTok or YouTube: every name
+    /// the service uses, whatever the lists say. They apply while filtering
+    /// is on.
+    #[serde(default)]
+    pub blocked_services: Vec<BlockedService>,
     /// Free text.
     #[serde(default)]
     pub comment: String,
@@ -724,6 +744,30 @@ impl ConfigSnapshot {
                     return Err(invalid(at, "names the same list and schedule twice"));
                 }
             }
+            if group.spec.blocked_services.len() > MAX_BLOCKED_SERVICES {
+                return Err(invalid(
+                    format!("{field}.blocked_services"),
+                    format!("has more than {MAX_BLOCKED_SERVICES} entries"),
+                ));
+            }
+            let mut seen = HashSet::new();
+            for (index, entry) in group.spec.blocked_services.iter().enumerate() {
+                let at = format!("{field}.blocked_services[{index}]");
+                if !is_service_id(&entry.service) {
+                    return Err(invalid(
+                        format!("{at}.service"),
+                        "needs 1 to 64 lowercase letters, digits, underscores and hyphens",
+                    ));
+                }
+                if let Some(schedule) = &entry.schedule
+                    && !schedules.contains(schedule.as_str())
+                {
+                    return Err(conflict(at, format!("there is no schedule {schedule:?}")));
+                }
+                if !seen.insert(entry) {
+                    return Err(invalid(at, "names the same service and schedule twice"));
+                }
+            }
         }
         Ok(())
     }
@@ -798,6 +842,7 @@ pub(crate) fn default_group_resource(now: Timestamp) -> Group {
             filtering: true,
             safe_search: false,
             lists: Vec::new(),
+            blocked_services: Vec::new(),
             comment: "Clients that are not in another group.".to_owned(),
             managed_by: ManagedBy::Api,
         },
@@ -979,6 +1024,54 @@ mod tests {
         let mut bad = good;
         bad.settings.spec.list_update_hours = 0;
         assert!(bad.validate().is_err());
+    }
+
+    #[test]
+    fn blocked_services() {
+        let blocked = |service: &str, schedule: Option<&str>| BlockedService {
+            service: service.into(),
+            schedule: schedule.map(Into::into),
+        };
+        let mut good = snapshot();
+        good.groups[0].spec.blocked_services = vec![
+            blocked("tiktok", None),
+            // Not in the catalog (yet): kept, and blocks nothing.
+            blocked("tomorrows_app", None),
+        ];
+        assert_eq!(good.validate(), Ok(()));
+
+        let mut bad = good.clone();
+        bad.groups[0].spec.blocked_services[1].service = "Tik Tok".into();
+        let err = bad.validate().unwrap_err();
+        assert_eq!(err.field, "groups[default].blocked_services[1].service");
+
+        let mut bad = good.clone();
+        bad.groups[0]
+            .spec
+            .blocked_services
+            .push(blocked("tiktok", None));
+        assert!(bad.validate().unwrap_err().message.contains("twice"));
+
+        let mut bad = good.clone();
+        bad.groups[0].spec.blocked_services[0].schedule = Some("sc_nope".into());
+        assert!(bad.validate().unwrap_err().conflict);
+
+        let mut bad = good;
+        bad.groups[0].spec.blocked_services = (0..=MAX_BLOCKED_SERVICES)
+            .map(|i| blocked(&format!("s{i}"), None))
+            .collect();
+        assert!(
+            bad.validate()
+                .unwrap_err()
+                .field
+                .ends_with("blocked_services")
+        );
+
+        let json = r#"{"name": "Kids", "blocked_services": [{"service": "tiktok"}]}"#;
+        let spec: GroupSpec = serde_json::from_str(json).unwrap();
+        assert_eq!(spec.blocked_services, [blocked("tiktok", None)]);
+        let spec: GroupSpec = serde_json::from_str(r#"{"name": "Old"}"#).unwrap();
+        assert!(spec.blocked_services.is_empty(), "older groups have none");
     }
 
     #[test]

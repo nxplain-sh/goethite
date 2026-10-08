@@ -43,7 +43,7 @@ Switch screens with <kbd>Tab</kbd>, the arrow keys, or <kbd>1</kbd>–<kbd>5</kb
 3. **Lists**: the filter lists, whether each is on, its rule count, its last update, who manages it
    and any download or parse problem.
 4. **Clients**: the clients, their addresses and their groups.
-5. **Groups**: each group's filtering, safe search, lists and clients.
+5. **Groups**: each group's filtering, safe search, lists, blocked services and clients.
 
 Every answer carries a text label (`BLOCKED`, `ALLOWED`, `CACHED` and so on), so nothing depends on
 color alone.

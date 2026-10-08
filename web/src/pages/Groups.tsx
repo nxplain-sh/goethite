@@ -12,13 +12,14 @@ import {
 	saveGroup,
 	schedulesQuery,
 } from '../api/resources'
+import { BlockedServices } from '../components/BlockedServices'
 import { Editor, Loading, ManagedBadge } from '../components/editor'
 import { CheckField, TextField } from '../components/form'
 import { ErrorNotice } from '../components/ui'
 import { DEFAULT_GROUP, groupForm, type GroupForm, groupSpec } from '../forms/forms'
 import { count } from '../format'
 
-/** Client groups: which lists filter whom, and when. */
+/** Client groups: which lists and services filter whom, and when. */
 export function Groups() {
 	const groups = useQuery(groupsQuery)
 	const clients = useQuery(allClientsQuery)
@@ -36,8 +37,8 @@ export function Groups() {
 				</Link>
 			</div>
 			<p className="muted">
-				A group decides the filtering of its clients: which lists, during which schedules, and safe
-				search. Clients in no other group are in the default group.
+				A group decides the filtering of its clients: which lists and blocked services, during which
+				schedules, and safe search. Clients in no other group are in the default group.
 			</p>
 			<ErrorNotice error={groups.error ?? clients.error} />
 			<div className="panel">
@@ -48,6 +49,7 @@ export function Groups() {
 							<th>Filtering</th>
 							<th>Safe search</th>
 							<th>Lists</th>
+							<th>Blocked services</th>
 							<th>Clients</th>
 						</tr>
 					</thead>
@@ -64,6 +66,9 @@ export function Groups() {
 								<td>{onOff(group.spec.filtering ?? true)}</td>
 								<td>{onOff(group.spec.safe_search ?? false)}</td>
 								<td className="num">{count(group.spec.lists?.length ?? 0)}</td>
+								<td className="num">
+									{count(new Set(group.spec.blocked_services?.map((entry) => entry.service)).size)}
+								</td>
 								<td className="num">
 									{group.id === DEFAULT_GROUP ? 'the rest' : count(members.get(group.id) ?? 0)}
 								</td>
@@ -206,6 +211,11 @@ function GroupFields({ stored, reload }: { stored: Group | undefined; reload: ()
 					</button>
 				</p>
 			</fieldset>
+			<BlockedServices
+				value={form.blockedServices}
+				onChange={set('blockedServices')}
+				schedules={schedules.data ?? []}
+			/>
 			<TextField label="Comment" value={form.comment} onChange={set('comment')} mono={false} />
 		</Editor>
 	)

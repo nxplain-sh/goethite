@@ -123,6 +123,7 @@ fn policy() -> Policy {
         block_response: BlockResponse::NullIp,
         blocked_ttl: 10,
         protection: true,
+        services: Arc::new(goethite_resolver::ServiceFilter::empty()),
     })
     .unwrap()
 }

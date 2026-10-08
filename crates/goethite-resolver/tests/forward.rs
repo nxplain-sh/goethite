@@ -19,7 +19,8 @@ use goethite_proto::{Edns, Name, Query, Question, RecordClass, RecordType, Respo
 use goethite_resolver::{
     BlockResponse, Cache, CacheConfig, ClientPolicy, Forwarder, ForwarderConfig, GroupPolicy,
     Outcome, Policy, PolicyParts, PolicyState, RebindingProtection, Resolution, Resolver,
-    ScheduledSources, Transport, UpstreamConfig,
+    ScheduledServices, ScheduledSources, ServiceFilter, ServiceMask, ServiceRules, Transport,
+    UpstreamConfig,
 };
 use hickory_proto::op::{self, Message, MessageType, OpCode};
 use hickory_proto::rr::{self, RData, rdata};
@@ -559,6 +560,7 @@ fn grouped() -> Policy {
         block_response: BlockResponse::NxDomain,
         blocked_ttl: 10,
         protection: true,
+        services: Arc::new(ServiceFilter::empty()),
     })
     .unwrap()
 }
@@ -620,6 +622,98 @@ async fn groups_schedules_and_pausing() {
     );
     state.pause(None);
     assert_eq!(outcome("ads.example.", "10.9.9.9").await, blocked);
+}
+
+/// A catalog of two services, compiled.
+fn services() -> Arc<ServiceFilter> {
+    let rules = |lines: &[&str]| {
+        let mut rules = Vec::new();
+        for line in lines {
+            goethite_filter::parse_line(line, |rule| rules.push(rule));
+        }
+        rules
+    };
+    Arc::new(
+        ServiceFilter::build(&[
+            ServiceRules {
+                id: "tiktok".into(),
+                rules: rules(&["||tiktok.com^", "||tiktokv.com^"]),
+            },
+            ServiceRules {
+                id: "youtube".into(),
+                rules: rules(&["||youtube.com^"]),
+            },
+        ])
+        .unwrap(),
+    )
+}
+
+#[tokio::test]
+async fn groups_block_services_always_or_on_a_schedule() {
+    let upstream = fake(always(Ipv4Addr::new(192, 0, 2, 80)), silent()).await;
+    let services = services();
+    let tiktok = services.index("tiktok").unwrap();
+    let youtube = services.index("youtube").unwrap();
+    let mut kids = GroupPolicy::new("kids", sources(&[0]));
+    kids.services = ServiceMask::NONE.with(tiktok);
+    kids.scheduled_services.push(ScheduledServices {
+        schedule: 1,
+        services: ServiceMask::NONE.with(youtube),
+    });
+    let policy = Policy::new(PolicyParts {
+        // A list that makes an exception for TikTok, which does not undo
+        // the group's choice.
+        filter: Arc::new(filter("@@||tiktok.com^\n")),
+        source_ids: vec!["allow".into()],
+        groups: vec![GroupPolicy::new("default", sources(&[0])), kids],
+        clients: vec![ClientPolicy {
+            id: "tablet".into(),
+            addresses: vec!["10.0.0.2".parse().unwrap()],
+            ids: Vec::new(),
+            group: 1,
+        }],
+        block_response: BlockResponse::NxDomain,
+        blocked_ttl: 10,
+        protection: true,
+        services,
+    })
+    .unwrap();
+    let state = Arc::new(PolicyState::new(policy));
+    let resolver = Resolver::new(Vec::new())
+        .with_policy(Arc::clone(&state))
+        .with_forwarder(forwarder(vec![UpstreamConfig::udp(upstream.addr)]));
+    let ask = async |name: &str, client: &str| resolver.resolve(&query(name), from(client)).await;
+
+    let blocked = ask("www.tiktok.com.", "10.0.0.2").await;
+    assert_eq!(blocked.outcome, Outcome::Blocked);
+    assert_eq!(blocked.response.rcode, ResponseCode::NX_DOMAIN);
+    let hit = blocked.filter.unwrap();
+    assert_eq!(hit.source.as_deref(), Some("service:tiktok"));
+    assert_eq!(
+        hit.matched
+            .rule_text(&"www.tiktok.com".parse().unwrap(), hit.action),
+        "||tiktok.com^"
+    );
+    // Not for other groups, and YouTube only while its schedule is on.
+    assert_eq!(
+        ask("www.tiktok.com.", "10.9.9.9").await.outcome,
+        Outcome::Upstream(0)
+    );
+    assert_eq!(
+        ask("m.youtube.com.", "10.0.0.2").await.outcome,
+        Outcome::Upstream(0)
+    );
+    state.set_active_schedules(1 << 1);
+    assert_eq!(
+        ask("m.youtube.com.", "10.0.0.2").await.outcome,
+        Outcome::Blocked
+    );
+    // A pause stops it, like any filtering.
+    state.pause(Some(SystemTime::now() + Duration::from_secs(60)));
+    assert_eq!(
+        ask("www.tiktok.com.", "10.0.0.2").await.outcome,
+        Outcome::Upstream(0)
+    );
 }
 
 /// Answers every query with a CNAME from the question name to `target`,

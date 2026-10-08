@@ -1,0 +1,11 @@
+{
+  "groups": [{"id": "social_network"}, {"id": "streaming"}],
+  "blocked_services": [
+    {"id": "example_social", "name": "Example Social", "group": "social_network",
+     "icon_svg": "<svg xmlns=\"http://www.w3.org/2000/svg\"/>",
+     "rules": ["||social.example^", "||social-cdn.example^", "|exact.social.example^"]},
+    {"id": "example_video", "name": "Example Video", "group": "streaming",
+     "rules": ["||video.example^", "/video[0-9]+\\.example/", "||v.example^$dnstype=~CNAME"]},
+    {"id": "Bad ID", "rules": ["||bad.example^"]}
+  ]
+}

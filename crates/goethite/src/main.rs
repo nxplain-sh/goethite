@@ -16,6 +16,7 @@ mod observe;
 mod plane;
 mod privileges;
 mod secrets;
+mod services;
 mod sockets;
 mod vrrp;
 
@@ -664,6 +665,16 @@ fn check_config(config_path: &Path) -> Result<()> {
     Forwarder::new(ForwarderConfig::new(upstreams))
         .context("invalid [[upstream]] configuration")?;
     filters::check(&config.filter, &ListStore::new(config.lists_dir()))?;
+    if let Some(services::ServicesFrom::File(path)) = config.filter.services_from() {
+        match services::read(&path, None)? {
+            services::Read::Changed(catalog) => {
+                info!(services = catalog.services.len(), "services catalog ready");
+            }
+            services::Read::Missing | services::Read::Unchanged => {
+                anyhow::bail!("filter.services_file: {} does not exist", path.display());
+            }
+        }
+    }
     let secrets = Secrets::read(&config)?;
     if let Some(pem) = &secrets.api_tls {
         certs::Served::new("API certificate", pem, None)?;

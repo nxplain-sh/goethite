@@ -306,6 +306,38 @@ async function ask(name: string): Promise<void> {
 	}
 }
 
+test('blocks a service for a group, and the query log says which', async ({ page, request }) => {
+	await page.getByRole('link', { name: 'Groups', exact: true }).click()
+	await page.getByRole('link', { name: 'Default', exact: true }).click()
+	const services = page.getByRole('group', { name: 'Blocked services' })
+	await expect(services.getByText('No blocked services.')).toBeVisible()
+	await services.getByLabel('Find a service').fill('stream')
+	await expect(services.getByRole('heading', { name: 'Streaming' })).toBeVisible()
+	await expect(services.getByLabel('TikTok')).toHaveCount(0)
+	await services.getByLabel('Find a service').fill('tik')
+	await services.getByLabel('TikTok').check()
+	await expect(services.getByLabel('When TikTok is blocked')).toHaveValue('')
+	await page.getByRole('button', { name: 'Save' }).click()
+	const row = page.getByRole('row').filter({ hasText: 'Default' })
+	await expect(row.getByRole('cell').nth(4)).toHaveText('1')
+	const group = await apiCall(request, 'GET', '/api/v1/groups/default')
+	expect(group.spec.blocked_services).toEqual([{ service: 'tiktok' }])
+
+	await ask('www.tiktok.com')
+	await page.getByRole('link', { name: 'Query log', exact: true }).click()
+	await expect(page.getByRole('row').filter({ hasText: 'www.tiktok.com' }).first()).toContainText(
+		'Blocked service TikTok · ||tiktok.com^',
+	)
+
+	await page.getByRole('link', { name: 'Groups', exact: true }).click()
+	await page.getByRole('link', { name: 'Default', exact: true }).click()
+	await page.getByRole('button', { name: 'Unblock TikTok' }).click()
+	await page.getByRole('button', { name: 'Save' }).click()
+	await expect(row.getByRole('cell').nth(4)).toHaveText('0')
+	const after = await apiCall(request, 'GET', '/api/v1/groups/default')
+	expect(after.spec.blocked_services).toEqual([])
+})
+
 test('the dashboard: a range, its queries, a bar and a quick rule', async ({ page, request }) => {
 	const problems: string[] = []
 	page.on('console', (message) => {

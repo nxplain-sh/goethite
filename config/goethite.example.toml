@@ -149,6 +149,13 @@ default_lists = true
 # off.
 directory = true
 
+# Groups can block whole services (TikTok, YouTube, Roblox…): this node
+# downloads AdGuard's services catalog (GPL-3.0) with the lists. false turns
+# it off; services_file reads the catalog from a file instead, for nodes
+# without internet access.
+services = true
+# services_file = "/etc/goethite/services.json"
+
 # What to do when filtering fails (a broken store or filter): "open" keeps
 # resolving, unfiltered if need be, and reports it; "closed" refuses to
 # start or answers SERVFAIL.

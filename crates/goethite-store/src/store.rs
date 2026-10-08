@@ -1460,6 +1460,7 @@ mod tests {
                         list: ads.id.clone(),
                         schedule: None,
                     }],
+                    blocked_services: Vec::new(),
                     comment: String::new(),
                     managed_by: ManagedBy::Terraform,
                 },

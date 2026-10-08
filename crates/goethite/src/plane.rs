@@ -101,6 +101,7 @@ impl ControlPlane {
             Arc::clone(&store),
             Arc::clone(&data.state),
             ListStore::new(config.lists_dir()),
+            config.filter.services_from(),
         );
         // Filter from the first query on, with the lists already on disk.
         if !control.rebuild_filter().await {

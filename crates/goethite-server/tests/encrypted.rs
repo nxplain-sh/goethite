@@ -96,6 +96,7 @@ fn resolver() -> Resolver {
         block_response: BlockResponse::NullIp,
         blocked_ttl: 10,
         protection: true,
+        services: Arc::new(goethite_resolver::ServiceFilter::empty()),
     })
     .unwrap();
     Resolver::new(vec![test_record().unwrap()]).with_policy(Arc::new(PolicyState::new(policy)))

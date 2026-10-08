@@ -26,7 +26,7 @@ jobs:
       fail-fast: false
       matrix:
         # Every target in fuzz/fuzz_targets/ goes here.
-        target: [decode_query, decode_query_record, decode_response, parse_cidr, parse_doh, parse_doq, parse_filterlists, parse_list, parse_name, parse_netlink, parse_vrrp, request_checks]
+        target: [decode_query, decode_query_record, decode_response, parse_cidr, parse_doh, parse_doq, parse_filterlists, parse_list, parse_name, parse_services, parse_netlink, parse_vrrp, request_checks]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

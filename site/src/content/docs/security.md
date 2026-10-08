@@ -156,6 +156,9 @@ goethite opens connections only to:
 - the hosts of **downloaded filter lists**, over HTTPS, when lists are refreshed (by default
   every 24 hours), including the [default list](../filtering/#recommended-and-default-lists) of a
   new node;
+- **`adguardteam.github.io`**, over HTTPS, for the [blocked services](../groups/#blocked-services)
+  catalog, when lists are refreshed (`[filter] services = false` turns it off, `services_file`
+  reads it from a file instead);
 - **`api.filterlists.com`**, over HTTPS, only when someone opens Find lists in the web UI, at
   most once a day ([FilterLists directory](../filtering/#finding-more-lists); `[filter]
   directory = false` turns it off);

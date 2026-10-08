@@ -36,6 +36,7 @@ use utoipa::{IntoParams, ToSchema};
 
 use crate::catalog::{self, Directory, DirectoryList, RecommendedList};
 use crate::error::{ApiError, ApiJson, ErrorBody};
+use crate::services::Services;
 use crate::{Api, Change, Status};
 
 type Shared = State<Arc<Api>>;
@@ -639,6 +640,20 @@ pub(crate) async fn get_directory_list(
     Ok(Json(api.control.directory_list(id).await?))
 }
 
+/// The services groups can block (`blocked_services`), such as TikTok or
+/// YouTube, with the rules that block them. The catalog is AdGuard's
+/// HostlistsRegistry (GPL-3.0), which the node downloads and refreshes with
+/// the filter lists.
+#[utoipa::path(get, path = "/api/v1/services", tag = "groups",
+    responses(
+        (status = 200, description = "The services", body = Services),
+        (status = 503, description = "Turned off on this node", body = ErrorBody),
+    ),
+    security(("token" = [])))]
+pub(crate) async fn get_services(State(api): Shared) -> Result<Json<Services>, ApiError> {
+    Ok(Json(api.control.services()?))
+}
+
 /// Every route that needs authentication.
 pub(crate) fn routes() -> Router<Arc<Api>> {
     Router::new()
@@ -667,6 +682,7 @@ pub(crate) fn routes() -> Router<Arc<Api>> {
             "/api/v1/groups/{id}",
             get(get_group).put(update_group).delete(delete_group),
         )
+        .route("/api/v1/services", get(get_services))
         .route("/api/v1/clients", get(list_clients).post(create_client))
         .route(
             "/api/v1/clients/{id}",

@@ -25,6 +25,7 @@ mod error;
 mod handlers;
 mod openapi;
 mod serve;
+pub mod services;
 mod web;
 
 use std::future::Future;
@@ -128,6 +129,15 @@ pub trait Control: Send + Sync + 'static {
         Box::pin(async { Err(directory_off()) })
     }
 
+    /// The services groups can block.
+    ///
+    /// # Errors
+    ///
+    /// [`services_off`] when this node does not use the catalog.
+    fn services(&self) -> Result<services::Services, ApiError> {
+        Err(services_off())
+    }
+
     /// Where configuration changes made through this node go.
     fn writes(&self) -> Writes {
         Writes::Local
@@ -162,6 +172,13 @@ pub trait Control: Send + Sync + 'static {
 pub fn directory_off() -> ApiError {
     ApiError::unavailable(
         "the FilterLists directory is turned off on this node ([filter] directory in its config file)",
+    )
+}
+
+/// The answer when this node does not use the services catalog.
+pub fn services_off() -> ApiError {
+    ApiError::unavailable(
+        "blocked services are turned off on this node ([filter] services in its config file)",
     )
 }
 

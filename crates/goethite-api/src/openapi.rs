@@ -46,6 +46,7 @@ use crate::{cluster, handlers};
         handlers::get_group,
         handlers::update_group,
         handlers::delete_group,
+        handlers::get_services,
         handlers::list_clients,
         handlers::create_client,
         handlers::get_client,

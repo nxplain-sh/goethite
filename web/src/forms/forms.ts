@@ -92,11 +92,18 @@ export interface GroupListForm {
 	schedule: string
 }
 
+/** A service a group blocks, and the schedule it is blocked during ('' = always). */
+export interface BlockedServiceForm {
+	service: string
+	schedule: string
+}
+
 export interface GroupForm {
 	name: string
 	filtering: boolean
 	safeSearch: boolean
 	lists: GroupListForm[]
+	blockedServices: BlockedServiceForm[]
 	comment: string
 }
 
@@ -106,6 +113,10 @@ export function groupForm(spec?: GroupSpec): GroupForm {
 		filtering: spec?.filtering ?? true,
 		safeSearch: spec?.safe_search ?? false,
 		lists: (spec?.lists ?? []).map((entry) => ({ list: entry.list, schedule: entry.schedule ?? '' })),
+		blockedServices: (spec?.blocked_services ?? []).map((entry) => ({
+			service: entry.service,
+			schedule: entry.schedule ?? '',
+		})),
 		comment: spec?.comment ?? '',
 	}
 }
@@ -120,11 +131,19 @@ export function groupSpec(form: GroupForm, managedBy?: ManagedBy): GroupSpec {
 		seen.add(key)
 		return [{ list: entry.list, schedule: entry.schedule === '' ? null : entry.schedule }]
 	})
+	const blocked = new Set<string>()
+	const blockedServices = form.blockedServices.flatMap((entry) => {
+		const key = `${entry.service}\u0000${entry.schedule}`
+		if (entry.service === '' || blocked.has(key)) return []
+		blocked.add(key)
+		return [{ service: entry.service, schedule: entry.schedule === '' ? null : entry.schedule }]
+	})
 	return {
 		name: form.name.trim(),
 		filtering: form.filtering,
 		safe_search: form.safeSearch,
 		lists,
+		blocked_services: blockedServices,
 		comment: form.comment.trim(),
 		managed_by: managed(managedBy),
 	}

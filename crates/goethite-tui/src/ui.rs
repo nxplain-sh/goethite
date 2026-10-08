@@ -536,6 +536,16 @@ fn render_groups(frame: &mut Frame<'_>, area: Rect, app: &App) {
                     String::new()
                 }
             )),
+            Cell::from(
+                group
+                    .spec
+                    .blocked_services
+                    .iter()
+                    .map(|entry| entry.service.as_str())
+                    .collect::<std::collections::HashSet<_>>()
+                    .len()
+                    .to_string(),
+            ),
             Cell::from(clients.to_string()),
             managed(group.spec.managed_by),
         ])
@@ -547,6 +557,7 @@ fn render_groups(frame: &mut Frame<'_>, area: Rect, app: &App) {
             Constraint::Length(10),
             Constraint::Length(12),
             Constraint::Length(16),
+            Constraint::Length(9),
             Constraint::Length(8),
             Constraint::Length(21),
         ],
@@ -557,6 +568,7 @@ fn render_groups(frame: &mut Frame<'_>, area: Rect, app: &App) {
             "FILTERING",
             "SAFE SEARCH",
             "LISTS",
+            "SERVICES",
             "CLIENTS",
             "MANAGED BY",
         ])
@@ -754,6 +766,7 @@ mod tests {
                 filtering: true,
                 safe_search: true,
                 lists: Vec::new(),
+                blocked_services: Vec::new(),
                 comment: String::new(),
                 managed_by: ManagedBy::Api,
             },
@@ -790,7 +803,10 @@ mod tests {
         );
         app.tab = Tab::Groups;
         let groups = screen(&app);
-        assert!(groups.contains("Kids") && groups.contains("ON"), "{groups}");
+        assert!(
+            groups.contains("Kids") && groups.contains("ON") && groups.contains("SERVICES"),
+            "{groups}"
+        );
     }
 
     #[test]

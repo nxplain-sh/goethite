@@ -155,6 +155,19 @@ fn check_config_rejects_problems() {
             "cannot open filter list",
         ),
         (
+            "check_missing_services_file",
+            "[filter]\nservices_file = \"/nonexistent/goethite/services.json\"\n",
+            "/nonexistent/goethite/services.json does not exist",
+        ),
+        (
+            "check_bad_services_file",
+            &format!(
+                "[filter]\nservices_file = {:?}\n",
+                config_file("not_a_catalog", "<html>").display().to_string()
+            ),
+            "unexpected data in the services catalog",
+        ),
+        (
             "check_missing_dns_certificate",
             "[server.tls]\ncert = \"/nonexistent/dns.crt\"\nkey = \"/nonexistent/dns.key\"\n\
              dot = \"127.0.0.1:853\"\n",
@@ -224,13 +237,19 @@ mod serving {
         }
 
         /// Starts goethite with `config`, plus a fresh store of its own
-        /// unless the config names one, and without the default list,
-        /// which it would try to download.
+        /// unless the config names one, and without the default list and
+        /// the services catalog, which it would try to download.
         fn start_config(test: &str, config: &str) -> Self {
-            let config = if config.contains("[filter]\n") {
-                config.replacen("[filter]\n", "[filter]\ndefault_lists = false\n", 1)
+            // Nor the services catalog, unless the test brings its own.
+            let offline = if config.contains("services") {
+                "default_lists = false\n"
             } else {
-                format!("{config}\n[filter]\ndefault_lists = false\n")
+                "default_lists = false\nservices = false\n"
+            };
+            let config = if config.contains("[filter]\n") {
+                config.replacen("[filter]\n", &format!("[filter]\n{offline}"), 1)
+            } else {
+                format!("{config}\n[filter]\n{offline}")
             };
             Self::start_exact(test, &config)
         }
@@ -979,6 +998,81 @@ mod serving {
             assert!(server.wait_for_exit().success());
         }
         let _ = std::fs::remove_file(&store);
+    }
+
+    /// A group blocks a service from the catalog: every name the service
+    /// uses, logged as the service's.
+    #[test]
+    fn groups_block_services() {
+        let catalog = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("services.json");
+        std::fs::write(
+            &catalog,
+            r#"{"groups": [{"id": "social_network"}], "blocked_services": [
+                {"id": "tiktok", "name": "TikTok", "group": "social_network", "icon_svg": "<svg/>",
+                 "rules": ["||tiktok.com^", "||tiktokv.com^"]},
+                {"id": "youtube", "name": "YouTube", "group": "video",
+                 "rules": ["||youtube.com^"]}
+            ]}"#,
+        )
+        .unwrap();
+        let mut server = Running::start_with(
+            "groups_block_services",
+            upstream(),
+            &format!(
+                "\n[filter]\nservices_file = {:?}\n",
+                catalog.display().to_string()
+            ),
+        );
+        let udp = field(&server.find_log(DNS_LISTENING), "udp");
+        let api_addr = field(&server.find_log("API listening"), "address");
+        server.find_log("services catalog ready");
+        let (status, services) = api(api_addr, "GET /api/v1/services HTTP/1.1", "");
+        assert_eq!(status, 200, "{services}");
+        assert_eq!(services["source"], catalog.display().to_string());
+        assert_eq!(services["license"], "GPL-3.0");
+        let names: Vec<&str> = services["services"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|service| service["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["TikTok", "YouTube"]);
+
+        let (status, body) = api(
+            api_addr,
+            "PUT /api/v1/groups/default HTTP/1.1",
+            r#"{"name": "Default", "blocked_services": [{"service": "tiktok"}]}"#,
+        );
+        assert_eq!(status, 200, "{body}");
+        let blocked = ask(udp, "api16-normal.tiktokv.com.");
+        assert_eq!(
+            blocked.answers[0].data,
+            RData::A(A(Ipv4Addr::UNSPECIFIED)),
+            "blocked"
+        );
+        let allowed = ask(udp, "www.youtube.com.");
+        assert_eq!(
+            allowed.answers[0].data,
+            RData::A(A(Ipv4Addr::new(192, 0, 2, 53)))
+        );
+
+        let mut entry = serde_json::Value::Null;
+        for _ in 0..100 {
+            let (_, page) = api(
+                api_addr,
+                "GET /api/v1/querylog?outcome=blocked HTTP/1.1",
+                "",
+            );
+            if let Some(found) = page["entries"].as_array().and_then(|e| e.first()) {
+                entry = found.clone();
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert_eq!(entry["list"], "service:tiktok", "{entry}");
+        assert_eq!(entry["rule"], "||tiktokv.com^");
+        server.signal("TERM");
+        assert!(server.wait_for_exit().success());
     }
 
     #[test]

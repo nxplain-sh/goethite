@@ -49,7 +49,8 @@ the network; otherwise the token crosses it in clear text.
   **Find lists** searches the [FilterLists directory](../filtering/#finding-more-lists).
 - **Rules**: custom rules, added from the top of the page, filtered as you type, turned on and
   off in place. goethite explains a rule it cannot use.
-- **Groups**: which lists filter a group's clients, each always or during a schedule, and safe
+- **Groups**: which lists and [blocked services](../groups/#blocked-services) filter a group's
+  clients, each always or during a schedule, and safe
   search.
 - **Clients**: devices and networks by address or [client ID](../encrypted-dns/#client-ids), and
   their group. With an ID, the editor shows the DNS over HTTPS URL and the DNS over TLS and QUIC

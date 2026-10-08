@@ -81,6 +81,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "parse_services"
+path = "fuzz_targets/parse_services.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "parse_list"
 path = "fuzz_targets/parse_list.rs"
 test = false

@@ -483,6 +483,10 @@ const MAX_LISTS: usize = 63;
 const MAX_INLINE_RULES: usize = 10_000;
 
 /// The `[filter]` table.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent on/off switches in the config file"
+)]
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, default)]
 pub struct FilterSection {
@@ -510,6 +514,12 @@ pub struct FilterSection {
     /// Whether the API offers the FilterLists directory (filterlists.com)
     /// for finding lists: the node fetches it when someone browses it.
     pub directory: bool,
+    /// Whether groups can block services (TikTok, YouTube…): the node
+    /// downloads AdGuard's services catalog with the lists.
+    pub services: bool,
+    /// Reads the services catalog from this file instead of downloading
+    /// it, for nodes that cannot reach the internet.
+    pub services_file: Option<PathBuf>,
 }
 
 /// What to do when filtering fails: the store cannot be opened, the filter
@@ -547,6 +557,8 @@ impl Default for FilterSection {
             on_failure: OnFailure::Open,
             default_lists: true,
             directory: true,
+            services: true,
+            services_file: None,
         }
     }
 }
@@ -605,6 +617,16 @@ impl FilterSection {
             }
         }
         Ok(())
+    }
+
+    /// Where the services catalog comes from, unless blocked services are
+    /// turned off.
+    pub fn services_from(&self) -> Option<crate::services::ServicesFrom> {
+        use crate::services::ServicesFrom;
+        self.services.then(|| match &self.services_file {
+            Some(path) => ServicesFrom::File(path.clone()),
+            None => ServicesFrom::Url(goethite_api::services::SOURCE.to_owned()),
+        })
     }
 
     /// The table as resources to import into the store: config rules and
@@ -672,6 +694,9 @@ impl FilterSection {
         };
         if let Some(dir) = &mut self.cache_dir {
             resolve(dir);
+        }
+        if let Some(file) = &mut self.services_file {
+            resolve(file);
         }
         for list in &mut self.list {
             if let Some(path) = &mut list.path {

@@ -169,6 +169,12 @@ impl goethite_api::Control for Node {
         })
     }
 
+    fn services(&self) -> Result<goethite_api::services::Services, ApiError> {
+        self.control
+            .services()
+            .ok_or_else(goethite_api::services_off)
+    }
+
     fn apply(&self, change: Change) -> BoxFuture<'_> {
         Box::pin(async move {
             match change {

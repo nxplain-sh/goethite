@@ -5,7 +5,7 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 import { type FormEvent, useRef, useState } from 'react'
 
 import { OUTCOMES, type QueryEntry, type QueryOutcome } from '../api/client'
-import { LOG_PAGE, type LogSearch, clientsQuery, isLive, queryLogQuery } from '../api/queries'
+import { LOG_PAGE, type LogSearch, clientsQuery, isLive, queryLogQuery, servicesQuery } from '../api/queries'
 import { ErrorNotice, OutcomeBadge, outcomeLabel } from '../components/ui'
 import { count, dateTime, millis, moment } from '../format'
 
@@ -20,7 +20,7 @@ const columns = column.columns([
 		header: 'Answer',
 		cell: (info) => <OutcomeBadge outcome={info.getValue()} />,
 	}),
-	column.display({ id: 'detail', header: 'Why', cell: (info) => detail(info.row.original) }),
+	column.display({ id: 'detail', header: 'Why', cell: (info) => <Why entry={info.row.original} /> }),
 	column.accessor('elapsed_us', { header: 'Time taken', cell: (info) => millis(info.getValue()) }),
 ])
 const RIGHT_ALIGNED = new Set(['elapsed_us'])
@@ -66,6 +66,18 @@ function detail(entry: QueryEntry): string {
 	if (entry.upstream != null) parts.push(entry.upstream)
 	if (entry.rcode !== 'NOERROR') parts.push(entry.rcode)
 	return parts.join(' · ')
+}
+
+/** The source of blocks by a group's blocked services. */
+const SERVICE_SOURCE = 'service:'
+
+/** What decided the answer, with the service's name for a blocked service. */
+function Why({ entry }: { entry: QueryEntry }) {
+	const service = entry.list?.startsWith(SERVICE_SOURCE) ? entry.list.slice(SERVICE_SOURCE.length) : undefined
+	const services = useQuery({ ...servicesQuery, enabled: service !== undefined })
+	if (service === undefined) return detail(entry)
+	const name = services.data?.services.find((known) => known.id === service)?.name ?? service
+	return `Blocked service ${name} · ${detail(entry)}`
 }
 
 /** The query log, newest first, following new queries live. */

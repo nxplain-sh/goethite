@@ -123,6 +123,10 @@ Phase 3's scope shipped in v0.3.0. These items came up along the way.
 - **[P4] Client IDs in the Terraform provider:** `ids` on `goethite_client`, once 0.4.0 is out.
   Its acceptance tests start fresh nodes, which now begin with the default list in the default
   group: set `[filter] default_lists = false` in their config when moving them to 0.4.
+- **[P4] Blocked services in the Terraform provider:** `blocked_services` on `goethite_group`,
+  once 0.4.0 is out; its test nodes need `[filter] services = false` (or a `services_file`).
+- **[later] `$dnsrewrite=NXDOMAIN` rules,** which only block: the services catalog's iCloud
+  Private Relay uses nothing else, so goethite leaves that service out today.
 - **[P5] Access control beyond client IDs:** allowed and blocked client networks for every
   transport, and per-client query rate limits for DoT and DoH, which are not rate limited today
   (only connection-limited).

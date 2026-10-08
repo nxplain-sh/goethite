@@ -1,6 +1,6 @@
 // Starts a goethite for the end-to-end tests: a fresh store, a known admin
-// token, the API on 127.0.0.1:18153 serving this web UI, and DNS over TLS,
-// HTTPS and QUIC with a certificate goethite makes itself. GOETHITE_BIN names the
+// token, the API on 127.0.0.1:18153 serving this web UI, DNS over TLS, HTTPS
+// and QUIC with a certificate goethite makes itself, and a services catalog. GOETHITE_BIN names the
 // binary (default: the workspace's debug build, which reads web/dist from
 // disk). Playwright stops it when the tests are done.
 import { execFileSync, spawn } from 'node:child_process'
@@ -15,6 +15,19 @@ const binary = process.env.GOETHITE_BIN ?? resolve(import.meta.dirname, '../../t
 const dir = mkdtempSync(join(tmpdir(), 'goethite-e2e-'))
 const hash = createHash('sha256').update(TOKEN).digest('hex')
 const config = join(dir, 'goethite.toml')
+// A services catalog in the format of AdGuard's, read from a file instead of downloaded.
+const services = join(dir, 'services.json')
+writeFileSync(
+	services,
+	JSON.stringify({
+		groups: [{ id: 'social_network' }, { id: 'streaming' }],
+		blocked_services: [
+			{ id: 'tiktok', name: 'TikTok', group: 'social_network', rules: ['||tiktok.com^', '||tiktokv.com^'] },
+			{ id: 'youtube', name: 'YouTube', group: 'streaming', rules: ['||youtube.com^', '||youtu.be^'] },
+			{ id: 'twitch', name: 'Twitch', group: 'streaming', rules: ['||twitch.tv^'] },
+		],
+	}),
+)
 // Any certificate does: the tests read what the UI says, not the handshake.
 for (const args of [['init'], ['cert', 'dns']]) {
 	execFileSync(binary, ['cluster', ...args, '--dir', dir], { stdio: 'ignore' })
@@ -36,9 +49,11 @@ doq = "127.0.0.1:${DOQ_PORT}"
 address = "192.0.2.1"
 
 [filter]
-# Offline: no default list to download, no FilterLists directory to ask.
+# Offline: no default list to download, no FilterLists directory to ask, and
+# the services catalog from a file.
 default_lists = false
 directory = false
+services_file = "${services}"
 
 [api]
 listen = "127.0.0.1:${API_PORT}"

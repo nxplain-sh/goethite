@@ -51,6 +51,12 @@ configuration format.
   bar's counts on hover or keyboard focus; a top blocked name can be allowed, and a top name
   blocked, from the dashboard. The query log shows client and time filters as chips, and dates
   for entries from other days.
+- **Blocked services**: a group blocks a whole service, such as TikTok, YouTube or Roblox, with a
+  toggle in the web UI, always or during a schedule, whatever its lists say
+  (`blocked_services` on groups). The services and their rules are AdGuard's HostlistsRegistry
+  catalog, which the node downloads with the lists (`GET /api/v1/services`; `[filter] services`
+  and `services_file`). The query log names the service that blocked a query; the TUI counts a
+  group's blocked services.
 - `until` on `GET /api/v1/querylog`: only entries before a time, for time windows with `since`.
 
 - **A Terraform and OpenTofu provider**, in its own repository

@@ -74,6 +74,11 @@ impl Sources {
     /// No source: nothing matches.
     pub const NONE: Self = Self(0);
 
+    /// The set whose bit `i` is source `i`.
+    pub const fn from_bits(bits: u64) -> Self {
+        Self(bits)
+    }
+
     /// This set plus `source`.
     #[must_use]
     pub fn with(self, source: Source) -> Self {
