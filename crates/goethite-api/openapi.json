@@ -70,6 +70,7 @@
         "tags": [
           "clients"
         ],
+        "summary": "Lists all clients, oldest first.",
         "operationId": "list_clients",
         "responses": {
           "200": {
@@ -106,6 +107,7 @@
         "tags": [
           "clients"
         ],
+        "summary": "Creates a client.",
         "operationId": "create_client",
         "requestBody": {
           "content": {
@@ -161,6 +163,7 @@
         "tags": [
           "clients"
         ],
+        "summary": "Gets one client.",
         "operationId": "get_client",
         "parameters": [
           {
@@ -205,6 +208,7 @@
         "tags": [
           "clients"
         ],
+        "summary": "Replaces a client's spec.",
         "operationId": "update_client",
         "parameters": [
           {
@@ -301,6 +305,7 @@
         "tags": [
           "clients"
         ],
+        "summary": "Deletes a client.",
         "operationId": "delete_client",
         "parameters": [
           {
@@ -372,6 +377,7 @@
         "tags": [
           "groups"
         ],
+        "summary": "Lists all groups, oldest first.",
         "operationId": "list_groups",
         "responses": {
           "200": {
@@ -408,6 +414,7 @@
         "tags": [
           "groups"
         ],
+        "summary": "Creates a group.",
         "operationId": "create_group",
         "requestBody": {
           "content": {
@@ -463,6 +470,7 @@
         "tags": [
           "groups"
         ],
+        "summary": "Gets one group.",
         "operationId": "get_group",
         "parameters": [
           {
@@ -507,6 +515,7 @@
         "tags": [
           "groups"
         ],
+        "summary": "Replaces a group's spec.",
         "operationId": "update_group",
         "parameters": [
           {
@@ -603,6 +612,7 @@
         "tags": [
           "groups"
         ],
+        "summary": "Deletes a group.",
         "operationId": "delete_group",
         "parameters": [
           {
@@ -695,6 +705,7 @@
         "tags": [
           "lists"
         ],
+        "summary": "Lists all filter lists, oldest first.",
         "operationId": "list_lists",
         "responses": {
           "200": {
@@ -731,6 +742,7 @@
         "tags": [
           "lists"
         ],
+        "summary": "Creates a filter list.",
         "operationId": "create_list",
         "requestBody": {
           "content": {
@@ -805,6 +817,7 @@
         "tags": [
           "lists"
         ],
+        "summary": "Gets one filter list.",
         "operationId": "get_list",
         "parameters": [
           {
@@ -849,6 +862,7 @@
         "tags": [
           "lists"
         ],
+        "summary": "Replaces a filter list's spec.",
         "operationId": "update_list",
         "parameters": [
           {
@@ -945,6 +959,7 @@
         "tags": [
           "lists"
         ],
+        "summary": "Deletes a filter list.",
         "operationId": "delete_list",
         "parameters": [
           {
@@ -1218,6 +1233,7 @@
         "tags": [
           "rules"
         ],
+        "summary": "Lists all custom rules, oldest first.",
         "operationId": "list_rules",
         "responses": {
           "200": {
@@ -1254,6 +1270,7 @@
         "tags": [
           "rules"
         ],
+        "summary": "Creates a custom rule.",
         "operationId": "create_rule",
         "requestBody": {
           "content": {
@@ -1309,6 +1326,7 @@
         "tags": [
           "rules"
         ],
+        "summary": "Gets one custom rule.",
         "operationId": "get_rule",
         "parameters": [
           {
@@ -1353,6 +1371,7 @@
         "tags": [
           "rules"
         ],
+        "summary": "Replaces a custom rule's spec.",
         "operationId": "update_rule",
         "parameters": [
           {
@@ -1449,6 +1468,7 @@
         "tags": [
           "rules"
         ],
+        "summary": "Deletes a custom rule.",
         "operationId": "delete_rule",
         "parameters": [
           {
@@ -1520,6 +1540,7 @@
         "tags": [
           "schedules"
         ],
+        "summary": "Lists all schedules, oldest first.",
         "operationId": "list_schedules",
         "responses": {
           "200": {
@@ -1556,6 +1577,7 @@
         "tags": [
           "schedules"
         ],
+        "summary": "Creates a schedule.",
         "operationId": "create_schedule",
         "requestBody": {
           "content": {
@@ -1611,6 +1633,7 @@
         "tags": [
           "schedules"
         ],
+        "summary": "Gets one schedule.",
         "operationId": "get_schedule",
         "parameters": [
           {
@@ -1655,6 +1678,7 @@
         "tags": [
           "schedules"
         ],
+        "summary": "Replaces a schedule's spec.",
         "operationId": "update_schedule",
         "parameters": [
           {
@@ -1751,6 +1775,7 @@
         "tags": [
           "schedules"
         ],
+        "summary": "Deletes a schedule.",
         "operationId": "delete_schedule",
         "parameters": [
           {

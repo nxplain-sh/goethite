@@ -98,10 +98,12 @@ where
 macro_rules! resource_handlers {
     (
         $kind:ident, $spec:ident, $change:expr, $tag:literal, $collection:literal, $item:literal,
+        $one:literal, $many:literal,
         $list:ident, $get:ident, $create:ident, $update:ident, $delete:ident
     ) => {
         #[utoipa::path(
             get, path = $collection, tag = $tag,
+            summary = concat!("Lists all ", $many, ", oldest first."),
             responses(
                 (status = 200, description = "All of them, oldest first", body = Vec<$kind>),
                 (status = 401, description = "No valid admin token", body = ErrorBody),
@@ -114,6 +116,7 @@ macro_rules! resource_handlers {
 
         #[utoipa::path(
             get, path = $item, tag = $tag,
+            summary = concat!("Gets one ", $one, "."),
             params(("id" = String, Path, description = "The ID")),
             responses(
                 (status = 200, description = "It, with its revision as the ETag", body = $kind),
@@ -133,6 +136,7 @@ macro_rules! resource_handlers {
 
         #[utoipa::path(
             post, path = $collection, tag = $tag,
+            summary = concat!("Creates a ", $one, "."),
             request_body = $spec,
             responses(
                 (status = 201, description = "Created", body = $kind),
@@ -159,6 +163,7 @@ macro_rules! resource_handlers {
 
         #[utoipa::path(
             put, path = $item, tag = $tag,
+            summary = concat!("Replaces a ", $one, "'s spec."),
             params(
                 ("id" = String, Path, description = "The ID"),
                 ("If-Match" = Option<String>, Header, description = "The revision the change is based on"),
@@ -190,6 +195,7 @@ macro_rules! resource_handlers {
 
         #[utoipa::path(
             delete, path = $item, tag = $tag,
+            summary = concat!("Deletes a ", $one, "."),
             params(
                 ("id" = String, Path, description = "The ID"),
                 ("If-Match" = Option<String>, Header, description = "The revision the deletion is based on"),
@@ -224,6 +230,8 @@ resource_handlers!(
     "lists",
     "/api/v1/lists",
     "/api/v1/lists/{id}",
+    "filter list",
+    "filter lists",
     list_lists,
     get_list,
     create_list,
@@ -237,6 +245,8 @@ resource_handlers!(
     "rules",
     "/api/v1/rules",
     "/api/v1/rules/{id}",
+    "custom rule",
+    "custom rules",
     list_rules,
     get_rule,
     create_rule,
@@ -250,6 +260,8 @@ resource_handlers!(
     "groups",
     "/api/v1/groups",
     "/api/v1/groups/{id}",
+    "group",
+    "groups",
     list_groups,
     get_group,
     create_group,
@@ -263,6 +275,8 @@ resource_handlers!(
     "clients",
     "/api/v1/clients",
     "/api/v1/clients/{id}",
+    "client",
+    "clients",
     list_clients,
     get_client,
     create_client,
@@ -276,6 +290,8 @@ resource_handlers!(
     "schedules",
     "/api/v1/schedules",
     "/api/v1/schedules/{id}",
+    "schedule",
+    "schedules",
     list_schedules,
     get_schedule,
     create_schedule,

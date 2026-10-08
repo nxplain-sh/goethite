@@ -1,13 +1,14 @@
 ---
 title: API reference
-description: The goethite REST API reference arrives in Phase 2.
+description: Every /api/v1 endpoint, generated from the Rust code.
 ---
 
-:::note[Coming in Phase 2]
-goethite does not have a REST API yet.
-:::
+The full reference for goethite's REST API is generated from the OpenAPI document that the Rust
+code produces. CI checks that the committed document matches the code, and that pull requests do
+not break `/api/v1` unless they are marked as intentionally breaking.
 
-The REST API (`/api/v1`) is part of **Phase 2**. When it lands, this page will host a
-[Scalar](https://github.com/scalar/scalar) API reference rendered from the OpenAPI spec that CI
-generates from the Rust code. CI will also fail on breaking changes to `/api/v1` unless a change
-is marked as intentional.
+- [Browse the API reference](../reference/), with every endpoint, parameter and schema.
+- [Download the OpenAPI 3.1 document](https://github.com/nxplain-sh/goethite/blob/main/crates/goethite-api/openapi.json),
+  for example to generate a client. `goethite openapi` prints the document for the version you run.
+
+[REST API](../api/) explains access, revisions, errors and common tasks.

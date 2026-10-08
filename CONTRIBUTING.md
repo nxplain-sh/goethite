@@ -108,6 +108,21 @@ privately as described in [`SECURITY.md`](SECURITY.md).
 3. Add a few small, valid seed inputs under `fuzz/seeds/<name>/`.
 4. Add the target to the weekly fuzz workflow and to the table above.
 
+## Changing the API
+
+The OpenAPI document `crates/goethite-api/openapi.json` is generated from the code and committed.
+After changing the API, regenerate it and commit the result:
+
+```sh
+GOETHITE_UPDATE_OPENAPI=1 cargo test -p goethite-api --test openapi
+```
+
+CI fails if the committed document does not match the code. It also compares the document with
+the base branch's, using [oasdiff](https://github.com/oasdiff/oasdiff), and fails on breaking
+changes to `/api/v1`, such as a removed endpoint or field, or a new required field. If a breaking
+change is intended (before 1.0 that is possible, and it goes in the changelog), add the
+`api-breaking` label to the pull request.
+
 ## Commit conventions
 
 We use [Conventional Commits](https://www.conventionalcommits.org/):

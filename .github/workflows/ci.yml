@@ -79,6 +79,36 @@ jobs:
             > "$RUNNER_TEMP/goethite.service"
           systemd-analyze verify "$RUNNER_TEMP/goethite.service"
 
+  # Breaking changes to /api/v1 fail a pull request unless it carries the
+  # `api-breaking` label. The committed openapi.json is checked against the
+  # code by the test job; this compares it with the base branch's.
+  api-compat:
+    name: API compatibility
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Get the base branch's OpenAPI document
+        id: base
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          if git show "origin/${BASE_REF}:crates/goethite-api/openapi.json" > "$RUNNER_TEMP/base.json"; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "The base branch has no OpenAPI document yet; nothing to compare."
+          fi
+      - name: Check for breaking changes
+        if: steps.base.outputs.found == 'true' && !contains(github.event.pull_request.labels.*.name, 'api-breaking')
+        uses: oasdiff/oasdiff-action/breaking@b9325c9e0a27ab65b0da3b766522cedec6be81dc # v0.1.18
+        with:
+          base: ${{ runner.temp }}/base.json
+          revision: crates/goethite-api/openapi.json
+          fail-on: ERR
+
   msrv:
     name: MSRV
     runs-on: ubuntu-24.04
