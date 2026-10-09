@@ -91,12 +91,14 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      # Into the workspace: the oasdiff action runs in a container that sees
+      # the workspace, but not the runner's temporary directory.
       - name: Get the base branch's OpenAPI document
         id: base
         env:
           BASE_REF: ${{ github.base_ref }}
         run: |
-          if git show "origin/${BASE_REF}:crates/goethite-api/openapi.json" > "$RUNNER_TEMP/base.json"; then
+          if git show "origin/${BASE_REF}:crates/goethite-api/openapi.json" > base-openapi.json; then
             echo "found=true" >> "$GITHUB_OUTPUT"
           else
             echo "The base branch has no OpenAPI document yet; nothing to compare."
@@ -105,7 +107,7 @@ jobs:
         if: steps.base.outputs.found == 'true' && !contains(github.event.pull_request.labels.*.name, 'api-breaking')
         uses: oasdiff/oasdiff-action/breaking@b9325c9e0a27ab65b0da3b766522cedec6be81dc # v0.1.18
         with:
-          base: ${{ runner.temp }}/base.json
+          base: base-openapi.json
           revision: crates/goethite-api/openapi.json
           fail-on: ERR
 
