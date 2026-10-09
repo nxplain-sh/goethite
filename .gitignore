@@ -1,5 +1,6 @@
-# Rust
+# Rust (Cargo.lock is committed on purpose, for reproducible builds)
 /target/
+**/*.rs.bk
 
 # Fuzzing (seeds live in fuzz/seeds/ and are committed)
 /fuzz/target/
@@ -27,3 +28,10 @@
 .idea/
 .vscode/
 *.swp
+
+# Local environment values (tokens included) are never committed; the
+# variables goethite reads are documented in .env.example. This only works
+# for files: git cannot re-include a path inside an ignored directory.
+.env
+.env.*
+!.env.example
