@@ -69,6 +69,27 @@ test('creates, edits and deletes a filter list, used by the default group', asyn
 	await expect(page.getByRole('row').filter({ hasText: 'E2E ads' })).toHaveCount(0)
 })
 
+test('deletes a list that a group started using after the page showed it', async ({ page, request }) => {
+	const list = await apiCall(request, 'POST', '/api/v1/lists', {
+		name: 'E2E late',
+		url: 'https://lists.example/e2e-late.txt',
+	})
+	await page.goto(`/lists/${list.id}`)
+	await expect(page.getByRole('button', { name: 'Delete', exact: true })).toBeVisible()
+	// The default group starts using it behind the page's back.
+	const group = await apiCall(request, 'GET', '/api/v1/groups/default')
+	await apiCall(request, 'PUT', '/api/v1/groups/default', {
+		...group.spec,
+		lists: [...group.spec.lists, { list: list.id, schedule: null }],
+	})
+
+	await page.getByRole('button', { name: 'Delete', exact: true }).click()
+	await page.getByRole('button', { name: 'Delete this list' }).click()
+	await expect(page).toHaveURL(/\/lists$/)
+	const after = await apiCall(request, 'GET', '/api/v1/groups/default')
+	expect(after.spec.lists.map((entry: { list: string }) => entry.list)).not.toContain(list.id)
+})
+
 test('adds, filters, turns off and deletes custom rules', async ({ page }) => {
 	await page.getByRole('link', { name: 'Rules', exact: true }).click()
 	for (const rule of ['||e2e-one.example^', '||e2e-two.example^']) {

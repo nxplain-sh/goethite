@@ -168,6 +168,7 @@ function ListFields({
 		...(draft?.comment === undefined ? {} : { comment: draft.comment }),
 	}))
 	const [useInDefault, setUseInDefault] = useState(true)
+	const queryClient = useQueryClient()
 	// Terraform's default group is left to Terraform.
 	const defaultGroup = useQuery({ ...groupQuery(DEFAULT_GROUP), enabled: stored === undefined })
 	const canUseDefault =
@@ -175,17 +176,28 @@ function ListFields({
 	// goethite refuses to delete a list a group uses: deleting takes it out of
 	// them first, unless Terraform manages one of them.
 	const groups = useQuery({ ...groupsQuery, enabled: stored !== undefined })
-	const users = (groups.data ?? []).filter((group) =>
-		(group.spec.lists ?? []).some((entry) => entry.list === stored?.id),
-	)
-	const terraformUser = users.find((group) => group.spec.managed_by === 'terraform')
+	const users = usersOf(groups.data ?? [], stored?.id)
+	const terraformUser = terraformUserOf(users)
 	const remove =
 		stored === undefined || terraformUser !== undefined || groups.data === undefined
 			? undefined
 			: async () => {
-					for (const group of users) {
+					// The groups as they are now: the ones shown can be older than a
+					// change, such as this list joining the default group.
+					const current = usersOf(
+						await queryClient.fetchQuery({ ...groupsQuery, staleTime: 0 }),
+						stored.id,
+					)
+					const managed = terraformUserOf(current)
+					if (managed !== undefined) {
+						throw new Error(
+							`Terraform manages ${managed.spec.name}, which now uses this list: take it out there first.`,
+						)
+					}
+					for (const group of current) {
 						await withoutList(group, stored.id)
 					}
+					await queryClient.invalidateQueries({ queryKey: ['groups'] })
 					await deleteList(stored)
 				}
 	const set =
@@ -198,6 +210,7 @@ function ListFields({
 		const saved = await saveList(stored, spec)
 		if (stored === undefined && useInDefault && canUseDefault) {
 			await addToDefaultGroup(saved.id)
+			await queryClient.invalidateQueries({ queryKey: ['groups'] })
 		}
 		return saved
 	}
@@ -264,6 +277,16 @@ function ListFields({
 			<TextField label="Comment" value={form.comment} onChange={set('comment')} mono={false} />
 		</Editor>
 	)
+}
+
+/** The groups that use a list. */
+function usersOf(groups: readonly Group[], list: string | undefined) {
+	return groups.filter((group) => (group.spec.lists ?? []).some((entry) => entry.list === list))
+}
+
+/** One of `groups` that Terraform manages, if any. */
+function terraformUserOf(groups: readonly Group[]) {
+	return groups.find((group) => group.spec.managed_by === 'terraform')
 }
 
 /** Takes a list out of a group. */
