@@ -1,0 +1,38 @@
+# The environment release builds run in. `cargo xtask dist` builds this image
+# and then goethite inside it, from a `git archive` of a commit, so a release
+# depends on what is pinned here and nothing installed on the build host.
+#
+# Every input is pinned, so two builds of one commit give the same bytes:
+#
+# - Rust 1.99.0 (the version in rust-toolchain.toml), GCC 12 and glibc 2.36
+#   come from the official Rust image for Debian 12, by digest. Building on
+#   Debian 12 makes glibc 2.36 the oldest one a release runs on.
+# - Node.js and npm come from the official Node.js image, by digest.
+# - cargo-auditable and cargo-cyclonedx are built from crates.io at a fixed
+#   version with their own lockfiles.
+#
+# Renovate bumps the digests. When rust-toolchain.toml moves to a new Rust
+# release, this image moves with it: `cargo xtask dist` refuses to build when
+# the two disagree.
+
+FROM docker.io/library/node:24.21.0-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20 AS node
+
+FROM docker.io/library/rust:1.99.0-slim-bookworm@sha256:2c3a22f0a5533ea2dd5a16627bc841228151faa2d4de2644ac9987e4a2f1f2fa
+
+COPY --from=node /usr/local/bin/node /usr/local/bin/node
+COPY --from=node /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
+RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm
+
+# cargo-auditable embeds the dependency list in the binary, where
+# `cargo audit bin` and other scanners find it; cargo-cyclonedx writes the SBOM.
+RUN cargo install --locked cargo-auditable@0.7.7 cargo-cyclonedx@0.5.9 \
+    && rm -rf "$CARGO_HOME/registry" "$CARGO_HOME/git"
+
+# rust-toolchain.toml lists rustfmt and clippy, which rustup would download
+# for nothing: a build needs neither, and the image's toolchain is the pinned
+# one. npm stays quiet about updates, funding and audits.
+ENV RUSTUP_TOOLCHAIN=1.99.0 \
+    CARGO_INCREMENTAL=0 \
+    npm_config_update_notifier=false \
+    npm_config_fund=false \
+    npm_config_audit=false

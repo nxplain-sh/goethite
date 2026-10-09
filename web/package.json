@@ -1,5 +1,6 @@
 {
   "name": "goethite-web",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "description": "The goethite web UI: a single-page app embedded into the goethite binary.",

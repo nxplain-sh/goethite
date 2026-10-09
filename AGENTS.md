@@ -112,7 +112,8 @@ Shared by the web UI and (where possible) the TUI.
 - **Phase 3 — v0.3 HA:** two-node config sync over mTLS, VRRP floating IP, graceful reload via socket handoff, cluster-wide stats, fail-open, chaos tests.
 - **Phase 3.5 — Terraform provider** (separate repo).
 - **Phase 4 — v0.4:** full web UI, DoH/DoT/DoQ server, ODoH, recursion + DNSSEC.
-- **Phase 5 — 1.0:** Raft clustering, reproducible signed builds, SBOM, external security review, packaging, importers from Pi-hole and AdGuard Home.
+- **Phase 5 — v0.5:** Raft clustering (openraft, with a vote-only witness), reproducible signed builds, SBOM, packaging (.deb, .rpm, container image), private fuzzing, Landlock + seccomp sandboxing, client access control, local DNS records, importers from Pi-hole and AdGuard Home, external security review.
+- **1.0:** not scheduled yet; it follows v0.5.
 
 ## How to work in this repo
 
