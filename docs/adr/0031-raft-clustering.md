@@ -84,8 +84,11 @@ that). Taking over and leaving (below) change or forget the ID, so the logs of t
 mix.
 
 **Failure handling.** With two nodes and a witness, losing any one keeps a majority: a new leader
-is elected within about three seconds (heartbeats every 500 ms, elections after 1.5 to 3 s of
-silence; a LAN with room to spare) and changes go on. Without a majority, changes are refused
+is elected within seconds (heartbeats every 500 ms, elections after 1.5 to 3 s of
+silence; a LAN with room to spare) and changes go on. Voters refuse other candidates for 3 s after
+they last heard a leader (openraft's lease, the longest election timeout), and a candidate that
+learns another member holds a longer log waits 6 s more: the chaos lab measured about 5 s after
+the leader crashed, and about 12 s when it was cut off but still running. Without a majority, changes are refused
 with `503` and a reason; DNS is untouched. For a cluster that cannot elect a leader and will not
 again soon (two nodes without a witness that lost the voter), `POST /api/v1/cluster/promote`
 takes it over: the node leaves its cluster and starts a new one as its only voter, with its own

@@ -40,8 +40,13 @@ crash, report it privately as described above, without posting the input publicl
 
 ## Supported versions
 
-None yet. goethite is pre-alpha and has no releases. Fixes land on `main`. This section will list
-supported release lines once releases exist.
+| Version | Supported |
+| --- | --- |
+| 0.5.x | Yes: security fixes are released as 0.5.y |
+| Before 0.5 | No: upgrade to 0.5 |
+
+0.5.0 is the first release built and attested by the release workflow; earlier versions are tags
+only. While goethite is pre-alpha, only the newest minor version gets fixes.
 
 ## Scope
 
@@ -60,4 +65,5 @@ Out of scope:
 - denial of service by sheer traffic volume beyond the documented bounds
 
 See the [threat model](docs/THREAT_MODEL.md) for what goethite defends against in each phase and
-its explicit non-goals.
+its explicit non-goals, and [`docs/security-review.md`](docs/security-review.md) for the brief of
+the external security review of v0.5.0.
