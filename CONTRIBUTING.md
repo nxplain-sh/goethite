@@ -63,8 +63,9 @@ cargo build --release
 sudo tests/chaos/chaos.sh target/release/goethite
 ```
 
-CI (`.github/workflows/ci.yml`) runs fmt, clippy with `-D warnings`, the tests on linux amd64
-(`ubuntu-24.04`) and arm64 (`ubuntu-24.04-arm`), an MSRV check, `cargo deny` and `cargo audit`.
+CI (`.github/workflows/ci.yaml`) runs fmt, clippy and rustdoc with `-D warnings`, shellcheck, the
+tests on linux amd64 (`ubuntu-24.04`) and arm64 (`ubuntu-24.04-arm`), an MSRV check, `cargo deny`
+and `cargo audit`.
 The fuzz and chaos workflows run weekly and on demand. All actions are pinned to commit SHAs. Keep
 it that way when you edit workflows.
 
@@ -205,7 +206,7 @@ The page runs under a strict CSP: no inline scripts or styles, no `eval`, nothin
 ## Website
 
 The project site lives in `site/` (Astro Starlight) and deploys to GitHub Pages from `main` via
-`.github/workflows/pages.yml`. Deployment needs Pages enabled with source "GitHub Actions" (see
+`.github/workflows/pages.yaml`. Deployment needs Pages enabled with source "GitHub Actions" (see
 [Repository settings](#repository-settings-maintainers)).
 
 ```sh
@@ -220,7 +221,7 @@ Two one-time settings on `nxplain-sh/goethite` that the repository cannot set it
 
 - **GitHub Pages:** Settings → Pages → Build and deployment → Source: **GitHub Actions**
   (or `gh api -X POST repos/nxplain-sh/goethite/pages -f build_type=workflow`). Without it the
-  deploy job in `pages.yml` fails.
+  deploy job in `pages.yaml` fails.
 - **Private vulnerability reporting:** Settings → Code security → Private vulnerability
   reporting → Enable (or `gh api -X PUT repos/nxplain-sh/goethite/private-vulnerability-reporting`).
   [`SECURITY.md`](SECURITY.md) relies on it.

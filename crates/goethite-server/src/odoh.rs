@@ -102,7 +102,7 @@ pub enum OdohError {
 /// An ODoH message, as read from the wire.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Message<'a> {
-    /// [`QUERY`] or [`RESPONSE`].
+    /// `QUERY` (1) or `RESPONSE` (2).
     pub message_type: u8,
     /// The key's ID for a query, the response nonce for a response.
     pub key_id: &'a [u8],

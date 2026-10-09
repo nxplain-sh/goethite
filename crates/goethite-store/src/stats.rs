@@ -1,6 +1,6 @@
 //! Statistics: counts per hour, and the names and clients asked most.
 //!
-//! The query log writer feeds every answered query to an [`Aggregator`],
+//! The query log writer feeds every answered query to an `Aggregator`,
 //! whether or not the log itself is on. It keeps the current hour's counts
 //! and approximate top lists, and every finished hour with its top 100 of
 //! each list, for 30 days. Hours are saved to the store every minute and
