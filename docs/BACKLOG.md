@@ -76,8 +76,6 @@ releases.
 
 - **[P2] Scoped API tokens:** read-only tokens (for monitoring) and a Terraform token, beside the
   single admin token.
-- **[P5] Release builds include the web UI.** The release workflow must build `web/` before
-  `cargo build --release`, reproducibly (pinned Node, `npm ci`).
 - **[P3] Query log writer priority and cost.** The writer thread competes with the DNS workers
   for CPU when the node is saturated. Lower its priority (it needs `setpriority`, which the
   systemd unit's `~@resources` filter refuses), and cut its per-entry allocations (names, IDs and
@@ -175,10 +173,13 @@ Phase 3's scope shipped in v0.3.0. These items came up along the way.
 - **[P5] Private fuzzing before the first release.** The weekly fuzz job runs in the public
   repository, so its findings are public. Move it to a private mirror or OSS-Fuzz (with private
   bug reports) before goethite has users.
-- **[P5] SBOM and signed, reproducible releases.**
 - **[P5] Landlock and seccomp sandboxing.**
 
 ## Unscheduled / tooling
+
+- **[later] Static musl builds** that run on any Linux, including Alpine. musl's allocator is
+  much slower under goethite's multi-threaded load, so this needs another allocator (a new
+  dependency) and a bench against the glibc build first (see ADR 0026).
 
 - **[later] Persist the fuzz corpus in CI** (cache or artifact) so weekly runs build on previous
   coverage instead of starting from the seeds.

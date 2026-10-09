@@ -245,6 +245,35 @@ npm ci --ignore-scripts
 npm run dev
 ```
 
+## Releasing (maintainers)
+
+Releases are built by [`.github/workflows/release.yaml`](.github/workflows/release.yaml) with
+`cargo xtask dist`, reproducibly, and attested with Sigstore; see
+[ADR 0026](docs/adr/0026-release-builds.md). `cargo xtask dist` builds the release files for your
+machine's architecture locally, the same way (it needs docker or podman). To release `X.Y.Z`:
+
+1. On `development`, bump the version: `workspace.package.version` and the internal crates in
+   `[workspace.dependencies]` in `Cargo.toml`, and `version` in `web/package.json` and both places
+   in `web/package-lock.json`. `cargo xtask versions` checks they agree. Regenerate the OpenAPI
+   document (`GOETHITE_UPDATE_OPENAPI=1 cargo test -p goethite-api --test openapi`), whose version
+   follows.
+2. In `CHANGELOG.md`, turn `[Unreleased]` into `## [X.Y.Z] - <date>`, add a new empty
+   `[Unreleased]` above it, and update the compare links at the bottom. The release notes are
+   taken from this section.
+3. Open the pull request from `development` to `main` and merge it once CI passes.
+4. Tag the merge commit on `main` and push the tag:
+
+   ```sh
+   git switch main && git pull
+   git tag -a vX.Y.Z -m "goethite X.Y.Z"
+   git push origin vX.Y.Z
+   ```
+
+5. The workflow builds both architectures twice, fails unless the builds match, refuses a tag
+   that is not on `main` or does not match the version, then attests the files and drafts the
+   GitHub Release. Check the draft (`gh attestation verify` on a downloaded tarball, see
+   [Verifying releases](site/src/content/docs/verify.md)) and publish it.
+
 ## Repository settings (maintainers)
 
 One-time settings on `nxplain-sh/goethite` that the repository cannot set itself:
@@ -254,6 +283,7 @@ One-time settings on `nxplain-sh/goethite` that the repository cannot set itself
     required, merge commits only); every CI job must pass, `source branch` included, which
     fails pull requests into `main` that do not come from `development`.
   - `development`: no deletion or force-push.
+  - Tags `v*`: no deletion or update, so a published release's tag cannot move.
 - **`api-breaking` label:** marks an intended breaking API change (see
   [Changing the API](#changing-the-api)).
 - **GitHub Pages:** Settings → Pages → Build and deployment → Source: **GitHub Actions**

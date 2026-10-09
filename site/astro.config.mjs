@@ -22,6 +22,7 @@ export default defineConfig({
 			sidebar: [
 				{ label: 'Quick start', slug: 'quick-start' },
 				{ label: 'Install on Linux', slug: 'install' },
+				{ label: 'Verifying releases', slug: 'verify' },
 				{ label: 'Configuration', slug: 'configuration' },
 				{ label: 'Filtering', slug: 'filtering' },
 				{ label: 'Clients and groups', slug: 'groups' },

@@ -1,13 +1,34 @@
 ---
 title: Install on Linux
-description: Build goethite, install it with the hardened systemd unit, and point your network at it.
+description: Download or build goethite, install it with the hardened systemd unit, and point your network at it.
 ---
 
-goethite runs on Linux on amd64 and arm64. There are no prebuilt packages yet, so this guide
-builds it from source and installs it with the systemd unit from the repository. (macOS works for
-development only; see the [quick start](../quick-start/).)
+goethite runs on Linux on amd64 and arm64, with glibc 2.34 or newer: RHEL 9, Ubuntu 22.04,
+Debian 12 or anything newer. This guide installs a release with the systemd unit that comes with
+it. (macOS works for development only; see the [quick start](../quick-start/).)
 
-## Build
+## Download
+
+Each [release](https://github.com/nxplain-sh/goethite/releases) has a tarball per architecture
+with the binary (web UI included), the systemd units and an example config:
+
+```sh
+version=0.5.0
+arch=$(uname -m)    # x86_64 or aarch64
+base=https://github.com/nxplain-sh/goethite/releases/download/v$version
+curl -fLO "$base/goethite-$version-$arch-unknown-linux-gnu.tar.gz"
+curl -fLO "$base/SHA256SUMS"
+sha256sum --check --ignore-missing SHA256SUMS
+gh attestation verify "goethite-$version-$arch-unknown-linux-gnu.tar.gz" --repo nxplain-sh/goethite
+tar -xzf "goethite-$version-$arch-unknown-linux-gnu.tar.gz"
+cd "goethite-$version-$arch-unknown-linux-gnu"
+```
+
+`gh attestation verify` (from the [GitHub CLI](https://cli.github.com)) checks that goethite's
+release workflow built the file; [Verifying releases](../verify/) explains it, and how to rebuild a
+release yourself and get the same bytes.
+
+### Or build from source
 
 Install Rust with [rustup](https://rustup.rs), a C compiler (`build-essential` on Debian and
 Ubuntu, `gcc` elsewhere) and Node.js 24 or later (for the web UI only), then:
@@ -20,15 +41,18 @@ cargo build --release --locked
 
 The binary is `target/release/goethite`, with the [web UI](../web-ui/) inside. It has no runtime
 dependencies beyond the C library; Node.js is needed only to build. Skip the `web` line to build
-without the web UI.
+without the web UI. In the commands below, use `target/release/goethite`,
+`deploy/systemd/goethite.service` and `config/goethite.example.toml` for the three files.
 
 ## Install
 
+From the release directory:
+
 ```sh
-sudo install -m 0755 target/release/goethite /usr/bin/goethite
-sudo install -m 0644 deploy/systemd/goethite.service /etc/systemd/system/goethite.service
+sudo install -m 0755 goethite /usr/bin/goethite
+sudo install -m 0644 systemd/goethite.service /etc/systemd/system/goethite.service
 sudo install -d -m 0755 /etc/goethite
-sudo install -m 0644 config/goethite.example.toml /etc/goethite/goethite.toml
+sudo install -m 0644 goethite.example.toml /etc/goethite/goethite.toml
 ```
 
 Then edit `/etc/goethite/goethite.toml` for production. At least:
@@ -123,10 +147,11 @@ worst abuse, but an open resolver still attracts it.
 
 ## Upgrade
 
-Build the new version, install it, and ask the running goethite to hand over to it:
+Download (or build) the new version, install it, and ask the running goethite to hand over to
+it:
 
 ```sh
-sudo install -m 0755 target/release/goethite /usr/bin/goethite
+sudo install -m 0755 goethite /usr/bin/goethite
 sudo goethite check-config --config /etc/goethite/goethite.toml
 sudo systemctl kill --signal=SIGUSR2 --kill-whom=main goethite
 ```

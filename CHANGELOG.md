@@ -7,6 +7,20 @@ configuration format.
 
 ## [Unreleased]
 
+### Added
+
+- **Release builds.** `cargo xtask dist` builds the release tarball and SBOMs for the machine's
+  architecture in a pinned image, from the last commit; the same commit gives the same bytes. The
+  release workflow builds amd64 and arm64 twice on separate runners and stops unless the bytes
+  match; on a tag it attests the build provenance and the SBOMs with keyless Sigstore signatures
+  and drafts a GitHub Release. Each tarball holds the binary (web UI included, with its
+  dependency list embedded by cargo-auditable), the systemd units and the example config; the
+  binaries need glibc 2.34 or newer. See
+  [Verifying releases](https://nxplain-sh.github.io/goethite/verify/) and
+  [ADR 0026](docs/adr/0026-release-builds.md).
+- `cargo xtask versions`, also in CI: the internal crates and the web UI carry the workspace
+  version.
+
 ### Changed
 
 - **The systemd units moved from `dist/systemd/` to `deploy/systemd/`.** Install them from the
