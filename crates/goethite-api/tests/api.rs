@@ -603,8 +603,33 @@ async fn pausing_refreshing_settings_and_observing() {
 
     let settings = server.get("/api/v1/settings").await;
     assert_eq!(settings.body["spec"]["protection"], true);
+    assert_eq!(
+        settings.body["spec"]["access"],
+        json!({"allowed": [], "blocked": []})
+    );
     let mut spec = settings.body["spec"].clone();
     spec["protection"] = json!(false);
+    spec["access"]["blocked"] = json!(["192.168.1.5/24"]);
+    let refused = server
+        .send(
+            Method::PUT,
+            "/api/v1/settings",
+            Some(spec.clone()),
+            &[("if-match", "\"1\"")],
+        )
+        .await;
+    assert_eq!(
+        refused.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{}",
+        refused.text
+    );
+    assert!(
+        refused.text.contains("settings.access.blocked[0]"),
+        "{}",
+        refused.text
+    );
+    spec["access"]["blocked"] = json!(["192.168.1.66", "guest"]);
     let changed = server
         .send(
             Method::PUT,
@@ -615,6 +640,10 @@ async fn pausing_refreshing_settings_and_observing() {
         .await;
     assert_eq!(changed.status, StatusCode::OK, "{}", changed.text);
     assert_eq!(changed.body["revision"], 2);
+    assert_eq!(
+        changed.body["spec"]["access"]["blocked"],
+        json!(["192.168.1.66", "guest"])
+    );
 
     let audit = server.get("/api/v1/audit").await;
     let actions: Vec<&str> = audit

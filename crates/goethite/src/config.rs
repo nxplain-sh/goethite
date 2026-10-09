@@ -19,15 +19,16 @@ use goethite_cluster::{NodeId, Role};
 use goethite_filter::{LineKind, parse_line};
 use goethite_proto::Name;
 use goethite_resolver::{
-    CacheConfig, DEFAULT_PRIVATE_DOMAINS, MAX_ENTRIES, MAX_UPSTREAMS, RebindingProtection,
+    CacheConfig, Cidr, DEFAULT_PRIVATE_DOMAINS, MAX_ENTRIES, MAX_UPSTREAMS, RebindingProtection,
     RecursorConfig, Transport, UpstreamConfig,
 };
 use goethite_server::{
-    MAX_LISTEN_ADDRESSES, MAX_RATE_LIMITED_CLIENTS, MAX_UDP_SOCKETS, RateLimitConfig, ServerConfig,
+    MAX_LISTEN_ADDRESSES, MAX_RATE_LIMIT_EXEMPTIONS, MAX_RATE_LIMITED_CLIENTS, MAX_UDP_SOCKETS,
+    RateLimitConfig, ServerConfig,
 };
 use goethite_store::{
-    BlockResponseKind, Import, ListSpec, ManagedBy, QueryLogConfig, RuleSpec, SettingsSpec,
-    model::MAX_NAME_LEN,
+    AccessSpec, BlockResponseKind, Import, ListSpec, ManagedBy, QueryLogConfig, RuleSpec,
+    SettingsSpec, model::MAX_NAME_LEN,
 };
 use serde::de::{self, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer};
@@ -684,6 +685,8 @@ impl FilterSection {
                 },
                 blocked_ttl: self.blocked_ttl,
                 list_update_hours: self.update_hours,
+                // Not in the config file: an import keeps the store's.
+                access: AccessSpec::default(),
             },
             lists,
             rules,
@@ -1205,7 +1208,8 @@ fn listen_addresses<'de, D: Deserializer<'de>>(
 #[derive(Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, default)]
 pub(crate) struct RateLimitSection {
-    /// Average UDP queries per second per client network; 0 turns it off.
+    /// Average queries per second per client network, over every transport
+    /// but Oblivious DoH; 0 turns it off.
     pub queries_per_second: u32,
     /// Queries a client network may send at once.
     pub burst: u32,
@@ -1217,6 +1221,8 @@ pub(crate) struct RateLimitSection {
     pub ipv6_prefix: u8,
     /// Client networks tracked at once.
     pub max_clients: usize,
+    /// Networks never limited: addresses or CIDR networks.
+    pub exempt: Vec<String>,
 }
 
 impl Default for RateLimitSection {
@@ -1229,6 +1235,7 @@ impl Default for RateLimitSection {
             ipv4_prefix: defaults.ipv4_prefix,
             ipv6_prefix: defaults.ipv6_prefix,
             max_clients: defaults.max_clients,
+            exempt: Vec::new(),
         }
     }
 }
@@ -1256,6 +1263,14 @@ impl RateLimitSection {
                 "server.rate_limit.max_clients must be between 16 and {MAX_RATE_LIMITED_CLIENTS}"
             );
         }
+        if self.exempt.len() > MAX_RATE_LIMIT_EXEMPTIONS {
+            bail!("server.rate_limit.exempt lists more than {MAX_RATE_LIMIT_EXEMPTIONS} networks");
+        }
+        for network in &self.exempt {
+            network
+                .parse::<Cidr>()
+                .with_context(|| format!("server.rate_limit.exempt: {network:?}"))?;
+        }
         Ok(())
     }
 
@@ -1267,6 +1282,11 @@ impl RateLimitSection {
             ipv4_prefix: self.ipv4_prefix,
             ipv6_prefix: self.ipv6_prefix,
             max_clients: self.max_clients,
+            exempt: self
+                .exempt
+                .iter()
+                .filter_map(|network| network.parse().ok())
+                .collect(),
             ..RateLimitConfig::default()
         }
     }
@@ -1784,6 +1804,8 @@ mod tests {
             ("rate_limit.ipv4_prefix = 33", "ipv4_prefix"),
             ("rate_limit.ipv6_prefix = 8", "ipv6_prefix"),
             ("rate_limit.max_clients = 1", "max_clients"),
+            ("rate_limit.exempt = [\"192.168.1.5/24\"]", "exempt"),
+            ("rate_limit.exempt = [\"lan\"]", "exempt"),
             ("user = \"\"", "server.user"),
             ("user = \"a:b\"", "server.user"),
         ] {
@@ -1796,6 +1818,18 @@ mod tests {
         let server = off.server.to_server_config();
         assert_eq!(server.rate_limit.queries_per_second, 0);
         assert!(server.rate_limit.exempt_loopback);
+
+        let exempt =
+            Config::parse("[server.rate_limit]\nexempt = [\"192.168.0.0/16\", \"2001:db8::1\"]")
+                .unwrap();
+        assert!(exempt.server.validate().is_ok());
+        assert_eq!(
+            exempt.server.to_server_config().rate_limit.exempt,
+            vec![
+                "192.168.0.0/16".parse().unwrap(),
+                "2001:db8::1".parse().unwrap()
+            ]
+        );
     }
 
     #[test]

@@ -592,6 +592,24 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * @description Which clients are answered, over every transport. An entry is an IP
+         *     address, a network in CIDR notation (`192.168.1.0/24`) or a client ID. A
+         *     query is answered when its client is on `allowed`, or `allowed` is
+         *     empty, and is not on `blocked`. Loopback addresses always pass, but a
+         *     blocked client ID is refused even there. Refused UDP queries get no
+         *     answer; refused connections are closed before their TLS handshake; a
+         *     client ID refused after it is known gets `REFUSED`.
+         */
+        AccessSpec: {
+            /**
+             * @description When not empty, only these clients are answered. At most 10,000
+             *     entries.
+             */
+            allowed?: string[];
+            /** @description These clients are never answered. At most 10,000 entries. */
+            blocked?: string[];
+        };
         /** @description Who made a change, and from where. */
         Actor: {
             /** @description The client's IP address, for API requests. */
@@ -1500,6 +1518,8 @@ export interface components {
         };
         /** @description Node-wide filtering settings. */
         SettingsSpec: {
+            /** @description Which clients are answered at all; by default, everyone. */
+            access?: components["schemas"]["AccessSpec"];
             /** @description How blocked names are answered. */
             block_response?: components["schemas"]["BlockResponseKind"];
             /**

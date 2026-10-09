@@ -14,7 +14,9 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use goethite_resolver::{Forwarder, ForwarderConfig, Resolver, UpstreamConfig, test_record};
-use goethite_server::{Listeners, RateLimitConfig, Server, ServerConfig, ServerError, ServerStats};
+use goethite_server::{
+    Listeners, RateLimitConfig, Server, ServerConfig, ServerError, ServerStats, Transport,
+};
 use hickory_proto::op::{Edns, Message, MessageType, OpCode, Query, ResponseCode};
 use hickory_proto::rr::{Name, RData, RecordType, rdata::A};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -426,7 +428,7 @@ async fn tcp_connections_per_client_are_limited() {
 }
 
 #[tokio::test]
-async fn rate_limited_udp_clients_are_told_to_use_tcp() {
+async fn rate_limited_clients_are_told_to_use_tcp_then_refused() {
     let server = start_with(|config| {
         config.rate_limit = RateLimitConfig {
             queries_per_second: 1,
@@ -447,15 +449,23 @@ async fn rate_limited_udp_clients_are_told_to_use_tcp() {
     assert!(limited.metadata.truncation, "TC is set");
     assert_eq!(limited.answers, vec![]);
     assert_eq!(limited.queries.len(), 1, "the question is echoed");
-    let counted =
-        |counter: &std::sync::atomic::AtomicU64| counter.load(std::sync::atomic::Ordering::Relaxed);
-    assert_eq!(counted(&server.stats.rate_limited), 1);
-    assert_eq!(counted(&server.stats.rate_limit_slips), 1);
+    assert_eq!(server.stats.rate_limited.get(Transport::Udp), 1);
+    assert_eq!(
+        server
+            .stats
+            .rate_limit_slips
+            .load(std::sync::atomic::Ordering::Relaxed),
+        1
+    );
 
-    // TCP is not rate limited.
+    // The same client over TCP shares the budget, and is refused.
     let mut stream = TcpStream::connect(server.tcp).await.unwrap();
     tcp_send(&mut stream, &query(63, "goethite.test.", RecordType::A)).await;
-    assert_test_answer(&tcp_receive(&mut stream).await, 63);
+    let refused = tcp_receive(&mut stream).await;
+    assert_eq!(refused.metadata.id, 63);
+    assert_eq!(refused.metadata.response_code, ResponseCode::Refused);
+    assert!(!refused.metadata.truncation, "TCP needs no retry hint");
+    assert_eq!(server.stats.rate_limited.get(Transport::Tcp), 1);
     drop(stream);
     server.shutdown().await;
 }

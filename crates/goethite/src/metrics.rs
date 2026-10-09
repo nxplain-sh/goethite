@@ -11,6 +11,8 @@ use goethite_resolver::{CacheStats, RecursorStats, Transport, UpstreamStatus};
 use goethite_server::ServerStats;
 use goethite_store::{Protocol, QueryOutcome};
 
+use crate::observe::protocol;
+
 /// Upper bounds of the latency histogram buckets, in microseconds.
 const BUCKETS_US: [u64; 14] = [
     100, 250, 500, 1_000, 2_500, 5_000, 10_000, 25_000, 50_000, 100_000, 250_000, 500_000,
@@ -256,12 +258,28 @@ fn queries(out: &mut Out, m: &Metrics) {
 }
 
 fn turned_away(out: &mut Out, server: &ServerStats) {
-    for (name, help, counter) in [
+    for (name, help, counted) in [
         (
             "goethite_rate_limited_total",
-            "UDP queries over the rate limit.",
+            "Queries over the rate limit, by protocol: dropped over UDP (or answered truncated), refused otherwise.",
             &server.rate_limited,
         ),
+        (
+            "goethite_access_refused_total",
+            "Queries and connections the access lists refused, by protocol.",
+            &server.access_refused,
+        ),
+    ] {
+        out.family(name, "counter", help);
+        for transport in goethite_server::Transport::ALL {
+            out.sample(
+                name,
+                &format!("protocol=\"{}\"", protocol(transport).as_str()),
+                counted.get(transport),
+            );
+        }
+    }
+    for (name, help, counter) in [
         (
             "goethite_rate_limit_slips_total",
             "Truncated answers sent to rate-limited clients.",
@@ -435,7 +453,12 @@ mod tests {
             Duration::from_micros(80),
         );
         let server = ServerStats::default();
-        server.rate_limited.store(4, Ordering::Relaxed);
+        for _ in 0..4 {
+            server.rate_limited.count(goethite_server::Transport::Udp);
+        }
+        server
+            .access_refused
+            .count(goethite_server::Transport::Https);
         server.tls_handshake_failures.store(2, Ordering::Relaxed);
         let upstreams = [UpstreamStatus {
             config: UpstreamConfig::udp("9.9.9.9:53".parse().unwrap()),
@@ -471,7 +494,9 @@ mod tests {
             "goethite_query_duration_seconds_bucket{le=\"+Inf\"} 4",
             "goethite_query_duration_seconds_count 4",
             "goethite_query_duration_seconds_sum 9.03016",
-            "goethite_rate_limited_total 4",
+            "goethite_rate_limited_total{protocol=\"udp\"} 4",
+            "goethite_rate_limited_total{protocol=\"dot\"} 0",
+            "goethite_access_refused_total{protocol=\"doh\"} 1",
             "goethite_tls_handshake_failures_total 2",
             "goethite_cache_lookups_total{result=\"hit\"} 5",
             "goethite_upstream_up{upstream=\"9.9.9.9:53\",protocol=\"udp\"} 0",

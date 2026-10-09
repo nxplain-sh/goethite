@@ -3,7 +3,9 @@ import { describe, expect, it } from 'vitest'
 import {
 	clientForm,
 	clientSpec,
+	isAccessEntry,
 	isClientId,
+	parseAccessEntries,
 	parseClientIds,
 	describeDays,
 	describeWindows,
@@ -103,6 +105,25 @@ describe('groups', () => {
 			managed_by: 'api' as const,
 		}
 		expect(groupSpec(groupForm(spec), 'api')).toEqual(spec)
+	})
+})
+
+describe('access lists', () => {
+	it('reads entries lowercase, without repeats', () => {
+		expect(parseAccessEntries('192.168.1.0/24\nAnna-Phone, anna-phone 2001:DB8::/32')).toEqual([
+			'192.168.1.0/24',
+			'anna-phone',
+			'2001:db8::/32',
+		])
+	})
+
+	it('knows what looks like an address, a network or a client ID', () => {
+		for (const valid of ['192.168.1.5', '10.0.0.0/8', '2001:db8::/32', '::1', 'anna-phone', 'guest']) {
+			expect(isAccessEntry(valid)).toBe(true)
+		}
+		for (const invalid of ['anna phone', 'a_b', '-a', '10.0.0.0/8/8', 'living-room.tv']) {
+			expect(isAccessEntry(invalid)).toBe(false)
+		}
 	})
 })
 

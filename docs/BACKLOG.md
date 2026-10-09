@@ -67,7 +67,6 @@ Phase 1's scope shipped in v0.1.0. These items came up along the way; they are c
   bound to `0.0.0.0` or `[::]` answers from the address the kernel picks, which may not be the one
   the query was sent to. Needs `IP_PKTINFO` / `IPV6_RECVPKTINFO`; until then, list specific
   addresses on multihomed hosts.
-- **[P2] Rate limiting exemptions for trusted networks** (beyond loopback).
 
 ## Phase 2: v0.2 control
 
@@ -154,9 +153,10 @@ Phase 3's scope shipped in v0.3.0. These items came up along the way.
   once 0.4.0 is out; its test nodes need `[filter] services = false` (or a `services_file`).
 - **[later] `$dnsrewrite=NXDOMAIN` rules,** which only block: the services catalog's iCloud
   Private Relay uses nothing else, so goethite leaves that service out today.
-- **[P5] Access control beyond client IDs:** allowed and blocked client networks for every
-  transport, and per-client query rate limits for DoT and DoH, which are not rate limited today
-  (only connection-limited).
+- **[P5] Access lists in the Terraform provider:** `access` (`allowed`, `blocked`) on
+  `goethite_settings`, once 0.5.0 is out.
+- **[later] Per-client rate limits for Oblivious DoH:** its peer is the proxy, so only the
+  connection limits bound it; a proxy could be given its own, higher limit.
 - **[P4] Differential fuzzing** of `HickoryCodec` against the fast-path decoder, once it exists.
 
 - **[P4] Scalar's AI SDK advisory.** `npm audit` reports a low-severity resource consumption

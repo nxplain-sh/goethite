@@ -63,14 +63,7 @@ impl QueryObserver for Observer {
             Outcome::Failed => (QueryOutcome::Failed, None),
             _ => (QueryOutcome::Rejected, None),
         };
-        let protocol = match event.transport {
-            Transport::Udp => Protocol::Udp,
-            Transport::Tcp => Protocol::Tcp,
-            Transport::Tls => Protocol::Dot,
-            Transport::Https => Protocol::Doh,
-            Transport::Quic => Protocol::Doq,
-            Transport::Oblivious => Protocol::Odoh,
-        };
+        let protocol = protocol(event.transport);
         self.metrics.observe(outcome, protocol, event.elapsed);
         self.leak.observe(&event.query.question.name, || Arrival {
             address: event.peer.ip(),
@@ -107,5 +100,17 @@ impl QueryObserver for Observer {
             group: resolution.group.clone(),
             elapsed: event.elapsed,
         });
+    }
+}
+
+/// The query log's and the metrics' name for `transport`.
+pub(crate) fn protocol(transport: Transport) -> Protocol {
+    match transport {
+        Transport::Udp => Protocol::Udp,
+        Transport::Tcp => Protocol::Tcp,
+        Transport::Tls => Protocol::Dot,
+        Transport::Https => Protocol::Doh,
+        Transport::Quic => Protocol::Doq,
+        Transport::Oblivious => Protocol::Odoh,
     }
 }
