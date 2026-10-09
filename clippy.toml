@@ -5,4 +5,4 @@ allow-indexing-slicing-in-tests = true
 allow-panic-in-tests = true
 
 # Acronyms and names that `clippy::doc_markdown` would otherwise want in backticks.
-doc-valid-idents = ["DoH", "DoT", "DoQ", "ODoH", "DNSSEC", "EDNS", "OpenAPI", "TanStack", "AdGuard", "FilterLists", "HaGeZi", "TikTok", "YouTube", "HostlistsRegistry", "RRset", "RRsets", "KeyTrap", ".."]
+doc-valid-idents = ["DoH", "DoT", "DoQ", "ODoH", "DNSSEC", "EDNS", "OpenAPI", "TanStack", "AdGuard", "FilterLists", "HaGeZi", "TikTok", "YouTube", "HostlistsRegistry", "RRset", "RRsets", "KeyTrap", "CycloneDX", "SELinux", ".."]
