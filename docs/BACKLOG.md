@@ -59,7 +59,7 @@ Phase 1's scope shipped in v0.1.0. These items came up along the way; they are c
 - **[later] Signed or hash-pinned lists**, for list sources that publish signatures.
 - **[P1] Name parsing for filter lists.** `Name::from_str` only accepts host-style names (no
   escapes, no wildcards). Filter syntax needs wildcards and may need RFC 1035 escapes; extend the
-  parser (and its `parse_name` fuzz target) rather than adding a second one.
+  parser (and its `parse-name` fuzz target) rather than adding a second one.
 - **[P1] TCP fairness under load.** Per-client limits exist, but many hosts together can still
   hold every slot until their idle timeout. Close the oldest idle connection when full and use a
   shorter first-byte timeout under load (RFC 7766 §6.2.3).

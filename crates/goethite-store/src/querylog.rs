@@ -1026,7 +1026,7 @@ mod tests {
     fn fuzz_seeds_decode() {
         for seed in ["forwarded-v4", "blocked-v6-cname", "minimal"] {
             let path = format!(
-                "{}/../../fuzz/seeds/decode_query_record/{seed}",
+                "{}/../../fuzz/seeds/decode-query-record/{seed}",
                 env!("CARGO_MANIFEST_DIR")
             );
             let bytes = std::fs::read(&path).unwrap();

@@ -12,7 +12,7 @@ use goethite_proto::{
 };
 
 fn seed(name: &str) -> Vec<u8> {
-    seed_in("decode_query", name)
+    seed_in("decode-query", name)
 }
 
 fn seed_in(target: &str, name: &str) -> Vec<u8> {
@@ -56,7 +56,7 @@ fn queries() {
 
 #[test]
 fn response_seeds() {
-    let decode = |seed: &str| HickoryCodec.decode_response(&seed_in("decode_response", seed));
+    let decode = |seed: &str| HickoryCodec.decode_response(&seed_in("decode-response", seed));
     let a = decode("a-answer-edns").unwrap();
     assert_eq!(a.answers[0].ip(), Some([192, 0, 2, 1].into()));
     assert!(a.edns.is_some());
@@ -76,7 +76,7 @@ fn response_seeds() {
 
 #[test]
 fn name_seeds() {
-    let dir = format!("{}/../../fuzz/seeds/parse_name", env!("CARGO_MANIFEST_DIR"));
+    let dir = format!("{}/../../fuzz/seeds/parse-name", env!("CARGO_MANIFEST_DIR"));
     let parse = |seed: &str| {
         let text = std::fs::read_to_string(format!("{dir}/{seed}")).unwrap();
         text.parse::<goethite_proto::Name>()

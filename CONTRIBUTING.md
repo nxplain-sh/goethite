@@ -89,13 +89,13 @@ Every parser gets a fuzz target. Targets live in `fuzz/fuzz_targets/` and use
 
 | Target         | What it does                                                                                 |
 | -------------- | -------------------------------------------------------------------------------------------- |
-| `decode_query` | Decodes bytes via `goethite-proto`. On success, re-encodes, decodes again and asserts the two results are equal, including the case of the name, and that the name displays as printable ASCII. Every response goethite would send must fit in 512 bytes. |
-| `decode_query_record` | Decodes bytes as a query log record read back from the store. On success, the record must encode and decode back to itself. |
-| `decode_response` | Decodes bytes as an upstream response. On success, re-encodes and decodes again; the two results must be equal, since forwarding relies on that. |
-| `parse_cidr`   | Parses text as a client network. On success, the network's display must parse back to the same network, which contains its own address. |
-| `parse_list`   | Parses and compiles text as a filter list. For every parsed rule's name, its parent and a child, the compiled filter must agree with the rule-by-rule reference. |
-| `parse_name`   | Parses text as a domain name. On success, the name's display must parse back to the same name. |
-| `request_checks` | Runs the API's `Host`, `Origin` and web UI path checks on text. A `Host` taken for loopback must name this machine with at most a numeric port; an accepted path must not leave the UI's folder. |
+| `decode-query` | Decodes bytes via `goethite-proto`. On success, re-encodes, decodes again and asserts the two results are equal, including the case of the name, and that the name displays as printable ASCII. Every response goethite would send must fit in 512 bytes. |
+| `decode-query-record` | Decodes bytes as a query log record read back from the store. On success, the record must encode and decode back to itself. |
+| `decode-response` | Decodes bytes as an upstream response. On success, re-encodes and decodes again; the two results must be equal, since forwarding relies on that. |
+| `parse-cidr`   | Parses text as a client network. On success, the network's display must parse back to the same network, which contains its own address. |
+| `parse-list`   | Parses and compiles text as a filter list. For every parsed rule's name, its parent and a child, the compiled filter must agree with the rule-by-rule reference. |
+| `parse-name`   | Parses text as a domain name. On success, the name's display must parse back to the same name. |
+| `request-checks` | Runs the API's `Host`, `Origin` and web UI path checks on text. A `Host` taken for loopback must name this machine with at most a numeric port; an accepted path must not leave the UI's folder. |
 
 Seeds are committed in `fuzz/seeds/<target>/`, and `crates/goethite-proto/tests/fuzz-seeds.rs`
 checks that each one still behaves the way its name says. The working corpus (`fuzz/corpus/`) and
@@ -104,17 +104,17 @@ crash artifacts (`fuzz/artifacts/`) are gitignored, so create the corpus directo
 Run a target for 60 seconds, writing new inputs to the working corpus and reading the seeds:
 
 ```sh
-mkdir -p fuzz/corpus/decode_query
-cargo +nightly fuzz run decode_query fuzz/corpus/decode_query fuzz/seeds/decode_query -- -max_total_time=60
+mkdir -p fuzz/corpus/decode-query
+cargo +nightly fuzz run decode-query fuzz/corpus/decode-query fuzz/seeds/decode-query -- -max_total_time=60
 ```
 
-Use the same commands with `parse_name` for the other target.
+The same commands work for every target; `cargo +nightly fuzz list` names them.
 
 Reproduce and minimize a crash:
 
 ```sh
-cargo +nightly fuzz run decode_query fuzz/artifacts/decode_query/<crash-file>
-cargo +nightly fuzz tmin decode_query fuzz/artifacts/decode_query/<crash-file>
+cargo +nightly fuzz run decode-query fuzz/artifacts/decode-query/<crash-file>
+cargo +nightly fuzz tmin decode-query fuzz/artifacts/decode-query/<crash-file>
 ```
 
 Every fixed crash gets a regression unit test in `goethite-proto` with the minimized input.
@@ -128,7 +128,8 @@ privately as described in [`SECURITY.md`](SECURITY.md).
 ### Adding a fuzz target
 
 1. `cargo +nightly fuzz add <name>` from the repo root, or copy an existing target in
-   `fuzz/fuzz_targets/`.
+   `fuzz/fuzz_targets/`. Names are kebab-case (`parse-thing`): Cargo warns about other binary
+   names.
 2. Fuzz the public parsing entry point, not internals. Where possible, check a property (such as
    decode, encode, decode round-tripping), not just "does not crash".
 3. Add a few small, valid seed inputs under `fuzz/seeds/<name>/`.

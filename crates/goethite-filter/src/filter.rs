@@ -767,7 +767,7 @@ mod tests {
 
     #[test]
     fn rules_for_the_root_are_refused() {
-        // Found by fuzzing (fuzz/artifacts/parse_list): a root rule matched
+        // Found by fuzzing (fuzz/artifacts/parse-list): a root rule matched
         // `.` in the reference but not in the compiled filter.
         let root_rule = Rule {
             name: Name::root(),

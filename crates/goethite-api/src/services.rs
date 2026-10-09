@@ -7,7 +7,7 @@
 //! (such as the icons) are ignored, IDs must be service IDs, names are
 //! stripped of control characters and cut to a bounded length, and the
 //! number of services, the rules per service and each rule's length are
-//! capped. The parser is fuzzed (`parse_services`).
+//! capped. The parser is fuzzed (`parse-services`).
 //!
 //! [HostlistsRegistry]: https://github.com/AdguardTeam/HostlistsRegistry
 
