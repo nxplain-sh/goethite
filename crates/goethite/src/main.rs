@@ -10,6 +10,7 @@ mod filters;
 mod handoff;
 mod lists;
 mod metrics;
+mod migrate;
 mod node;
 mod notify;
 mod observe;
@@ -107,18 +108,67 @@ enum Command {
     },
     /// Open the terminal UI for a goethite node, through its API.
     Tui {
-        /// The API's address. Defaults to `GOETHITE_API`, then
-        /// `http://127.0.0.1:8053`.
-        #[arg(long, value_name = "URL")]
-        api: Option<String>,
-        /// A file holding the admin token. Without it, the `GOETHITE_TOKEN`
-        /// environment variable is used, if set.
-        #[arg(long, value_name = "PATH")]
-        token_file: Option<PathBuf>,
-        /// A PEM CA certificate, for a node that serves HTTPS with its own.
-        #[arg(long, value_name = "PATH")]
-        ca_file: Option<PathBuf>,
+        #[command(flatten)]
+        api: ApiArgs,
     },
+    /// Bring a Pi-hole's or an AdGuard Home's configuration over, through
+    /// their API and goethite's. Shows what would change; `--apply` makes
+    /// the changes. Running it again adds only what is still missing.
+    Migrate {
+        #[command(subcommand)]
+        from: MigrateFrom,
+    },
+}
+
+/// How to reach a goethite node's API.
+#[derive(Debug, clap::Args)]
+struct ApiArgs {
+    /// The API's address. Defaults to `GOETHITE_API`, then
+    /// `http://127.0.0.1:8053`.
+    #[arg(long, value_name = "URL")]
+    api: Option<String>,
+    /// A file holding the admin token. Without it, the `GOETHITE_TOKEN`
+    /// environment variable is used, if set.
+    #[arg(long, value_name = "PATH")]
+    token_file: Option<PathBuf>,
+    /// A PEM CA certificate, for a node that serves HTTPS with its own.
+    #[arg(long, value_name = "PATH")]
+    ca_file: Option<PathBuf>,
+}
+
+#[derive(Debug, Subcommand)]
+enum MigrateFrom {
+    /// From Pi-hole v6: lists, exact domains, groups, clients, local DNS and
+    /// CNAME records, the blocking mode.
+    Pihole(MigrateArgs),
+    /// From AdGuard Home: lists, custom rules, clients and their settings,
+    /// DNS rewrites, safe search, blocked services, access lists, the
+    /// blocking mode.
+    AdguardHome(MigrateArgs),
+}
+
+#[derive(Debug, clap::Args)]
+struct MigrateArgs {
+    /// The old server's web address, such as `http://pi.hole` or
+    /// `http://192.168.1.2:3000`.
+    #[arg(long, value_name = "URL")]
+    from: String,
+    /// AdGuard Home's user name (default `admin`).
+    #[arg(long)]
+    user: Option<String>,
+    /// A file holding the old server's password: for Pi-hole, its web
+    /// password or an app password. None for a server without one.
+    #[arg(long, value_name = "PATH")]
+    password_file: Option<PathBuf>,
+    /// A PEM CA certificate, for an old server that serves HTTPS with its
+    /// own.
+    #[arg(long, value_name = "PATH")]
+    from_ca_file: Option<PathBuf>,
+    /// Make the changes in goethite; without it, only show them.
+    #[arg(long)]
+    apply: bool,
+    #[command(flatten)]
+    api: ApiArgs,
 }
 
 #[derive(Debug, Subcommand)]
@@ -163,11 +213,11 @@ fn main() -> ExitCode {
                 cluster::cert(&dir, &node, force).and_then(|text| print(&text))
             }
         },
-        Command::Tui {
-            api,
-            token_file,
-            ca_file,
-        } => tui(api, token_file.as_deref(), ca_file.as_deref()),
+        Command::Tui { api } => tui(&api),
+        Command::Migrate { from } => match from {
+            MigrateFrom::Pihole(args) => migrate(migrate::From::Pihole, args),
+            MigrateFrom::AdguardHome(args) => migrate(migrate::From::AdguardHome, args),
+        },
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -628,11 +678,62 @@ fn api(
     })
 }
 
-fn tui(api: Option<String>, token_file: Option<&Path>, ca_file: Option<&Path>) -> Result<()> {
+fn tui(api: &ApiArgs) -> Result<()> {
+    let (url, token, ca) = api_options(api)?;
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .context("cannot start the async runtime")?;
+    runtime.block_on(goethite_tui::run(goethite_tui::Options { url, token, ca }))?;
+    Ok(())
+}
+
+/// Reads the old server's configuration, shows the plan, and applies it
+/// with `--apply`.
+fn migrate(from: migrate::From, args: MigrateArgs) -> Result<()> {
+    let password = args
+        .password_file
+        .as_deref()
+        .map(migrate::read_password)
+        .transpose()?;
+    let ca = args
+        .from_ca_file
+        .as_deref()
+        .map(|path| {
+            std::fs::read(path)
+                .with_context(|| format!("cannot read the CA certificate {}", path.display()))
+        })
+        .transpose()?;
+    let source = migrate::Source {
+        from,
+        url: args.from,
+        user: args.user,
+        password,
+        ca,
+    };
+    let target = if args.apply {
+        let (url, token, ca) = api_options(&args.api)?;
+        Some(goethite_tui::Client::new(&url, token, ca.as_deref())?)
+    } else {
+        None
+    };
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("cannot start the async runtime")?;
+    let report = runtime.block_on(migrate::migrate(source, target))?;
+    print(&report)
+}
+
+/// The API address, token and CA certificate from the options, the
+/// environment and the defaults.
+fn api_options(api: &ApiArgs) -> Result<(String, Option<String>, Option<Vec<u8>>)> {
     let url = api
+        .api
+        .clone()
         .or_else(|| std::env::var("GOETHITE_API").ok())
         .unwrap_or_else(|| "http://127.0.0.1:8053".to_owned());
-    let token = match token_file {
+    let token = match api.token_file.as_deref() {
         Some(path) => Some(
             std::fs::read_to_string(path)
                 .with_context(|| format!("cannot read the token file {}", path.display()))?
@@ -643,18 +744,15 @@ fn tui(api: Option<String>, token_file: Option<&Path>, ca_file: Option<&Path>) -
             .ok()
             .filter(|token| !token.is_empty()),
     };
-    let ca = ca_file
+    let ca = api
+        .ca_file
+        .as_deref()
         .map(|path| {
             std::fs::read(path)
                 .with_context(|| format!("cannot read the CA certificate {}", path.display()))
         })
         .transpose()?;
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .context("cannot start the async runtime")?;
-    runtime.block_on(goethite_tui::run(goethite_tui::Options { url, token, ca }))?;
-    Ok(())
+    Ok((url, token, ca))
 }
 
 /// Prints a new admin token and its hash.
