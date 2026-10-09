@@ -170,7 +170,7 @@ Phase 3's scope shipped in v0.3.0. These items came up along the way.
 - **[P4] dnsperf for v0.4.0 on a quiet machine.** The release run (bench/README.md) was on a busy
   host: no regression against v0.3.0, but the sub-millisecond p99 was not shown for v0.4.0.
 
-## Phase 5: 1.0
+## Phase 5: v0.5
 
 - **[P5] Private fuzzing before the first release.** The weekly fuzz job runs in the public
   repository, so its findings are public. Move it to a private mirror or OSS-Fuzz (with private
