@@ -55,7 +55,8 @@ allow = ["NCSA"]
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
-# Internal path dependencies (publish = false) are not wildcards.
+# The fuzz workspace (publish = false) names the goethite crates by path
+# only; the main workspace gives them a version too.
 allow-wildcard-paths = true
 highlight = "all"
 

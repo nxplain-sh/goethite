@@ -1,6 +1,17 @@
 [workspace]
 resolver = "3"
-members = ["crates/*"]
+# Listed one by one rather than globbed, so adding a crate is a visible change.
+members = [
+    "crates/goethite",
+    "crates/goethite-api",
+    "crates/goethite-cluster",
+    "crates/goethite-filter",
+    "crates/goethite-proto",
+    "crates/goethite-resolver",
+    "crates/goethite-server",
+    "crates/goethite-store",
+    "crates/goethite-tui",
+]
 # cargo-fuzz targets need nightly and libFuzzer; they live in their own workspace.
 exclude = ["fuzz"]
 
@@ -15,15 +26,16 @@ authors = ["goethite contributors"]
 publish = false
 
 [workspace.dependencies]
-# Internal crates.
-goethite-api = { path = "crates/goethite-api" }
-goethite-cluster = { path = "crates/goethite-cluster" }
-goethite-filter = { path = "crates/goethite-filter" }
-goethite-proto = { path = "crates/goethite-proto" }
-goethite-resolver = { path = "crates/goethite-resolver" }
-goethite-server = { path = "crates/goethite-server" }
-goethite-store = { path = "crates/goethite-store" }
-goethite-tui = { path = "crates/goethite-tui" }
+# Internal crates, with `path` for local builds and `version` for what a manifest
+# records. Bump these with `workspace.package.version`.
+goethite-api = { path = "crates/goethite-api", version = "0.4.0" }
+goethite-cluster = { path = "crates/goethite-cluster", version = "0.4.0" }
+goethite-filter = { path = "crates/goethite-filter", version = "0.4.0" }
+goethite-proto = { path = "crates/goethite-proto", version = "0.4.0" }
+goethite-resolver = { path = "crates/goethite-resolver", version = "0.4.0" }
+goethite-server = { path = "crates/goethite-server", version = "0.4.0" }
+goethite-store = { path = "crates/goethite-store", version = "0.4.0" }
+goethite-tui = { path = "crates/goethite-tui", version = "0.4.0" }
 
 # External crates. Every addition must pass `cargo deny check` and be justified in the PR.
 anyhow = "1.0.104"
