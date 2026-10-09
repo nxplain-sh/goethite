@@ -105,6 +105,7 @@ fn resolver_with(access: goethite_resolver::Access) -> Resolver {
         protection: true,
         services: Arc::new(goethite_resolver::ServiceFilter::empty()),
         access,
+        records: goethite_resolver::LocalRecords::default(),
     })
     .unwrap();
     Resolver::new(vec![test_record().unwrap()]).with_policy(Arc::new(PolicyState::new(policy)))

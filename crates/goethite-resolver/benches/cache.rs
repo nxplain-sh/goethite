@@ -126,6 +126,7 @@ fn policy() -> Policy {
         protection: true,
         services: Arc::new(goethite_resolver::ServiceFilter::empty()),
         access: goethite_resolver::Access::default(),
+        records: goethite_resolver::LocalRecords::default(),
     })
     .unwrap()
 }

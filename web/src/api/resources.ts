@@ -1,5 +1,5 @@
-// Reading, saving and deleting the configuration: lists, rules, groups,
-// clients, schedules and settings. Every change carries the revision it is
+// Reading, saving and deleting the configuration: lists, rules, local
+// records, groups, clients, schedules and settings. Every change carries the revision it is
 // based on, so one made meanwhile by someone else is refused (412) rather
 // than overwritten.
 
@@ -12,6 +12,7 @@ import {
 	type ClientSpec,
 	type GroupSpec,
 	type ListSpec,
+	type RecordSpec,
 	type RuleSpec,
 	type ScheduleSpec,
 	type SettingsSpec,
@@ -20,6 +21,11 @@ import {
 export const rulesQuery = queryOptions({
 	queryKey: ['rules'],
 	queryFn: () => call(api.GET('/api/v1/rules')),
+})
+
+export const recordsQuery = queryOptions({
+	queryKey: ['records'],
+	queryFn: () => call(api.GET('/api/v1/records')),
 })
 
 export const groupsQuery = queryOptions({
@@ -52,6 +58,12 @@ export const ruleQuery = (id: string) =>
 	queryOptions({
 		queryKey: ['rules', id],
 		queryFn: () => call(api.GET('/api/v1/rules/{id}', { params: { path: { id } } })),
+	})
+
+export const recordQuery = (id: string) =>
+	queryOptions({
+		queryKey: ['records', id],
+		queryFn: () => call(api.GET('/api/v1/records/{id}', { params: { path: { id } } })),
 	})
 
 export const groupQuery = (id: string) =>
@@ -113,6 +125,23 @@ export function saveRule(existing: Existing | undefined, spec: RuleSpec) {
 export function deleteRule({ id, revision }: Existing) {
 	return call(
 		api.DELETE('/api/v1/rules/{id}', { params: { path: { id }, header: ifMatch(revision) } }),
+	)
+}
+
+export function saveRecord(existing: Existing | undefined, spec: RecordSpec) {
+	return existing === undefined
+		? call(api.POST('/api/v1/records', { body: spec }))
+		: call(
+				api.PUT('/api/v1/records/{id}', {
+					params: { path: { id: existing.id }, header: ifMatch(existing.revision) },
+					body: spec,
+				}),
+			)
+}
+
+export function deleteRecord({ id, revision }: Existing) {
+	return call(
+		api.DELETE('/api/v1/records/{id}', { params: { path: { id }, header: ifMatch(revision) } }),
 	)
 }
 

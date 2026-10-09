@@ -40,10 +40,8 @@ Phase 1's scope shipped in v0.1.0. These items came up along the way; they are c
 - **[P1] OPT in FORMERR/NOTIMP responses.** Header-only error responses omit the OPT record even
   when the query carried one (RFC 6891 §7). Only BADVERS includes it today.
 - **[P1] SOA in negative answers.** NODATA for local names carries no SOA in the authority
-  section, so clients cannot cache it negatively (RFC 2308). Needed once local rewrites are
-  configurable.
-- **[P1] Configurable local records and rewrites** replacing the hardcoded `goethite.test.` record
-  (the "local rewrites" pipeline stage).
+  section, so clients cannot cache it negatively (RFC 2308). Now that local records are
+  configurable (ADR 0029), NODATA for them lacks it too.
 - **[P1] Rate-limit per-packet debug logs** (dropped and rejected messages) so a flood with
   `RUST_LOG=debug` cannot drown the log.
 - **[P1] TCP per-connection memory.** Each connection can hold up to about 192 KiB of buffers
@@ -153,6 +151,10 @@ Phase 3's scope shipped in v0.3.0. These items came up along the way.
   once 0.4.0 is out; its test nodes need `[filter] services = false` (or a `services_file`).
 - **[later] `$dnsrewrite=NXDOMAIN` rules,** which only block: the services catalog's iCloud
   Private Relay uses nothing else, so goethite leaves that service out today.
+- **[P5] Local records in the Terraform provider and the TUI:** a `goethite_record` resource, and a
+  read-only Records tab (ADR 0029).
+- **[later] More local record types** (TXT, MX, SRV), automatic PTR answers for local `A` and
+  `AAAA` records, and local records per group.
 - **[P5] Access lists in the Terraform provider:** `access` (`allowed`, `blocked`) on
   `goethite_settings`, once 0.5.0 is out.
 - **[later] Per-client rate limits for Oblivious DoH:** its peer is the proxy, so only the

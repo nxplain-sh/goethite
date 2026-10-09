@@ -19,7 +19,7 @@ export function Audit() {
 		<div className="grid-page">
 			<h1>Audit log</h1>
 			<p className="muted">
-				Every change to lists, rules, groups, clients, schedules and settings: who made it, from where,
+				Every change to lists, rules, local records, groups, clients, schedules and settings: who made it, from where,
 				and the resource before and after.
 			</p>
 			<ErrorNotice error={audit.error} />

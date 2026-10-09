@@ -29,6 +29,11 @@ configuration format.
 - **Third-party licence notices.** Releases include `THIRD-PARTY-LICENSES.txt` with the notices
   of every crate and npm package built into the binary; the packages install it in
   `/usr/share/doc/goethite`.
+- **Local DNS records.** goethite answers names of your own, `A`, `AAAA` and `CNAME`, exact or a
+  wildcard (`*.home.example`), for every client and before the filter: in the web UI's Records
+  page or `/api/v1/records`. A `CNAME` is followed, and its target resolved like any other name.
+  See [Local records](https://nxplain-sh.github.io/goethite/local-records/) and
+  [ADR 0029](docs/adr/0029-local-dns-records.md).
 - **Access control.** Allowed and blocked clients, by address, network or client ID, for every
   transport: a query is answered when its client is allowed (or nobody is listed) and not
   blocked. Refused UDP queries get no answer, refused connections are closed before their TLS
@@ -45,6 +50,9 @@ configuration format.
 
 ### Changed
 
+- **The store's schema is version 2** (local records). In a cluster, a replica copies only from a
+  primary on the same version: upgrade both nodes, the replica first, as usual. An older store
+  gains the new table when opened.
 - `goethite_rate_limited_total` has a `protocol` label, now that every transport is limited; sum
   it for the old total.
 - **Fuzzing no longer runs in public CI**, where a crash it found would be public before its

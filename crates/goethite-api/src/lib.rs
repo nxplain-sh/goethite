@@ -90,7 +90,8 @@ pub struct ApiConfig {
 pub enum Change {
     /// Lists or custom rules: the filter must be recompiled.
     Filter,
-    /// Groups, clients, schedules or settings: only the policy.
+    /// Groups, clients, schedules, local records or settings: only the
+    /// policy.
     Policy,
 }
 

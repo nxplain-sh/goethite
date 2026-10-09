@@ -29,15 +29,18 @@ use tracing::warn;
 use utoipa::ToSchema;
 
 use crate::model::{
-    Client, ConfigSnapshot, DEFAULT_GROUP, Group, GroupList, List, ListSpec, ManagedBy, Rule,
-    RuleSpec, Schedule, Settings, SettingsSpec, ValidationError, default_group_resource,
+    Client, ConfigSnapshot, DEFAULT_GROUP, Group, GroupList, List, ListSpec, ManagedBy, Record,
+    Rule, RuleSpec, Schedule, Settings, SettingsSpec, ValidationError, default_group_resource,
 };
 
 /// The most audit entries kept; older ones are dropped.
 pub const MAX_AUDIT_ENTRIES: u64 = 100_000;
 
-/// The store's schema version, kept in the `meta` table.
-const SCHEMA_VERSION: &str = "1";
+/// The store's schema version, kept in the `meta` table. A replica takes
+/// the configuration only from a primary with the same one. Version 2 added
+/// local DNS records; opening an older store creates their table, which is
+/// the whole migration.
+const SCHEMA_VERSION: &str = "2";
 
 const SETTINGS: TableDefinition<'static, &'static str, &'static [u8]> =
     TableDefinition::new("settings");
@@ -540,17 +543,15 @@ impl Store {
         Self::init(PathBuf::from("(in memory)"), db)
     }
 
-    /// Creates the tables a new database needs and loads the
-    /// configuration.
+    /// Creates the tables the database lacks (all of them for a new one),
+    /// records the schema version and loads the configuration.
     fn init(path: PathBuf, db: Database) -> Result<Self, StoreError> {
         let now = Timestamp::now();
         let tx = db.begin_write()?;
         let version;
         {
             let mut meta = tx.open_table(META)?;
-            if meta.get("schema")?.is_none() {
-                meta.insert("schema", SCHEMA_VERSION)?;
-            }
+            meta.insert("schema", SCHEMA_VERSION)?;
             let stored_epoch = meta
                 .get(EPOCH_KEY)?
                 .and_then(|value| value.value().parse::<u64>().ok());
@@ -586,6 +587,7 @@ impl Store {
                 Rule::table(),
                 Client::table(),
                 Schedule::table(),
+                Record::table(),
             ] {
                 tx.open_table(table)?;
             }
@@ -896,6 +898,7 @@ impl Store {
         replace_kind::<Group>(old, new, &mut batch, &mut summary)?;
         replace_kind::<Client>(old, new, &mut batch, &mut summary)?;
         replace_kind::<Schedule>(old, new, &mut batch, &mut summary)?;
+        replace_kind::<Record>(old, new, &mut batch, &mut summary)?;
         if old.settings != new.settings {
             batch.writes.push(Write::Settings(
                 serde_json::to_vec(&new.settings).map_err(StoreError::Encode)?,
@@ -1355,12 +1358,14 @@ fn load(db: &Database) -> Result<ConfigSnapshot, StoreError> {
         groups: Vec::new(),
         clients: Vec::new(),
         schedules: Vec::new(),
+        records: Vec::new(),
     };
     load_kind::<List>(&tx, &mut config)?;
     load_kind::<Rule>(&tx, &mut config)?;
     load_kind::<Group>(&tx, &mut config)?;
     load_kind::<Client>(&tx, &mut config)?;
     load_kind::<Schedule>(&tx, &mut config)?;
+    load_kind::<Record>(&tx, &mut config)?;
     // The default group first.
     config.groups.sort_by_key(|group| group.id != DEFAULT_GROUP);
     Ok(config)
@@ -1393,7 +1398,9 @@ fn decode<T: DeserializeOwned>(what: &str, bytes: &[u8]) -> Result<T, StoreError
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{AccessSpec, ClientSpec, GroupSpec, ScheduleSpec, Weekday, Window};
+    use crate::model::{
+        AccessSpec, ClientSpec, GroupSpec, RecordKind, RecordSpec, ScheduleSpec, Weekday, Window,
+    };
 
     struct TempStore {
         store: Option<Store>,
@@ -1855,6 +1862,73 @@ mod tests {
         assert_eq!(store.config().rules.len(), 1);
         assert_eq!(store.version().version, 1);
         assert_eq!(store.audit(None, 10).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn records_are_stored_and_checked() {
+        let store = TempStore::new("records");
+        let record = |name: &str, kind, value: &str| RecordSpec {
+            name: name.into(),
+            kind,
+            value: value.into(),
+            ttl: 300,
+            enabled: true,
+            comment: String::new(),
+            managed_by: ManagedBy::Api,
+        };
+        let nas = store
+            .create::<Record>(record("nas.lan", RecordKind::A, "192.168.1.10"), &api())
+            .unwrap();
+        assert!(nas.id.starts_with("rc_"));
+        store
+            .create::<Record>(record("nas.lan", RecordKind::Aaaa, "fd00::10"), &api())
+            .unwrap();
+        store
+            .create::<Record>(
+                record("*.home.example", RecordKind::Cname, "nas.lan"),
+                &api(),
+            )
+            .unwrap();
+        for (spec, problem) in [
+            (
+                record("NAS.lan", RecordKind::A, "192.168.1.10"),
+                "another record is the same",
+            ),
+            (
+                record("nas.lan", RecordKind::Cname, "other.lan"),
+                "has a CNAME, so it can have no other record",
+            ),
+            (record("x.lan", RecordKind::A, "fd00::1"), "IPv4"),
+            (record("x.*.lan", RecordKind::A, "10.0.0.1"), "first label"),
+            (
+                record("x.goethite.test", RecordKind::A, "10.0.0.1"),
+                "goethite answers itself",
+            ),
+            (
+                record("x.lan", RecordKind::Cname, "*.lan"),
+                "without wildcards",
+            ),
+        ] {
+            let error = store.create::<Record>(spec.clone(), &api()).unwrap_err();
+            assert!(error.to_string().contains(problem), "{spec:?}: {error}");
+        }
+        let config = store.config();
+        assert_eq!(config.records.len(), 3);
+        let local = config.records[2].spec.local().unwrap();
+        assert!(local.wildcard);
+        assert_eq!(local.name, "home.example".parse().unwrap());
+    }
+
+    #[test]
+    fn a_schema_1_store_gains_the_records_table() {
+        let mut store = TempStore::new("schema-1");
+        store.set_meta("schema", "1").unwrap();
+        let tx = store.db.begin_write().unwrap();
+        tx.delete_table(Record::table()).unwrap();
+        tx.commit().unwrap();
+        store.reopen();
+        assert_eq!(store.meta("schema").unwrap().as_deref(), Some("2"));
+        assert_eq!(store.config().records.len(), 0);
     }
 
     #[test]

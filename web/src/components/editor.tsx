@@ -7,7 +7,7 @@ import { isReadOnly, MANAGED_LABEL } from '../forms/forms'
 import { ErrorNotice } from './ui'
 
 /** The pages an editor goes back to. */
-export type IndexPage = '/lists' | '/rules' | '/groups' | '/clients' | '/schedules'
+export type IndexPage = '/lists' | '/rules' | '/records' | '/groups' | '/clients' | '/schedules'
 
 /** A stored resource, as far as the editor cares. */
 export interface Stored {

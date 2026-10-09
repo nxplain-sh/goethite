@@ -11,7 +11,7 @@ http://127.0.0.1:8053/
 ```
 
 It shows what goethite is doing and changes everything the [REST API](../api/) can: lists,
-rules, groups, clients, schedules and settings.
+rules, local records, groups, clients, schedules and settings.
 
 ## Signing in
 
@@ -51,6 +51,8 @@ the network; otherwise the token crosses it in clear text.
   **Find lists** searches the [FilterLists directory](../filtering/#finding-more-lists).
 - **Rules**: custom rules, added from the top of the page, filtered as you type, turned on and
   off in place. goethite explains a rule it cannot use.
+- **Records**: [local DNS records](../local-records/), added from the top of the page and turned
+  on and off in place.
 - **Groups**: which lists and [blocked services](../groups/#blocked-services) filter a group's
   clients, each always or during a schedule, and safe
   search.
