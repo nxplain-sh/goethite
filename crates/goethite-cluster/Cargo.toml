@@ -1,6 +1,6 @@
 [package]
 name = "goethite-cluster"
-description = "Cluster support for goethite: replicated config, VRRP floating IP and (later) Raft."
+description = "Cluster support for goethite: Raft for the replicated config, a witness, and the VRRP floating IP."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -13,6 +13,7 @@ publish.workspace = true
 [dependencies]
 axum.workspace = true
 goethite-store.workspace = true
+openraft.workspace = true
 http-body-util.workspace = true
 hyper = { workspace = true, features = ["client", "http1"] }
 hyper-util = { workspace = true, features = ["tokio"] }

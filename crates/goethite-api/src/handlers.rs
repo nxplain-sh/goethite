@@ -561,13 +561,17 @@ pub(crate) async fn get_stats(
     // Long top lists from every node, merged, then cut.
     let mut report = api.log.stats_top(hours, TOP_FOR_MERGE);
     report.nodes.push(cluster.node);
-    if let Ok(peer) = api.control.peer_stats(hours).await {
-        report.merge(&peer, TOP_IN_REPORT);
-        report.nodes.push(cluster.peer.node);
-    } else {
-        report.cut_top(TOP_IN_REPORT);
-        report.unreachable.push(cluster.peer.node);
+    let members = api.control.member_stats(hours).await.unwrap_or_default();
+    for member in members {
+        match member.stats {
+            Ok(stats) => {
+                report.merge(&stats, TOP_FOR_MERGE);
+                report.nodes.push(member.node);
+            }
+            Err(_) => report.unreachable.push(member.node),
+        }
     }
+    report.cut_top(TOP_IN_REPORT);
     Json(report)
 }
 

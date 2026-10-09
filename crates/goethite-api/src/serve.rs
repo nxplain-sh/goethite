@@ -199,12 +199,11 @@ async fn accept(
             debug!(%peer, "too many {name} connections, closing");
             continue;
         };
-        let service =
-            TowerToHyperService::new(router.clone().layer(axum::Extension(PeerAddr(peer))));
+        let router = router.clone().layer(axum::Extension(PeerAddr(peer)));
         let tls = tls.clone();
         connections.spawn(async move {
             let _permit = permit;
-            if let Err(err) = connection(stream, tls, service).await {
+            if let Err(err) = connection(stream, tls, router).await {
                 debug!(%peer, %err, "{name} connection ended");
             }
         });
@@ -219,10 +218,15 @@ async fn accept(
     }
 }
 
+/// The certificate a client presented in the TLS handshake, for routes
+/// that serve clients with certificates (the cluster's members).
+#[derive(Clone, Debug)]
+pub struct PeerCertificate(pub Arc<[u8]>);
+
 async fn connection(
     stream: TcpStream,
     tls: Option<TlsAcceptor>,
-    service: TowerToHyperService<axum::Router>,
+    router: axum::Router,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut builder = Builder::new(TokioExecutor::new());
     builder
@@ -233,13 +237,23 @@ async fn connection(
     match tls {
         Some(acceptor) => {
             let stream = timeout(HANDSHAKE_TIMEOUT, acceptor.accept(stream)).await??;
+            let certificate = stream
+                .get_ref()
+                .1
+                .peer_certificates()
+                .and_then(|chain| chain.first())
+                .map(|cert| PeerCertificate(Arc::from(cert.as_ref())));
+            let router = match certificate {
+                Some(certificate) => router.layer(axum::Extension(certificate)),
+                None => router,
+            };
             builder
-                .serve_connection(TokioIo::new(stream), service)
+                .serve_connection(TokioIo::new(stream), TowerToHyperService::new(router))
                 .await
         }
         None => {
             builder
-                .serve_connection(TokioIo::new(stream), service)
+                .serve_connection(TokioIo::new(stream), TowerToHyperService::new(router))
                 .await
         }
     }

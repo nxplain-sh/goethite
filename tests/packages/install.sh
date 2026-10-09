@@ -38,7 +38,8 @@ RPM_IMAGES=(docker.io/rockylinux/rockylinux:9 registry.fedoraproject.org/fedora:
 CHECK='goethite --version
 goethite check-config --config /etc/goethite/goethite.toml >/dev/null 2>&1
 test -f /usr/lib/systemd/system/goethite.service
-test -f /usr/lib/systemd/system/goethite-vrrp.service'
+test -f /usr/lib/systemd/system/goethite-vrrp.service
+test -f /usr/lib/systemd/system/goethite-witness.service'
 
 for image in "${DEB_IMAGES[@]}"; do
     echo "== $image"

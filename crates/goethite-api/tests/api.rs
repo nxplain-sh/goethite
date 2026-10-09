@@ -19,8 +19,8 @@ use std::time::SystemTime;
 use goethite_api::leak::{Arrival, LeakTests};
 use goethite_api::{
     Api, ApiConfig, ApiError, ApiListeners, BoxFuture, BoxResult, Change, ClusterRole,
-    ClusterStatus, Control, DOCS_SCALAR, FilterStatus, Forwarded, ForwardedAnswer, PeerStatus,
-    QueryLogStatus, Status, WebAssets, Writes, generate_token,
+    ClusterStatus, Control, DOCS_SCALAR, FilterStatus, Forwarded, ForwardedAnswer, MemberState,
+    MemberStats, PeerStatus, QueryLogStatus, Status, WebAssets, Writes, generate_token,
 };
 use goethite_proto::{Name, RecordType};
 use goethite_store::Protocol;
@@ -113,9 +113,20 @@ impl Control for FakeControl {
         self.cluster.lock().unwrap().clone()
     }
 
-    fn peer_stats(&self, _hours: u32) -> BoxResult<'_, StatsReport> {
+    fn member_stats(&self, _hours: u32) -> BoxResult<'_, Vec<MemberStats>> {
         let stats = self.peer_stats.lock().unwrap().clone();
-        Box::pin(async move { stats.ok_or_else(|| ApiError::unavailable("dns2 is unreachable")) })
+        Box::pin(async move {
+            Ok(vec![
+                MemberStats {
+                    node: "dns2".into(),
+                    stats: stats.ok_or_else(|| "unreachable".to_owned()),
+                },
+                MemberStats {
+                    node: "dns3".into(),
+                    stats: Err("unreachable".into()),
+                },
+            ])
+        })
     }
 
     fn writes(&self) -> Writes {
@@ -1068,8 +1079,13 @@ async fn cluster_statistics_add_up_every_node() {
     *server.control.cluster.lock().unwrap() = Some(ClusterStatus {
         node: "dns1".into(),
         role: ClusterRole::Primary,
+        state: MemberState::Leader,
+        cluster: Some("00000000000000ab".into()),
+        leader: Some("dns1".into()),
+        term: 1,
         config: server.api.store.version(),
         writable: true,
+        members: Vec::new(),
         peer: PeerStatus {
             node: "dns2".into(),
             address: "192.0.2.12:8054".into(),
@@ -1095,6 +1111,7 @@ async fn cluster_statistics_add_up_every_node() {
     assert_eq!(both.body["totals"]["queries"], 40);
     assert_eq!(both.body["top_blocked"][0]["key"], "ads.example");
     assert_eq!(both.body["nodes"], json!(["dns1", "dns2"]));
+    assert_eq!(both.body["unreachable"], json!(["dns3"]));
     // The node's own statistics stay the node's.
     assert_eq!(
         server.get("/api/v1/stats").await.body["totals"]["queries"],
@@ -1105,7 +1122,7 @@ async fn cluster_statistics_add_up_every_node() {
     *server.control.peer_stats.lock().unwrap() = None;
     let partial = server.get("/api/v1/stats?scope=cluster").await;
     assert_eq!(partial.body["nodes"], json!(["dns1"]));
-    assert_eq!(partial.body["unreachable"], json!(["dns2"]));
+    assert_eq!(partial.body["unreachable"], json!(["dns2", "dns3"]));
     assert_eq!(
         server.get("/api/v1/stats?scope=everyone").await.status,
         StatusCode::BAD_REQUEST

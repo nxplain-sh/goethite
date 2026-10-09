@@ -1,24 +1,33 @@
 //! What nodes send each other over the cluster channel.
 //!
 //! The channel is HTTP/1.1 inside mutual TLS, with JSON bodies, under
-//! `/cluster/v1/`. Both nodes run the same goethite version (the
-//! configuration schema is checked on every copy), so these types can
-//! change between releases; they are not a public API.
+//! `/cluster/v1/`. Every node runs the same goethite version, so these types
+//! can change between releases; they are not a public API. New fields get
+//! defaults, so a node can still tell which version its peer runs.
 
 use goethite_store::ConfigVersion;
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
-use crate::node::{NodeId, Role};
+use crate::node::NodeId;
 
 /// The path of [`NodeInfo`].
 pub const NODE_PATH: &str = "/cluster/v1/node";
 
-/// The path of the configuration a replica follows.
-pub const CONFIG_PATH: &str = "/cluster/v1/config";
-
 /// The path of a node's statistics, for the cluster's.
 pub const STATS_PATH: &str = "/cluster/v1/stats";
+
+/// The path of Raft's append-entries messages.
+pub const APPEND_PATH: &str = "/cluster/v1/raft/append";
+
+/// The path of Raft's vote requests.
+pub const VOTE_PATH: &str = "/cluster/v1/raft/vote";
+
+/// The path of Raft's snapshot pieces.
+pub const SNAPSHOT_PATH: &str = "/cluster/v1/raft/snapshot";
+
+/// The path a member asks the leader to remove it from the cluster on.
+pub const LEAVE_PATH: &str = "/cluster/v1/leave";
 
 /// The query of a statistics request.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -28,74 +37,80 @@ pub struct StatsQuery {
     pub hours: u32,
 }
 
-/// The path a replica forwards configuration changes to; the binary
-/// serves it, since it runs them through the API.
+/// The path configuration changes are forwarded to the leader on; the
+/// binary serves it, since it runs them through the API.
 pub const API_PATH: &str = "/cluster/v1/api";
 
-/// The longest a configuration request waits for a change, in seconds.
-pub const MAX_WAIT_SECS: u64 = 55;
+/// What a node does in Raft right now.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RaftState {
+    /// It leads: configuration changes are made through it.
+    Leader,
+    /// It follows the leader and votes.
+    Follower,
+    /// It stands for election.
+    Candidate,
+    /// It follows the leader but does not vote, or is not in a cluster yet.
+    Learner,
+    /// Raft stopped on it.
+    Stopped,
+    /// A state this version does not know.
+    #[default]
+    #[serde(other)]
+    Unknown,
+}
 
 /// About a node.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NodeInfo {
     /// Its name.
     pub node: NodeId,
-    /// Its role.
-    pub role: Role,
     /// Its goethite version.
     pub version: String,
     /// When it started.
     pub started_at: Timestamp,
     /// Its configuration's version.
     pub config: ConfigVersion,
+    /// The cluster it is in, if any.
+    #[serde(default)]
+    pub cluster: Option<u64>,
+    /// Whether it is a witness: it votes, and never leads.
+    #[serde(default)]
+    pub witness: bool,
+    /// What it does in Raft.
+    #[serde(default)]
+    pub state: RaftState,
+    /// Its Raft term.
+    #[serde(default)]
+    pub term: u64,
+    /// The leader, as far as it knows.
+    #[serde(default)]
+    pub leader: Option<NodeId>,
 }
 
-/// The query of a configuration request: the version the replica has, and
-/// how long to wait for a newer one.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ConfigQuery {
-    /// The replica's epoch.
-    #[serde(default)]
-    pub epoch: u64,
-    /// The replica's version.
-    #[serde(default)]
-    pub version: u64,
-    /// Seconds to wait for a change, at most [`MAX_WAIT_SECS`].
-    #[serde(default)]
-    pub wait: u64,
+/// A Raft message, with the cluster it belongs to.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RaftRequest<T> {
+    /// The cluster's ID ([`crate::raft::ClusterTag`]).
+    pub cluster: u64,
+    /// The message.
+    pub rpc: T,
 }
 
-impl ConfigQuery {
-    /// The query for a replica at `have`, waiting `wait` seconds.
-    pub fn new(have: ConfigVersion, wait: u64) -> Self {
-        Self {
-            epoch: have.epoch,
-            version: have.version,
-            wait,
-        }
-    }
-
-    /// The version the replica has.
-    pub fn have(self) -> ConfigVersion {
-        ConfigVersion {
-            epoch: self.epoch,
-            version: self.version,
-        }
-    }
-
-    /// The query string.
-    pub fn to_query_string(self) -> String {
-        format!(
-            "epoch={}&version={}&wait={}",
-            self.epoch, self.version, self.wait
-        )
-    }
+/// A member's request to the leader to leave the cluster.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LeaveRequest {
+    /// The cluster's ID.
+    pub cluster: u64,
+    /// The member.
+    pub node: NodeId,
 }
 
 /// An error answer on the cluster channel.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WireError {
-    /// A stable code, such as `not_primary`.
+    /// A stable code, such as `not_leader`.
     pub code: String,
     /// For people.
     pub message: String,

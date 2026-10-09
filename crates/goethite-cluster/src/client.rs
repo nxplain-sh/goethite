@@ -1,14 +1,14 @@
-//! Talking to the peer over the cluster channel.
+//! Talking to another member over the cluster channel.
 //!
-//! One connection per request: a replica asks for the configuration about
-//! once a minute (a long poll), so there is little to gain from keeping
-//! connections. Every request is bounded in time and in response size.
+//! One connection per request: TLS 1.3 with session resumption is cheap,
+//! and nothing stays open to go stale. Every request is bounded in time and
+//! in response size.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use goethite_store::{ConfigExport, ConfigVersion, StatsReport};
+use goethite_store::StatsReport;
 use http_body_util::{BodyExt, Full, Limited};
 use hyper::body::Bytes;
 use hyper::header::CONTENT_TYPE;
@@ -24,16 +24,15 @@ use tokio::time::timeout;
 use tokio_rustls::TlsConnector;
 
 use crate::node::NodeId;
-use crate::wire::{
-    CONFIG_PATH, ConfigQuery, MAX_WAIT_SECS, NODE_PATH, NodeInfo, STATS_PATH, WireError,
-};
+use crate::raft::Member;
+use crate::wire::{NODE_PATH, NodeInfo, STATS_PATH, WireError};
 
 /// How long connecting, the TLS handshake and an answer without waiting
 /// may take.
 const TIMEOUT: Duration = Duration::from_secs(10);
 
-/// The largest answer read: a configuration with a million custom rules.
-const MAX_RESPONSE: usize = 256 * 1024 * 1024;
+/// The largest answer read.
+const MAX_RESPONSE: usize = 16 * 1024 * 1024;
 
 /// Why a request to the peer failed.
 #[derive(Debug, thiserror::Error)]
@@ -70,7 +69,7 @@ pub enum ClientError {
     },
 }
 
-/// The peer, as seen from this node.
+/// Another member, as seen from this node.
 #[derive(Clone)]
 pub struct PeerClient {
     peer: NodeId,
@@ -109,9 +108,28 @@ impl PeerClient {
         })
     }
 
+    /// A client for `member`, as Raft records it.
+    ///
+    /// # Errors
+    ///
+    /// Why its name or address cannot be used.
+    pub fn for_member(member: &Member, tls: Arc<ClientConfig>) -> Result<Self, String> {
+        let node = member.node().map_err(|err| err.to_string())?;
+        let address = member
+            .address
+            .parse()
+            .map_err(|_| format!("{} has no valid address: {:?}", node, member.address))?;
+        Self::new(node, address, tls).map_err(|err| err.to_string())
+    }
+
     /// The peer's name.
     pub fn peer(&self) -> &NodeId {
         &self.peer
+    }
+
+    /// The peer's address.
+    pub fn address(&self) -> SocketAddr {
+        self.address
     }
 
     /// About the peer.
@@ -122,32 +140,6 @@ impl PeerClient {
     pub async fn node(&self) -> Result<NodeInfo, ClientError> {
         let (_, body) = self.get(NODE_PATH, TIMEOUT).await?;
         self.decode(&body)
-    }
-
-    /// The peer's configuration once it is newer than `have`, waiting up
-    /// to `wait` seconds for a change; `None` if nothing changed in that
-    /// time.
-    ///
-    /// # Errors
-    ///
-    /// A [`ClientError`], such as `not_primary` if the peer is not the
-    /// primary.
-    pub async fn config(
-        &self,
-        have: ConfigVersion,
-        wait: u64,
-    ) -> Result<Option<ConfigExport>, ClientError> {
-        let wait = wait.min(MAX_WAIT_SECS);
-        let path = format!(
-            "{CONFIG_PATH}?{}",
-            ConfigQuery::new(have, wait).to_query_string()
-        );
-        let limit = TIMEOUT.saturating_add(Duration::from_secs(wait));
-        let (status, body) = self.get(&path, limit).await?;
-        if status == StatusCode::NO_CONTENT {
-            return Ok(None);
-        }
-        self.decode(&body).map(Some)
     }
 
     /// The peer's statistics for the last `hours` hours, with long top
@@ -173,12 +165,27 @@ impl PeerClient {
         path: &str,
         body: &B,
     ) -> Result<T, ClientError> {
+        self.post_within(path, body, TIMEOUT).await
+    }
+
+    /// Sends `body` as JSON to `path` and decodes the JSON answer, all
+    /// within `limit`.
+    ///
+    /// # Errors
+    ///
+    /// A [`ClientError`].
+    pub async fn post_within<B: Serialize, T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &B,
+        limit: Duration,
+    ) -> Result<T, ClientError> {
         let bytes = serde_json::to_vec(body).map_err(|err| ClientError::Decode {
             peer: self.peer.clone(),
             reason: err.to_string(),
         })?;
         let (_, answer) = self
-            .send(Method::POST, path, Some(Bytes::from(bytes)), TIMEOUT)
+            .send(Method::POST, path, Some(Bytes::from(bytes)), limit)
             .await?;
         self.decode(&answer)
     }

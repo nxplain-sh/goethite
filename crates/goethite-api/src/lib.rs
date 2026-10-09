@@ -51,13 +51,13 @@ use utoipa::ToSchema;
 
 pub use auth::{PeerAddr, TOKEN_PREFIX, TokenHash, TokenHashError, generate_token, hash_token};
 pub use cluster::{
-    ClusterRole, ClusterStatus, Forwarded, ForwardedAnswer, PeerStatus, RoleChange, SyncStatus,
-    Writes, execute,
+    ClusterRole, ClusterStatus, Forwarded, ForwardedAnswer, MemberState, MemberStatus, Membership,
+    PeerStatus, RoleChange, SyncStatus, Writes, execute,
 };
 pub use docs::{EmbeddedDocs, SCALAR as DOCS_SCALAR};
 pub use error::{ApiError, ErrorBody, ErrorDetail};
 pub use openapi::{openapi, openapi_json};
-pub use serve::{ApiListeners, MAX_CONNECTIONS, Serving, serve, serve_router};
+pub use serve::{ApiListeners, MAX_CONNECTIONS, PeerCertificate, Serving, serve, serve_router};
 pub use web::{EmbeddedWeb, WebAssets};
 
 /// The checks made on every request's `Host`, `Origin` and path, for the
@@ -162,20 +162,27 @@ pub trait Control: Send + Sync + 'static {
         Writes::Local
     }
 
-    /// Sends a configuration change to the cluster's primary.
+    /// Sends a configuration change to the cluster's leader.
     fn forward(&self, forwarded: Forwarded) -> BoxResult<'_, ForwardedAnswer> {
         let _ = forwarded;
         Box::pin(async { Err(ApiError::not_found("this node is not in a cluster")) })
     }
 
-    /// The other node's statistics for the last `hours` hours, with long
-    /// top lists for merging.
-    fn peer_stats(&self, hours: u32) -> BoxResult<'_, StatsReport> {
+    /// The other members' statistics for the last `hours` hours, with long
+    /// top lists for merging; witnesses have none.
+    fn member_stats(&self, hours: u32) -> BoxResult<'_, Vec<MemberStats>> {
         let _ = hours;
+        Box::pin(async { Ok(Vec::new()) })
+    }
+
+    /// Removes a member from the cluster; this node leads it.
+    fn remove_member(&self, node: String, actor: Actor) -> BoxResult<'_, ClusterStatus> {
+        let _ = (node, actor);
         Box::pin(async { Err(ApiError::not_found("this node is not in a cluster")) })
     }
 
-    /// Makes this node the cluster's primary or a replica.
+    /// Takes the cluster over (`Primary`), or leaves it to join another
+    /// (`Replica`).
     fn set_role(
         &self,
         role: ClusterRole,
@@ -185,6 +192,15 @@ pub trait Control: Send + Sync + 'static {
         let _ = (role, force, actor);
         Box::pin(async { Err(ApiError::not_found("this node is not in a cluster")) })
     }
+}
+
+/// Another member's statistics, or why they could not be had.
+#[derive(Clone, Debug)]
+pub struct MemberStats {
+    /// The member.
+    pub node: String,
+    /// Its statistics.
+    pub stats: Result<StatsReport, String>,
 }
 
 /// The answer when this node does not use the FilterLists directory.
@@ -397,7 +413,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The routes, with authentication, limits and security headers.
 pub fn router(api: &Arc<Api>) -> Router {
-    // Authentication runs first, then forwarding a replica's changes.
+    // Authentication runs first, then forwarding changes to the leader.
     let protected = handlers::routes()
         .route("/api/v1/cluster", axum::routing::get(cluster::get_cluster))
         .route(
@@ -407,6 +423,10 @@ pub fn router(api: &Arc<Api>) -> Router {
         .route(
             "/api/v1/cluster/demote",
             axum::routing::post(cluster::demote),
+        )
+        .route(
+            "/api/v1/cluster/members/{node}",
+            axum::routing::delete(cluster::remove_member),
         )
         .route_layer(middleware::from_fn_with_state(
             Arc::clone(api),

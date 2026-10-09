@@ -101,7 +101,7 @@ travel over plain HTTP.
 
 ## In a cluster
 
-Point the provider at either node of a [cluster](../ha/). The replica hands changes to the
-primary and answers once it has copied them, so Terraform reads back what it wrote. While the
-primary is unreachable, plans still work, and applies through the replica fail with goethite's
-explanation (`503 unavailable`) until the primary is back or the replica is promoted.
+Point the provider at any node of a [cluster](../ha/). A member that does not lead hands changes
+to the leader and answers once it has applied them, so Terraform reads back what it wrote. While
+the cluster has no leader, plans still work, and applies fail with goethite's explanation
+(`503 unavailable`) until it elects one or a member takes it over.

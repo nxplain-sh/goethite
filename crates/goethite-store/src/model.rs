@@ -639,6 +639,9 @@ macro_rules! resource {
             fn all_mut(config: &mut ConfigSnapshot) -> &mut Vec<Self> {
                 &mut config.$field
             }
+            fn into_resource(self) -> Resource {
+                Resource::$name(self)
+            }
         }
     };
 }
@@ -667,6 +670,25 @@ resource!(
     /// A stored schedule.
     Schedule, ScheduleSpec, "schedule", "sc", schedules
 );
+
+/// A stored resource of any kind, tagged with it: a row of a configuration
+/// change, as the cluster's log carries it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "resource", rename_all = "snake_case")]
+pub enum Resource {
+    /// A filter list.
+    List(List),
+    /// A custom rule.
+    Rule(Rule),
+    /// A group.
+    Group(Group),
+    /// A client.
+    Client(Client),
+    /// A local DNS record.
+    Record(Record),
+    /// A schedule.
+    Schedule(Schedule),
+}
 
 /// The whole configuration, as of one moment.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]

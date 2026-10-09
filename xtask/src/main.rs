@@ -70,7 +70,7 @@ const DIST_GLIBC: (u32, u32) = (2, 34);
 /// What a release tarball holds, from the repository root to its place in
 /// the tarball's top directory. The binary and THIRD-PARTY-LICENSES.txt
 /// come from the target directory.
-const DIST_FILES: [(&str, &str); 8] = [
+const DIST_FILES: [(&str, &str); 9] = [
     ("LICENSE-APACHE", "LICENSE-APACHE"),
     ("LICENSE-MIT", "LICENSE-MIT"),
     ("README.md", "README.md"),
@@ -84,6 +84,10 @@ const DIST_FILES: [(&str, &str); 8] = [
     (
         "deploy/systemd/goethite-vrrp.service",
         "systemd/goethite-vrrp.service",
+    ),
+    (
+        "deploy/systemd/goethite-witness.service",
+        "systemd/goethite-witness.service",
     ),
 ];
 

@@ -1,4 +1,4 @@
-//! Who a node is: its name and its role.
+//! Who a node is: its name, and goethite 0.4's role.
 
 use std::fmt;
 use std::str::FromStr;
@@ -98,13 +98,15 @@ impl From<NodeId> for String {
     }
 }
 
-/// What a node does for the cluster's configuration.
+/// A node's role in goethite 0.4's two-node clusters, still read from
+/// config files: the primary starts the Raft cluster, the replica waits to
+/// be added to it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Role {
-    /// Owns the configuration: changes are made here.
+    /// Started the cluster, with its configuration.
     Primary,
-    /// Copies the primary's configuration and forwards changes to it.
+    /// Joins the primary's cluster.
     Replica,
 }
 

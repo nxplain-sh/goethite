@@ -9,6 +9,17 @@ configuration format.
 
 ### Added
 
+- **Raft clustering, with a witness.** The members of a cluster agree on every configuration
+  change with Raft (openraft) and apply it in the same order; one leads, and the others forward
+  changes to it. With two nodes and a witness (`goethite witness`, which votes, never leads and
+  serves no DNS; `goethite-witness.service`), or three nodes, losing any one elects a new leader
+  within about three seconds and changes go on. Members are listed in `[[cluster.member]]`, one
+  node starts the cluster with `bootstrap = true`, and the leader adds the others as they answer,
+  making them voters once that makes three or more. `GET /api/v1/cluster` adds the members, the
+  leader, the term and this node's state; `DELETE /api/v1/cluster/members/{node}` removes a
+  member. Every member's audit log holds the cluster's changes, by their real actors. See
+  [High availability](https://nxplain-sh.github.io/goethite/ha/) and
+  [ADR 0031](docs/adr/0031-raft-clustering.md).
 - **Release builds.** `cargo xtask dist` builds the release tarball and SBOMs for the machine's
   architecture in a pinned image, from the last commit; the same commit gives the same bytes. The
   release workflow builds amd64 and arm64 twice on separate runners and stops unless the bytes
@@ -56,6 +67,14 @@ configuration format.
 
 ### Changed
 
+- **Clusters run on Raft instead of primary and replica** (ADR 0031 supersedes ADR 0010).
+  goethite 0.4's `[cluster]` tables keep working: the primary starts the cluster with its
+  configuration, the replica is added to it, and two nodes alone still have one voter. `promote`
+  now takes a cluster that cannot elect a leader over, as a new cluster with this node's
+  configuration (refused while a leader answers); `demote` leaves a cluster to join another.
+  Upgrade both nodes; configuration changes are refused until they run the same version. The web
+  UI and the TUI show the leader and how many members are up. `goethite import` refuses to run on
+  a node in a cluster: change the cluster's configuration through any member's API.
 - **The store's schema is version 2** (local records). In a cluster, a replica copies only from a
   primary on the same version: upgrade both nodes, the replica first, as usual. An older store
   gains the new table when opened.

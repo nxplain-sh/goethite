@@ -6,7 +6,8 @@
 # upgrade, a running goethite hands over to the new binary in place: it
 # starts it, passes it its sockets and its store, and exits once the new one
 # answers, so no query is dropped. If the new one fails to start, the old one
-# carries on.
+# carries on. A running witness restarts: it serves no DNS, and the cluster
+# keeps its majority meanwhile.
 #
 # dpkg calls this with `configure <previously configured version>` (empty on a
 # first install); rpm with the number of versions installed afterwards
@@ -23,6 +24,9 @@ if [ -d /run/systemd/system ]; then
     systemctl daemon-reload || true
     if [ "$first_install" = false ] && systemctl is-active --quiet goethite.service; then
         systemctl kill --signal=SIGUSR2 --kill-whom=main goethite.service || true
+    fi
+    if [ "$first_install" = false ]; then
+        systemctl try-restart goethite-witness.service || true
     fi
 fi
 

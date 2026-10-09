@@ -165,18 +165,30 @@ See [REST API](../api/) for how to use it.
 
 ## `[cluster]`
 
-Absent for a node on its own. With it, the node is one of a two-node cluster: the primary owns the
-filtering configuration and the replica copies it. See [High availability](../ha/).
+Absent for a node on its own. With it, the node is a member of a cluster whose members agree on
+the filtering configuration with Raft. `goethite witness` reads the same table. See
+[High availability](../ha/).
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `node` | required | This node's name, as in its certificate: 1 to 63 lowercase letters, digits and hyphens, starting with a letter. |
-| `role` | required | `"primary"` or `"replica"`. |
-| `listen` | `"0.0.0.0:8054"` | Where the node listens for its peer, over mutual TLS. |
+| `node` | required | This member's name, as in its certificate: 1 to 63 lowercase letters, digits and hyphens, starting with a letter. |
+| `bootstrap` | `false` | Start a new cluster on this node, with its configuration, while it is in none. On one node only; never on a witness. |
+| `listen` | `"0.0.0.0:8054"` | Where the member listens for the others, over mutual TLS. Also the address it gives the others when it starts the cluster, so prefer its own address to `0.0.0.0`. |
 | `ca` | required | The cluster CA certificate, from `goethite cluster init`. |
-| `cert`, `key` | required | This node's certificate and key, from `goethite cluster cert <node>`. Read before goethite drops its privileges. |
-| `peer.node` | required | The other node's name. Only a certificate with that name is accepted. |
-| `peer.address` | required | The other node's `listen` address. |
+| `cert`, `key` | required | This member's certificate and key, from `goethite cluster cert <node>`. Read before goethite drops its privileges. |
+| `role` | unset | goethite 0.4's role: `"primary"` starts the cluster, as `bootstrap` does; `"replica"` waits to be added. |
+
+### `[[cluster.member]]`
+
+One table for each other member, up to 15. Only members in a member's config file, or already in
+the cluster, may connect to it. The leader adds the members in its config file as they answer.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `node` | required | The member's name. Only a certificate with that name is accepted for it. |
+| `address` | required | The member's `listen` address. |
+
+goethite 0.4's `[cluster.peer]` table, with the same keys, still counts as one member.
 
 ## `[vrrp]`
 

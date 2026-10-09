@@ -204,7 +204,7 @@ goethite opens connections only to:
 - **`api.filterlists.com`**, over HTTPS, only when someone opens Find lists in the web UI, at
   most once a day ([FilterLists directory](../filtering/#finding-more-lists); `[filter]
   directory = false` turns it off);
-- its **cluster peer**, if it has one.
+- the other **members of its cluster**, if it is in one.
 
 Names are resolved through goethite's own upstreams. The web UI's pages talk to goethite only;
 links to list home pages open in a new tab.

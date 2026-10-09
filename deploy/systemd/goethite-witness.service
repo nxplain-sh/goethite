@@ -1,0 +1,70 @@
+# Hardened systemd unit for a goethite witness.
+#
+# A witness votes in a cluster and never leads; it serves no DNS and no API.
+# Run it on a third machine beside two goethite nodes, so the cluster elects
+# a new leader by itself when either node is lost. Fill in the [cluster]
+# table of /etc/goethite/goethite.toml (a witness needs no [[upstream]]),
+# then run `systemctl enable --now goethite-witness` instead of
+# goethite.service. It keeps the cluster's log in /var/lib/goethite, like a
+# goethite node, so the two cannot share a machine with these files.
+# `systemd-analyze security goethite-witness` reviews the sandbox.
+
+[Unit]
+Description=goethite cluster witness
+Documentation=https://nxplain-sh.github.io/goethite/ha/
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=notify
+ExecStart=/usr/bin/goethite witness --config /etc/goethite/goethite.toml
+Restart=on-failure
+RestartSec=2s
+
+# Identity and files.
+DynamicUser=yes
+StateDirectory=goethite
+StateDirectoryMode=0750
+ConfigurationDirectory=goethite
+UMask=0077
+
+# Privileges: none at all.
+CapabilityBoundingSet=
+NoNewPrivileges=yes
+SecureBits=noroot-locked
+
+# File system.
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectProc=invisible
+ProcSubset=pid
+
+# Kernel and host.
+ProtectHostname=yes
+ProtectClock=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+DevicePolicy=closed
+
+# Network: IP sockets for the cluster channel, and a Unix socket for
+# telling systemd how it is doing.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# System calls: what services usually need, minus the privileged ones.
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target

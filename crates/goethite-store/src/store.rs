@@ -8,10 +8,14 @@
 //! snapshot replaces the old one. Writes are serialized; they block on disk
 //! I/O, so async callers run them on a blocking thread.
 //!
+//! In a cluster, a change is not written at once: it becomes a [`Change`]
+//! that goes through the cluster's log ([`Replicator`]), and every member
+//! applies it in the log's order ([`Store::apply`]). The log itself lives in
+//! the same database (`log`).
+//!
 //! Every change that writes resources also bumps the [`ConfigVersion`], in
-//! the same transaction, and announces it on a watch channel, so a cluster
-//! replica can follow the configuration ([`Store::export`],
-//! [`Store::replace`]).
+//! the same transaction, and announces it on a watch channel, so the node
+//! can put it into effect and a caller can wait to read its own write.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -25,21 +29,24 @@ use redb::{
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
-use tracing::warn;
+use tracing::{info, warn};
 use utoipa::ToSchema;
 
 use crate::model::{
     Client, ConfigSnapshot, DEFAULT_GROUP, Group, GroupList, List, ListSpec, ManagedBy, Record,
-    Rule, RuleSpec, Schedule, Settings, SettingsSpec, ValidationError, default_group_resource,
+    Resource, Rule, RuleSpec, Schedule, Settings, SettingsSpec, ValidationError,
+    default_group_resource,
 };
+
+mod log;
 
 /// The most audit entries kept; older ones are dropped.
 pub const MAX_AUDIT_ENTRIES: u64 = 100_000;
 
-/// The store's schema version, kept in the `meta` table. A replica takes
-/// the configuration only from a primary with the same one. Version 2 added
-/// local DNS records; opening an older store creates their table, which is
-/// the whole migration.
+/// The store's schema version, kept in the `meta` table. A cluster member
+/// takes a whole configuration (a seed or a snapshot) only with the same
+/// one. Version 2 added local DNS records; opening an older store creates
+/// their table, which is the whole migration.
 const SCHEMA_VERSION: &str = "2";
 
 const SETTINGS: TableDefinition<'static, &'static str, &'static [u8]> =
@@ -49,6 +56,9 @@ const META: TableDefinition<'static, &'static str, &'static str> = TableDefiniti
 const EPOCH_KEY: &str = "config_epoch";
 /// The `meta` key of the configuration's version.
 const VERSION_KEY: &str = "config_version";
+/// The `meta` key of what the cluster's log applied to the configuration,
+/// opaque to the store ([`Store::apply`]).
+const APPLIED_KEY: &str = "cluster_applied";
 const AUDIT: TableDefinition<'static, u64, &'static [u8]> = TableDefinition::new("audit");
 
 /// A kind of stored resource.
@@ -87,6 +97,8 @@ pub trait Kind: Clone + Serialize + DeserializeOwned + Send + Sync + 'static {
     fn all(config: &ConfigSnapshot) -> &Vec<Self>;
     /// All resources of this kind in `config`, to change them.
     fn all_mut(config: &mut ConfigSnapshot) -> &mut Vec<Self>;
+    /// The resource, tagged with its kind.
+    fn into_resource(self) -> Resource;
 }
 
 /// Implements the OpenAPI schema of an enum whose values grow over time: a
@@ -135,7 +147,8 @@ pub enum ActorKind {
     Cli,
     /// goethite itself, such as seeding the store on the first start.
     System,
-    /// The cluster's primary, whose configuration this replica copied.
+    /// The cluster: this node took a whole configuration from another
+    /// member, which is named.
     Replication,
 }
 
@@ -186,7 +199,8 @@ extensible_enum!(
     ActorKind,
     "Who made a change: `token` (an API client with the admin token), `unauthenticated` (an API \
      client on loopback while no admin token is configured), `cli` (the goethite command line), \
-     `system` (goethite itself) or `replication` (copied from the cluster's primary). More may \
+     `system` (goethite itself) or `replication` (a whole configuration taken from another \
+     cluster member). More may \
      be added: show unknown values as they are.",
     [Token, Unauthenticated, Cli, System, Replication]
 );
@@ -209,11 +223,12 @@ pub enum AuditAction {
     Resume,
     /// A list download was started.
     Refresh,
-    /// The configuration was copied from the cluster's primary.
+    /// This node took the cluster's whole configuration from another
+    /// member.
     Replicate,
-    /// This node became the cluster's primary.
+    /// This node took the cluster over.
     Promote,
-    /// This node became a replica of the cluster's primary.
+    /// This node left its cluster to join another.
     Demote,
 }
 
@@ -221,9 +236,9 @@ extensible_enum!(
     AuditAction,
     "What an audit entry records: `create`, `update` or `delete` (a resource or the settings), \
      `import` (the config file's `[filter]` table), `pause` or `resume` (filtering), `refresh` \
-     (a list download), `replicate` (a copy of the cluster primary's configuration), `promote` \
-     or `demote` (this node became the cluster's primary or a replica). More may be added: show \
-     unknown values as they are.",
+     (a list download), `replicate` (the cluster's whole configuration, taken from another \
+     member), `promote` (this node took the cluster over) or `demote` (this node left its \
+     cluster to join another). More may be added: show unknown values as they are.",
     [
         Create, Update, Delete, Import, Pause, Resume, Refresh, Replicate, Promote, Demote
     ]
@@ -308,6 +323,16 @@ pub enum StoreError {
     /// A value could not be encoded.
     #[error("cannot encode: {0}")]
     Encode(#[source] serde_json::Error),
+    /// The cluster cannot take configuration changes now, such as while it
+    /// has no leader.
+    #[error("{0}")]
+    Unavailable(String),
+    /// A change from the cluster's log that this goethite version cannot
+    /// apply.
+    #[error(
+        "this node cannot apply the cluster's change ({0}): run the same goethite version on every node"
+    )]
+    Incompatible(String),
     /// A replicated configuration comes from a store with another schema.
     #[error(
         "the configuration comes from store schema {found}, this node has {expected}: run the same goethite version on every node"
@@ -346,41 +371,59 @@ db_error!(
     redb::CommitError
 );
 
-/// One row to write.
-enum Write {
-    Put(&'static str, String, Vec<u8>),
-    Delete(&'static str, String),
-    Settings(Vec<u8>),
+/// One row a configuration change writes.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case")]
+enum Row {
+    /// Creates or replaces a resource.
+    Put { resource: Resource },
+    /// Deletes a resource of `kind` (such as `list`).
+    Delete { kind: String, id: String },
+    /// Replaces the settings.
+    Settings { settings: Settings },
 }
 
-/// An audit entry still without its number.
+/// An audit entry still without its number, time and actor.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct Pending {
     action: AuditAction,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     resource: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     before: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     after: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     detail: Option<String>,
 }
 
 /// What a transaction writes.
 #[derive(Default)]
 struct Batch {
-    writes: Vec<Write>,
+    rows: Vec<Row>,
     audit: Vec<Pending>,
 }
 
 impl Batch {
-    fn put<K: Kind>(&mut self, resource: &K) -> Result<(), StoreError> {
-        let bytes = serde_json::to_vec(resource).map_err(StoreError::Encode)?;
-        self.writes
-            .push(Write::Put(K::TABLE_NAME, resource.id().to_owned(), bytes));
-        Ok(())
+    fn put<K: Kind>(&mut self, resource: &K) {
+        self.rows.push(Row::Put {
+            resource: resource.clone().into_resource(),
+        });
     }
 
     fn delete<K: Kind>(&mut self, id: &str) {
-        self.writes
-            .push(Write::Delete(K::TABLE_NAME, id.to_owned()));
+        self.rows.push(Row::Delete {
+            kind: K::NAME.to_owned(),
+            id: id.to_owned(),
+        });
+    }
+
+    fn settings(&mut self, settings: &Settings) {
+        self.rows.push(Row::Settings {
+            settings: settings.clone(),
+        });
     }
 
     fn record<K: Kind>(&mut self, action: AuditAction, before: Option<&K>, after: Option<&K>) {
@@ -394,6 +437,72 @@ impl Batch {
             detail: None,
         });
     }
+}
+
+/// A configuration change, prepared on one node and applied in the same
+/// order on every node of a cluster: the rows it writes and its audit
+/// entries, with when and by whom. It applies only to the configuration
+/// version it was prepared against, so every node either applies it or
+/// refuses it, the same way.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Change {
+    base: ConfigVersion,
+    time: Timestamp,
+    actor: Actor,
+    rows: Vec<Row>,
+    audit: Vec<Pending>,
+}
+
+/// One node's whole configuration, made the cluster's: when a cluster
+/// starts on that node, or the node takes the cluster over.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Seed {
+    node: String,
+    time: Timestamp,
+    export: ConfigExport,
+}
+
+/// An entry of the cluster's log, as the store applies it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Command {
+    /// A configuration change.
+    Change(Change),
+    /// A whole configuration.
+    Seed(Seed),
+}
+
+/// What applying a [`Command`] did.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "outcome", rename_all = "snake_case")]
+pub enum Applied {
+    /// Nothing: a log entry without a command, such as a membership change.
+    #[default]
+    Nothing,
+    /// The configuration is at `version` now.
+    Done {
+        /// The new version.
+        version: ConfigVersion,
+    },
+    /// The change was refused, on every node alike: the configuration
+    /// changed after it was prepared.
+    Refused {
+        /// Why, for people.
+        reason: String,
+    },
+}
+
+/// Puts configuration changes through a cluster's log instead of writing
+/// them at once: the store hands each change to it and the cluster applies
+/// it on every node, through [`Store::apply`].
+pub trait Replicator: Send + Sync {
+    /// Proposes `command` and returns once this node applied it. Called on
+    /// a blocking thread, with the store's writer lock held.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::Unavailable`] if the cluster cannot take changes now.
+    fn replicate(&self, command: Command) -> Result<Applied, StoreError>;
 }
 
 /// What an import changed.
@@ -427,9 +536,11 @@ pub struct Import {
 /// Which configuration a store holds.
 ///
 /// `epoch` names a line of history: it is chosen at random when a store is
-/// created and again when a node becomes the cluster's primary. `version`
-/// counts the changes along it. A replica takes a configuration whose epoch
-/// differs from its own, or whose version is newer.
+/// created, and again when a node's whole configuration becomes a
+/// cluster's ([`Store::seed`]). `version` counts the changes along it.
+/// Every member of a cluster goes through the same versions, so a member
+/// that forwarded a change waits until it holds the version the leader
+/// reported.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
 pub struct ConfigVersion {
     /// The line of history: a random number below 2^53, so it is exact in
@@ -459,7 +570,8 @@ fn new_epoch() -> u64 {
     rand::random::<u64>() >> 11
 }
 
-/// The whole configuration with its version, as a replica receives it.
+/// The whole configuration with its version: a cluster's seed, or a
+/// snapshot.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConfigExport {
     /// The store schema it was taken from; a store with another schema
@@ -493,6 +605,8 @@ pub struct ReplaceSummary {
 struct Current {
     config: Arc<ConfigSnapshot>,
     version: ConfigVersion,
+    /// What the cluster's log applied to it, if this node is in a cluster.
+    applied: Option<Arc<str>>,
 }
 
 /// The configuration and audit log, persisted.
@@ -501,7 +615,11 @@ pub struct Store {
     db: Database,
     current: RwLock<Current>,
     changes: watch::Sender<ConfigVersion>,
+    /// Serializes changes made on this node, from preparing one to
+    /// applying it. Applying a change from the cluster's log never takes
+    /// it: the leader holds it while its own change goes through the log.
     writer: Mutex<()>,
+    replicator: RwLock<Option<Arc<dyn Replicator>>>,
 }
 
 // The path only: printing the configuration would take its lock and dump
@@ -549,6 +667,7 @@ impl Store {
         let now = Timestamp::now();
         let tx = db.begin_write()?;
         let version;
+        let applied;
         {
             let mut meta = tx.open_table(META)?;
             meta.insert("schema", SCHEMA_VERSION)?;
@@ -570,6 +689,7 @@ impl Store {
                 epoch,
                 version: counted,
             };
+            applied = meta.get(APPLIED_KEY)?.map(|value| Arc::from(value.value()));
             let mut settings = tx.open_table(SETTINGS)?;
             if settings.get("settings")?.is_none() {
                 let initial = ConfigSnapshot::empty(now).settings;
@@ -592,6 +712,7 @@ impl Store {
                 tx.open_table(table)?;
             }
             tx.open_table(AUDIT)?;
+            tx.open_table(log::LOG)?;
         }
         tx.commit()?;
         let config = load(&db)?;
@@ -605,9 +726,11 @@ impl Store {
             current: RwLock::new(Current {
                 config: Arc::new(config),
                 version,
+                applied,
             }),
             changes,
             writer: Mutex::new(()),
+            replicator: RwLock::new(None),
         })
     }
 
@@ -671,7 +794,7 @@ impl Store {
         let mut created = None;
         self.transact(actor, |config, now, batch| {
             let resource = K::new(new_id(K::PREFIX), 1, now, now, spec);
-            batch.put(&resource)?;
+            batch.put(&resource);
             batch.record(AuditAction::Create, None, Some(&resource));
             K::all_mut(config).push(resource.clone());
             created = Some(resource);
@@ -714,7 +837,7 @@ impl Store {
                 now,
                 spec,
             );
-            batch.put(&after)?;
+            batch.put(&after);
             batch.record(AuditAction::Update, Some(&before), Some(&after));
             *slot = after.clone();
             updated = Some(after);
@@ -788,9 +911,7 @@ impl Store {
                 updated_at: now,
                 spec,
             };
-            batch.writes.push(Write::Settings(
-                serde_json::to_vec(&after).map_err(StoreError::Encode)?,
-            ));
+            batch.settings(&after);
             batch.audit.push(Pending {
                 action: AuditAction::Update,
                 kind: Some("settings".into()),
@@ -817,8 +938,8 @@ impl Store {
     pub fn import(&self, import: Import, actor: &Actor) -> Result<ImportSummary, StoreError> {
         let mut summary = ImportSummary::default();
         self.transact(actor, |config, now, batch| {
-            import_lists(config, now, batch, import.lists, &mut summary)?;
-            import_rules(config, now, batch, import.rules, &mut summary)?;
+            import_lists(config, now, batch, import.lists, &mut summary);
+            import_rules(config, now, batch, import.rules, &mut summary);
             let spec = SettingsSpec {
                 access: config.settings.spec.access.clone(),
                 ..import.settings
@@ -830,9 +951,7 @@ impl Store {
                     updated_at: now,
                     spec,
                 };
-                batch.writes.push(Write::Settings(
-                    serde_json::to_vec(&config.settings).map_err(StoreError::Encode)?,
-                ));
+                batch.settings(&config.settings);
                 summary.settings_changed = true;
             }
             let settings = if summary.settings_changed {
@@ -860,49 +979,159 @@ impl Store {
         Ok(summary)
     }
 
-    /// Makes this store's configuration a copy of `incoming`, from the
-    /// cluster's primary `actor`, if it is newer (see
-    /// [`ConfigVersion::replaces`]). Resources keep the primary's IDs,
-    /// revisions and times. Returns what changed, or `None` if `incoming`
-    /// is not newer.
+    /// A command that makes this node's configuration, `node`'s, the
+    /// cluster's, in a new epoch: for the node a cluster starts on, or one
+    /// that takes a cluster over.
+    pub fn seed(&self, node: &str) -> Command {
+        let current = self.current();
+        let mut epoch = new_epoch();
+        while epoch == current.version.epoch {
+            epoch = new_epoch();
+        }
+        Command::Seed(Seed {
+            node: node.to_owned(),
+            time: Timestamp::now(),
+            export: ConfigExport {
+                schema: SCHEMA_VERSION.to_owned(),
+                version: ConfigVersion {
+                    epoch,
+                    version: current.version.version.saturating_add(1),
+                },
+                config: (*current.config).clone(),
+            },
+        })
+    }
+
+    /// Applies an entry of the cluster's log: its `command`, if it has
+    /// one, and `applied`, the cluster's own note of the entry, kept in the
+    /// same transaction ([`Store::snapshot`]). Every node applies the same
+    /// entries in the same order, and so comes to the same configuration;
+    /// a change that no longer fits is refused on every node alike.
+    ///
+    /// # Errors
+    ///
+    /// A database error, or [`StoreError::Schema`] or
+    /// [`StoreError::Incompatible`] for a command this goethite version
+    /// cannot apply: this node cannot follow the cluster then.
+    pub fn apply(&self, command: Option<Command>, applied: &str) -> Result<Applied, StoreError> {
+        match command {
+            None => {
+                self.commit_applied(applied)?;
+                Ok(Applied::Nothing)
+            }
+            Some(Command::Change(change)) => self.apply_change(change, Some(applied)),
+            Some(Command::Seed(seed)) => {
+                let version = seed.export.version;
+                let actor = Actor::replication(seed.node.as_str());
+                let summary = self.install(seed.export, &actor, seed.time, applied)?;
+                info!(
+                    node = %seed.node,
+                    added = summary.added,
+                    changed = summary.changed,
+                    removed = summary.removed,
+                    "the configuration of {} is the cluster's", seed.node
+                );
+                Ok(Applied::Done { version })
+            }
+        }
+    }
+
+    /// Makes a snapshot of the cluster's configuration, taken on `node`,
+    /// this store's configuration, with `applied`, the cluster's note of
+    /// what it includes. Resources keep their IDs, revisions and times.
     ///
     /// # Errors
     ///
     /// [`StoreError::Schema`] for a configuration from another store schema,
-    /// an invalid configuration, or a database error.
-    pub fn replace(
+    /// or a database error.
+    pub fn install_snapshot(
         &self,
-        incoming: ConfigExport,
+        export: ConfigExport,
+        node: &str,
+        applied: &str,
+    ) -> Result<ReplaceSummary, StoreError> {
+        self.install(export, &Actor::replication(node), Timestamp::now(), applied)
+    }
+
+    /// The configuration and the cluster's note of what it includes, as
+    /// one: for a snapshot of the cluster's state.
+    pub fn snapshot(&self) -> (ConfigExport, Option<String>) {
+        let current = self.current();
+        (
+            ConfigExport {
+                schema: SCHEMA_VERSION.to_owned(),
+                version: current.version,
+                config: (*current.config).clone(),
+            },
+            current.applied.map(|applied| applied.to_string()),
+        )
+    }
+
+    /// The cluster's note of the last entry applied to the configuration,
+    /// if this node is in a cluster.
+    pub fn applied(&self) -> Option<String> {
+        self.current().applied.map(|applied| applied.to_string())
+    }
+
+    /// Hands configuration changes made on this node to `replicator`
+    /// instead of writing them at once: this node is in a cluster.
+    pub fn set_replicator(&self, replicator: Arc<dyn Replicator>) {
+        *self
+            .replicator
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) = Some(replicator);
+    }
+
+    /// Writes changes at once again: the cluster stopped. The replicator
+    /// usually refers back to the store, so this also breaks that cycle.
+    pub fn clear_replicator(&self) {
+        *self
+            .replicator
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) = None;
+    }
+
+    fn replicator(&self) -> Option<Arc<dyn Replicator>> {
+        self.replicator
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Makes `export` this store's configuration, from `actor`, whatever
+    /// it holds now: only the differences are written.
+    fn install(
+        &self,
+        export: ConfigExport,
         actor: &Actor,
-    ) -> Result<Option<ReplaceSummary>, StoreError> {
-        if incoming.schema != SCHEMA_VERSION {
+        time: Timestamp,
+        applied: &str,
+    ) -> Result<ReplaceSummary, StoreError> {
+        if export.schema != SCHEMA_VERSION {
             return Err(StoreError::Schema {
                 expected: SCHEMA_VERSION.to_owned(),
-                found: incoming.schema,
+                found: export.schema,
             });
         }
-        let _writer = self.writer.lock().unwrap_or_else(PoisonError::into_inner);
-        let current = self.current();
-        if !incoming.version.replaces(current.version) {
-            return Ok(None);
+        if let Err(err) = export.config.validate() {
+            // Taken anyway: every node must hold the same configuration.
+            warn!(%err, "the cluster's configuration has a problem; fix it through the API");
         }
-        incoming.config.validate()?;
+        let current = self.current();
         let old = &current.config;
-        let new = &incoming.config;
+        let new = &export.config;
         let mut batch = Batch::default();
         let mut summary = ReplaceSummary::default();
-        replace_kind::<List>(old, new, &mut batch, &mut summary)?;
-        summary.lists_changed = !batch.writes.is_empty();
-        replace_kind::<Rule>(old, new, &mut batch, &mut summary)?;
-        summary.filter_changed = !batch.writes.is_empty();
-        replace_kind::<Group>(old, new, &mut batch, &mut summary)?;
-        replace_kind::<Client>(old, new, &mut batch, &mut summary)?;
-        replace_kind::<Schedule>(old, new, &mut batch, &mut summary)?;
-        replace_kind::<Record>(old, new, &mut batch, &mut summary)?;
+        replace_kind::<List>(old, new, &mut batch, &mut summary);
+        summary.lists_changed = !batch.rows.is_empty();
+        replace_kind::<Rule>(old, new, &mut batch, &mut summary);
+        summary.filter_changed = !batch.rows.is_empty();
+        replace_kind::<Group>(old, new, &mut batch, &mut summary);
+        replace_kind::<Client>(old, new, &mut batch, &mut summary);
+        replace_kind::<Schedule>(old, new, &mut batch, &mut summary);
+        replace_kind::<Record>(old, new, &mut batch, &mut summary);
         if old.settings != new.settings {
-            batch.writes.push(Write::Settings(
-                serde_json::to_vec(&new.settings).map_err(StoreError::Encode)?,
-            ));
+            batch.settings(&new.settings);
             summary.settings_changed = true;
         }
         let settings = if summary.settings_changed {
@@ -915,57 +1144,61 @@ impl Store {
             kind: None,
             resource: None,
             before: serde_json::to_value(current.version).ok(),
-            after: serde_json::to_value(incoming.version).ok(),
+            after: serde_json::to_value(export.version).ok(),
             detail: Some(format!(
                 "{} added, {} changed, {} removed{settings}",
                 summary.added, summary.changed, summary.removed
             )),
         });
-        self.commit(
-            incoming.config,
-            batch,
+        self.commit(Commit {
+            next: export.config,
+            rows: batch.rows,
+            audit: batch.audit,
             actor,
-            Timestamp::now(),
-            incoming.version,
-        )?;
-        Ok(Some(summary))
+            time,
+            version: export.version,
+            applied: Some(applied),
+        })?;
+        Ok(summary)
     }
 
-    /// Starts a new epoch: this node's configuration becomes the cluster's,
-    /// and a replica that copied another primary takes it whole. For a node
-    /// that becomes the primary.
-    ///
-    /// # Errors
-    ///
-    /// A database error.
-    pub fn start_epoch(&self, actor: &Actor) -> Result<ConfigVersion, StoreError> {
-        let _writer = self.writer.lock().unwrap_or_else(PoisonError::into_inner);
+    /// Applies `change` to the configuration it was prepared against. On
+    /// this node alone (`applied` is `None`), the caller holds the writer
+    /// lock and validated the change. From the cluster's log, a change
+    /// that no longer fits is refused, and `applied` kept either way.
+    fn apply_change(&self, change: Change, applied: Option<&str>) -> Result<Applied, StoreError> {
         let current = self.current();
-        let mut epoch = new_epoch();
-        while epoch == current.version.epoch {
-            epoch = new_epoch();
-        }
-        let next = ConfigVersion {
-            epoch,
-            version: current.version.version.saturating_add(1),
+        let refuse = |reason: String| -> Result<Applied, StoreError> {
+            if let Some(applied) = applied {
+                self.commit_applied(applied)?;
+            }
+            Ok(Applied::Refused { reason })
         };
-        let mut batch = Batch::default();
-        batch.audit.push(Pending {
-            action: AuditAction::Promote,
-            kind: None,
-            resource: None,
-            before: serde_json::to_value(current.version).ok(),
-            after: serde_json::to_value(next).ok(),
-            detail: Some("this node is now the cluster's primary".into()),
-        });
-        self.commit(
-            (*current.config).clone(),
-            batch,
-            actor,
-            Timestamp::now(),
+        if change.base != current.version {
+            return refuse(
+                "the configuration changed while this change was being made; make it again".into(),
+            );
+        }
+        let mut next = (*current.config).clone();
+        for row in &change.rows {
+            apply_row(&mut next, row)?;
+        }
+        if applied.is_some()
+            && let Err(err) = next.validate()
+        {
+            return refuse(err.to_string());
+        }
+        let version = current.version.next();
+        self.commit(Commit {
             next,
-        )?;
-        Ok(next)
+            rows: change.rows,
+            audit: change.audit,
+            actor: &change.actor,
+            time: change.time,
+            version,
+            applied,
+        })?;
+        Ok(Applied::Done { version })
     }
 
     /// Records an action that is not a configuration change, such as
@@ -1041,8 +1274,10 @@ impl Store {
         Ok(())
     }
 
-    /// Applies `change` to a copy of the configuration, validates it, and
-    /// writes the batch it fills in, with audit entries, in one transaction.
+    /// Applies `change` to a copy of the configuration and validates it.
+    /// The rows and audit entries it fills in are then written in one
+    /// transaction, or, in a cluster, go through the cluster's log first.
+    /// Audit entries alone are this node's: they are written at once.
     fn transact(
         &self,
         actor: &Actor,
@@ -1050,94 +1285,221 @@ impl Store {
     ) -> Result<Arc<ConfigSnapshot>, StoreError> {
         let _writer = self.writer.lock().unwrap_or_else(PoisonError::into_inner);
         let current = self.current();
-        let mut next = (*current.config).clone();
+        let mut scratch = (*current.config).clone();
         let now = Timestamp::now();
         let mut batch = Batch::default();
-        change(&mut next, now, &mut batch)?;
-        if batch.writes.is_empty() && batch.audit.is_empty() {
+        change(&mut scratch, now, &mut batch)?;
+        if batch.rows.is_empty() {
+            if !batch.audit.is_empty() {
+                self.commit_audit(batch.audit, actor, now)?;
+            }
             return Ok(current.config);
         }
-        next.validate()?;
-        let version = if batch.writes.is_empty() {
-            current.version
-        } else {
-            current.version.next()
+        scratch.validate()?;
+        let change = Change {
+            base: current.version,
+            time: now,
+            actor: actor.clone(),
+            rows: batch.rows,
+            audit: batch.audit,
         };
-        self.commit(next, batch, actor, now, version)
+        let applied = match self.replicator() {
+            Some(replicator) => replicator.replicate(Command::Change(change))?,
+            None => self.apply_change(change, None)?,
+        };
+        match applied {
+            Applied::Done { .. } => Ok(self.config()),
+            Applied::Refused { reason } => Err(StoreError::Conflict(reason)),
+            Applied::Nothing => Err(StoreError::Unavailable(
+                "the cluster did not apply the change".into(),
+            )),
+        }
     }
 
-    /// Writes `batch` and its audit entries in one transaction, with
-    /// `version` if it changed, then makes `next` the configuration. The
-    /// caller holds the writer lock.
-    fn commit(
-        &self,
-        next: ConfigSnapshot,
-        batch: Batch,
-        actor: &Actor,
-        now: Timestamp,
-        version: ConfigVersion,
-    ) -> Result<Arc<ConfigSnapshot>, StoreError> {
-        let previous = self.version();
+    /// Writes a change's rows, audit entries and version in one
+    /// transaction, with the cluster's note of the log entry it came from,
+    /// then makes its configuration the current one.
+    fn commit(&self, commit: Commit<'_>) -> Result<Arc<ConfigSnapshot>, StoreError> {
         let tx = self.db.begin_write()?;
-        if version != previous {
-            let mut meta = tx.open_table(META)?;
-            meta.insert(EPOCH_KEY, version.epoch.to_string().as_str())?;
-            meta.insert(VERSION_KEY, version.version.to_string().as_str())?;
-        }
-        for write in batch.writes {
-            match write {
-                Write::Put(table, id, bytes) => {
-                    tx.open_table(TableDefinition::<&str, &[u8]>::new(table))?
-                        .insert(id.as_str(), bytes.as_slice())?;
-                }
-                Write::Delete(table, id) => {
-                    tx.open_table(TableDefinition::<&str, &[u8]>::new(table))?
-                        .remove(id.as_str())?;
-                }
-                Write::Settings(bytes) => {
-                    tx.open_table(SETTINGS)?
-                        .insert("settings", bytes.as_slice())?;
-                }
-            }
-        }
         {
-            let mut audit = tx.open_table(AUDIT)?;
-            let mut next_id = audit
-                .last()?
-                .map_or(1, |(key, _)| key.value().saturating_add(1));
-            for pending in batch.audit {
-                let entry = AuditEntry {
-                    id: next_id,
-                    time: now,
-                    actor: actor.clone(),
-                    action: pending.action,
-                    kind: pending.kind,
-                    resource: pending.resource,
-                    before: pending.before,
-                    after: pending.after,
-                    detail: pending.detail,
-                };
-                let bytes = serde_json::to_vec(&entry).map_err(StoreError::Encode)?;
-                audit.insert(next_id, bytes.as_slice())?;
-                next_id = next_id.saturating_add(1);
-            }
-            let newest = next_id.saturating_sub(1);
-            if audit.len()? > MAX_AUDIT_ENTRIES {
-                let keep_from = newest.saturating_sub(MAX_AUDIT_ENTRIES).saturating_add(1);
-                audit.retain_in(..keep_from, |_, _| false)?;
+            let mut meta = tx.open_table(META)?;
+            meta.insert(EPOCH_KEY, commit.version.epoch.to_string().as_str())?;
+            meta.insert(VERSION_KEY, commit.version.version.to_string().as_str())?;
+            if let Some(applied) = commit.applied {
+                meta.insert(APPLIED_KEY, applied)?;
             }
         }
+        for row in &commit.rows {
+            write_row(&tx, row)?;
+        }
+        write_audit(&tx, commit.audit, commit.actor, commit.time)?;
         tx.commit()?;
-        let next = Arc::new(next);
-        *self.current.write().unwrap_or_else(PoisonError::into_inner) = Current {
-            config: Arc::clone(&next),
-            version,
-        };
-        if version != previous {
-            self.changes.send_replace(version);
+        let next = Arc::new(commit.next);
+        {
+            let mut current = self.current.write().unwrap_or_else(PoisonError::into_inner);
+            let applied = commit
+                .applied
+                .map(Arc::from)
+                .or_else(|| current.applied.clone());
+            *current = Current {
+                config: Arc::clone(&next),
+                version: commit.version,
+                applied,
+            };
         }
+        self.changes.send_replace(commit.version);
         Ok(next)
     }
+
+    /// Keeps the cluster's note of a log entry that changed nothing.
+    fn commit_applied(&self, applied: &str) -> Result<(), StoreError> {
+        let tx = self.db.begin_write()?;
+        tx.open_table(META)?.insert(APPLIED_KEY, applied)?;
+        tx.commit()?;
+        self.current
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .applied = Some(Arc::from(applied));
+        Ok(())
+    }
+
+    /// Writes audit entries that change no configuration.
+    fn commit_audit(
+        &self,
+        audit: Vec<Pending>,
+        actor: &Actor,
+        time: Timestamp,
+    ) -> Result<(), StoreError> {
+        let tx = self.db.begin_write()?;
+        write_audit(&tx, audit, actor, time)?;
+        tx.commit()?;
+        Ok(())
+    }
+}
+
+/// A change, ready to write.
+struct Commit<'a> {
+    next: ConfigSnapshot,
+    rows: Vec<Row>,
+    audit: Vec<Pending>,
+    actor: &'a Actor,
+    time: Timestamp,
+    version: ConfigVersion,
+    applied: Option<&'a str>,
+}
+
+/// Applies `row` to `config` in memory.
+fn apply_row(config: &mut ConfigSnapshot, row: &Row) -> Result<(), StoreError> {
+    fn upsert<K: Kind>(config: &mut ConfigSnapshot, resource: &K) {
+        let all = K::all_mut(config);
+        match all.iter_mut().find(|r| r.id() == resource.id()) {
+            Some(slot) => *slot = resource.clone(),
+            None => all.push(resource.clone()),
+        }
+    }
+    fn remove<K: Kind>(config: &mut ConfigSnapshot, id: &str) {
+        K::all_mut(config).retain(|r| r.id() != id);
+    }
+    match row {
+        Row::Put { resource } => match resource {
+            Resource::List(r) => upsert(config, r),
+            Resource::Rule(r) => upsert(config, r),
+            Resource::Group(r) => upsert(config, r),
+            Resource::Client(r) => upsert(config, r),
+            Resource::Record(r) => upsert(config, r),
+            Resource::Schedule(r) => upsert(config, r),
+        },
+        Row::Delete { kind, id } => match kind.as_str() {
+            List::NAME => remove::<List>(config, id),
+            Rule::NAME => remove::<Rule>(config, id),
+            Group::NAME => remove::<Group>(config, id),
+            Client::NAME => remove::<Client>(config, id),
+            Record::NAME => remove::<Record>(config, id),
+            Schedule::NAME => remove::<Schedule>(config, id),
+            other => return Err(unknown_kind(other)),
+        },
+        Row::Settings { settings } => config.settings = settings.clone(),
+    }
+    Ok(())
+}
+
+/// Writes `row` to its table.
+fn write_row(tx: &redb::WriteTransaction, row: &Row) -> Result<(), StoreError> {
+    fn put<K: Kind>(tx: &redb::WriteTransaction, resource: &K) -> Result<(), StoreError> {
+        let bytes = serde_json::to_vec(resource).map_err(StoreError::Encode)?;
+        tx.open_table(K::table())?
+            .insert(resource.id(), bytes.as_slice())?;
+        Ok(())
+    }
+    fn remove<K: Kind>(tx: &redb::WriteTransaction, id: &str) -> Result<(), StoreError> {
+        tx.open_table(K::table())?.remove(id)?;
+        Ok(())
+    }
+    match row {
+        Row::Put { resource } => match resource {
+            Resource::List(r) => put(tx, r),
+            Resource::Rule(r) => put(tx, r),
+            Resource::Group(r) => put(tx, r),
+            Resource::Client(r) => put(tx, r),
+            Resource::Record(r) => put(tx, r),
+            Resource::Schedule(r) => put(tx, r),
+        },
+        Row::Delete { kind, id } => match kind.as_str() {
+            List::NAME => remove::<List>(tx, id),
+            Rule::NAME => remove::<Rule>(tx, id),
+            Group::NAME => remove::<Group>(tx, id),
+            Client::NAME => remove::<Client>(tx, id),
+            Record::NAME => remove::<Record>(tx, id),
+            Schedule::NAME => remove::<Schedule>(tx, id),
+            other => Err(unknown_kind(other)),
+        },
+        Row::Settings { settings } => {
+            let bytes = serde_json::to_vec(settings).map_err(StoreError::Encode)?;
+            tx.open_table(SETTINGS)?
+                .insert("settings", bytes.as_slice())?;
+            Ok(())
+        }
+    }
+}
+
+fn unknown_kind(kind: &str) -> StoreError {
+    StoreError::Incompatible(format!("a change to an unknown kind of resource, {kind:?}"))
+}
+
+/// Writes `audit` as numbered entries, dropping the oldest beyond
+/// [`MAX_AUDIT_ENTRIES`].
+fn write_audit(
+    tx: &redb::WriteTransaction,
+    audit: Vec<Pending>,
+    actor: &Actor,
+    time: Timestamp,
+) -> Result<(), StoreError> {
+    let mut table = tx.open_table(AUDIT)?;
+    let mut next_id = table
+        .last()?
+        .map_or(1, |(key, _)| key.value().saturating_add(1));
+    for pending in audit {
+        let entry = AuditEntry {
+            id: next_id,
+            time,
+            actor: actor.clone(),
+            action: pending.action,
+            kind: pending.kind,
+            resource: pending.resource,
+            before: pending.before,
+            after: pending.after,
+            detail: pending.detail,
+        };
+        let bytes = serde_json::to_vec(&entry).map_err(StoreError::Encode)?;
+        table.insert(next_id, bytes.as_slice())?;
+        next_id = next_id.saturating_add(1);
+    }
+    let newest = next_id.saturating_sub(1);
+    if table.len()? > MAX_AUDIT_ENTRIES {
+        let keep_from = newest.saturating_sub(MAX_AUDIT_ENTRIES).saturating_add(1);
+        table.retain_in(..keep_from, |_, _| false)?;
+    }
+    Ok(())
 }
 
 /// Writes the resources of kind `K` in which `new` differs from `old`.
@@ -1146,17 +1508,17 @@ fn replace_kind<K: Kind + PartialEq>(
     new: &ConfigSnapshot,
     batch: &mut Batch,
     summary: &mut ReplaceSummary,
-) -> Result<(), StoreError> {
+) {
     let before: HashMap<&str, &K> = K::all(old).iter().map(|r| (r.id(), r)).collect();
     let after: HashSet<&str> = K::all(new).iter().map(Kind::id).collect();
     for resource in K::all(new) {
         match before.get(resource.id()) {
             None => {
-                batch.put(resource)?;
+                batch.put(resource);
                 summary.added = summary.added.saturating_add(1);
             }
             Some(existing) if *existing != resource => {
-                batch.put(resource)?;
+                batch.put(resource);
                 summary.changed = summary.changed.saturating_add(1);
             }
             Some(_) => {}
@@ -1166,7 +1528,6 @@ fn replace_kind<K: Kind + PartialEq>(
         batch.delete::<K>(id);
         summary.removed = summary.removed.saturating_add(1);
     }
-    Ok(())
 }
 
 /// Makes the config-file lists match `lists`, by a stable ID derived from
@@ -1177,7 +1538,7 @@ fn import_lists(
     batch: &mut Batch,
     lists: Vec<ListSpec>,
     summary: &mut ImportSummary,
-) -> Result<(), StoreError> {
+) {
     let mut wanted = Vec::new();
     for mut spec in lists {
         spec.managed_by = ManagedBy::ConfigFile;
@@ -1212,7 +1573,7 @@ fn import_lists(
         if *group != before {
             group.revision = group.revision.saturating_add(1);
             group.updated_at = now;
-            batch.put(group)?;
+            batch.put(group);
             batch.record(AuditAction::Update, Some(&before), Some(group));
         }
     }
@@ -1223,14 +1584,14 @@ fn import_lists(
                 existing.spec = spec;
                 existing.revision = existing.revision.saturating_add(1);
                 existing.updated_at = now;
-                batch.put(existing)?;
+                batch.put(existing);
                 batch.record(AuditAction::Update, Some(&before), Some(existing));
                 summary.lists_updated = summary.lists_updated.saturating_add(1);
             }
             continue;
         }
         let list = List::new(id.clone(), 1, now, now, spec);
-        batch.put(&list)?;
+        batch.put(&list);
         batch.record(AuditAction::Create, None, Some(&list));
         config.lists.push(list);
         summary.lists_added = summary.lists_added.saturating_add(1);
@@ -1242,11 +1603,10 @@ fn import_lists(
             });
             default.revision = default.revision.saturating_add(1);
             default.updated_at = now;
-            batch.put(default)?;
+            batch.put(default);
             batch.record(AuditAction::Update, Some(&before), Some(default));
         }
     }
-    Ok(())
 }
 
 /// Makes the config-file rules match `rules`, by a stable ID derived from
@@ -1257,7 +1617,7 @@ fn import_rules(
     batch: &mut Batch,
     rules: Vec<RuleSpec>,
     summary: &mut ImportSummary,
-) -> Result<(), StoreError> {
+) {
     let mut wanted = Vec::new();
     let mut seen = HashSet::new();
     for mut spec in rules {
@@ -1286,12 +1646,11 @@ fn import_rules(
             continue;
         }
         let rule = Rule::new(id, 1, now, now, spec);
-        batch.put(&rule)?;
+        batch.put(&rule);
         batch.record(AuditAction::Create, None, Some(&rule));
         config.rules.push(rule);
         summary.rules_added = summary.rules_added.saturating_add(1);
     }
-    Ok(())
 }
 
 /// Creates the database file readable and writable by its owner only, if it
@@ -1785,71 +2144,202 @@ mod tests {
         assert_eq!(export.config, *store.config());
     }
 
+    /// A cluster's log in miniature: applies each command on the store it
+    /// serves, as the cluster would, and keeps it for the other nodes.
+    struct Recorder {
+        store: std::sync::Weak<Store>,
+        log: Mutex<Vec<Command>>,
+    }
+
+    impl Recorder {
+        fn attach(store: &Arc<Store>) -> Arc<Self> {
+            let recorder = Arc::new(Self {
+                store: Arc::downgrade(store),
+                log: Mutex::new(Vec::new()),
+            });
+            store.set_replicator(Arc::clone(&recorder) as Arc<dyn Replicator>);
+            recorder
+        }
+
+        fn take(&self) -> Vec<Command> {
+            std::mem::take(&mut *self.log.lock().unwrap())
+        }
+    }
+
+    impl Replicator for Recorder {
+        fn replicate(&self, command: Command) -> Result<Applied, StoreError> {
+            let store = self.store.upgrade().unwrap();
+            self.log.lock().unwrap().push(command.clone());
+            store.apply(Some(command), "leader")
+        }
+    }
+
     #[test]
-    fn replicas_copy_the_primary() {
-        let primary = TempStore::new("primary");
-        let replica = TempStore::new("replica");
-        let from = Actor::replication("dns1");
-        // The replica's own changes are replaced: its epoch differs.
-        replica
+    fn every_node_applies_the_log_alike() {
+        let leader = Arc::new(Store::open_in_memory().unwrap());
+        let follower = Store::open_in_memory().unwrap();
+        // The follower's own configuration gives way to the seed.
+        follower
             .create::<Rule>(rule("||local.example^"), &api())
             .unwrap();
-        let ads = primary
+        leader
+            .create::<Rule>(rule("||before.example^"), &api())
+            .unwrap();
+        let seed = leader.seed("dns1");
+        for store in [&*leader, &follower] {
+            assert!(matches!(
+                store.apply(Some(seed.clone()), "1").unwrap(),
+                Applied::Done { .. }
+            ));
+        }
+        assert_eq!(*follower.config(), *leader.config());
+        assert_eq!(follower.version(), leader.version());
+        let audit = follower.audit(None, 1).unwrap();
+        assert_eq!(audit[0].action, AuditAction::Replicate);
+        assert_eq!(audit[0].actor, Actor::replication("dns1"));
+
+        // Changes made on the leader go through the log.
+        let recorder = Recorder::attach(&leader);
+        let ads = leader
             .create::<List>(list("Ads", "https://lists.example/ads.txt"), &api())
             .unwrap();
-        let mut group = primary.config().groups[0].clone();
+        let mut group = leader.config().groups[0].clone();
         group.spec.lists.push(GroupList {
             list: ads.id.clone(),
             schedule: None,
         });
-        primary
+        leader
             .update::<Group>(DEFAULT_GROUP, group.spec, None, &api())
             .unwrap();
-        primary
-            .create::<Rule>(rule("||tracker.example^"), &api())
-            .unwrap();
-
-        let summary = replica.replace(primary.export(), &from).unwrap().unwrap();
-        assert_eq!(summary.added, 2, "the list and the primary's rule");
-        assert_eq!(summary.changed, 1, "the default group");
-        assert_eq!(summary.removed, 1, "the replica's own rule");
-        assert!(summary.lists_changed && summary.filter_changed);
-        assert_eq!(*replica.config(), *primary.config(), "an exact copy");
-        assert_eq!(replica.version(), primary.version());
-
-        // The same version again changes nothing.
-        assert_eq!(replica.replace(primary.export(), &from).unwrap(), None);
-
-        // Deletions and settings follow.
-        let tracker = primary.config().rules[0].id.clone();
-        primary.delete::<Rule>(&tracker, None, &api()).unwrap();
-        let mut settings = primary.config().settings.spec.clone();
+        let before = leader.config().rules[0].id.clone();
+        leader.delete::<Rule>(&before, None, &api()).unwrap();
+        let mut settings = leader.config().settings.spec.clone();
         settings.protection = false;
-        primary.update_settings(settings, None, &api()).unwrap();
-        let summary = replica.replace(primary.export(), &from).unwrap().unwrap();
-        assert_eq!((summary.removed, summary.settings_changed), (1, true));
-        assert!(!summary.lists_changed && summary.filter_changed);
-        assert_eq!(*replica.config(), *primary.config());
+        leader.update_settings(settings, None, &api()).unwrap();
+        // Audit entries alone stay on the node.
+        leader.record(&api(), AuditAction::Pause, None).unwrap();
+        let log = recorder.take();
+        assert_eq!(log.len(), 4);
+        for command in log.clone() {
+            assert!(matches!(
+                follower.apply(Some(command), "n").unwrap(),
+                Applied::Done { .. }
+            ));
+        }
+        assert_eq!(*follower.config(), *leader.config());
+        assert_eq!(follower.version(), leader.version());
+        assert_eq!(follower.applied().as_deref(), Some("n"));
+        // The follower's audit log names who made each change.
+        let audit = follower.audit(None, 1).unwrap();
+        assert_eq!(audit[0].actor, api());
+        assert_eq!(audit[0].kind.as_deref(), Some("settings"));
 
-        // An older version of the same history is refused.
-        let mut stale = primary.export();
-        stale.version.version = 1;
-        assert_eq!(replica.replace(stale, &from).unwrap(), None);
-
-        // So is another schema.
-        let mut other = primary.export();
-        other.schema = "999".into();
-        other.version.version += 10;
+        // A change prepared against an older configuration is refused, the
+        // same way everywhere, and the log goes on.
+        let version = follower.version();
+        let stale = log[0].clone();
         assert!(matches!(
-            replica.replace(other, &from),
+            follower.apply(Some(stale), "m").unwrap(),
+            Applied::Refused { .. }
+        ));
+        assert_eq!(follower.version(), version);
+        assert_eq!(follower.applied().as_deref(), Some("m"));
+        assert!(matches!(
+            follower.apply(None, "o").unwrap(),
+            Applied::Nothing
+        ));
+        assert_eq!(follower.applied().as_deref(), Some("o"));
+
+        // A configuration from another schema cannot be followed.
+        let Command::Seed(mut other) = leader.seed("dns1") else {
+            panic!("a seed is a seed")
+        };
+        other.export.schema = "999".into();
+        assert!(matches!(
+            follower.apply(Some(Command::Seed(other)), "p"),
             Err(StoreError::Schema { .. })
         ));
+        // Nor can a change to a kind this version does not know.
+        let Command::Change(mut change) = log[1].clone() else {
+            panic!("the second entry is a change")
+        };
+        change.base = follower.version();
+        change.rows = vec![Row::Delete {
+            kind: "widget".into(),
+            id: "wi_1".into(),
+        }];
+        assert!(matches!(
+            follower.apply(Some(Command::Change(change)), "q"),
+            Err(StoreError::Incompatible(_))
+        ));
 
-        // The copy is audit-logged as replication from the primary.
-        let audit = replica.audit(None, 1).unwrap();
+        // A refused change is the caller's conflict on the leader.
+        leader.clear_replicator();
+        assert_eq!(leader.version(), follower.version());
+    }
+
+    #[test]
+    fn snapshots_copy_the_configuration_and_the_applied_note() {
+        let leader = Store::open_in_memory().unwrap();
+        let joiner = Store::open_in_memory().unwrap();
+        joiner
+            .create::<Rule>(rule("||local.example^"), &api())
+            .unwrap();
+        leader
+            .create::<List>(list("Ads", "https://lists.example/ads.txt"), &api())
+            .unwrap();
+        leader.apply(None, "7").unwrap();
+        let (export, applied) = leader.snapshot();
+        assert_eq!(applied.as_deref(), Some("7"));
+        let summary = joiner
+            .install_snapshot(export, "dns1", applied.as_deref().unwrap())
+            .unwrap();
+        assert_eq!((summary.added, summary.removed), (1, 1));
+        assert!(summary.lists_changed && summary.filter_changed);
+        assert_eq!(*joiner.config(), *leader.config());
+        assert_eq!(joiner.version(), leader.version());
+        assert_eq!(joiner.applied().as_deref(), Some("7"));
+        let audit = joiner.audit(None, 1).unwrap();
         assert_eq!(audit[0].action, AuditAction::Replicate);
-        assert_eq!(audit[0].actor.kind, ActorKind::Replication);
-        assert_eq!(audit[0].actor.node.as_deref(), Some("dns1"));
+        assert_eq!(audit[0].actor, Actor::replication("dns1"));
+    }
+
+    #[test]
+    fn a_refused_change_is_a_conflict_for_its_caller() {
+        struct Refuser;
+        impl Replicator for Refuser {
+            fn replicate(&self, _: Command) -> Result<Applied, StoreError> {
+                Ok(Applied::Refused {
+                    reason: "changed meanwhile".into(),
+                })
+            }
+        }
+        struct Down;
+        impl Replicator for Down {
+            fn replicate(&self, _: Command) -> Result<Applied, StoreError> {
+                Err(StoreError::Unavailable("no leader".into()))
+            }
+        }
+        let store = Store::open_in_memory().unwrap();
+        store.set_replicator(Arc::new(Refuser));
+        assert!(matches!(
+            store.create::<Rule>(rule("||ads.example^"), &api()),
+            Err(StoreError::Conflict(reason)) if reason == "changed meanwhile"
+        ));
+        store.set_replicator(Arc::new(Down));
+        assert!(matches!(
+            store.create::<Rule>(rule("||ads.example^"), &api()),
+            Err(StoreError::Unavailable(_))
+        ));
+        // Invalid changes never reach the log.
+        assert!(matches!(
+            store.create::<Rule>(rule(""), &api()),
+            Err(StoreError::Invalid(_))
+        ));
+        assert_eq!(store.config().rules.len(), 0);
+        // Audit entries alone are written at once.
+        store.record(&api(), AuditAction::Pause, None).unwrap();
+        assert_eq!(store.audit(None, 10).unwrap().len(), 1);
     }
 
     #[test]

@@ -36,9 +36,10 @@ the network; otherwise the token crosses it in clear text.
   name or client in a top list for that name or client, and a bar of the chart (hover or focus it
   for its counts) for its time window. A top blocked name can be allowed, and a top name blocked,
   in two clicks: that adds a custom rule. The range is part of the address. The header shows
-  whether filtering is on, and pauses it for 10 minutes or resumes it. In a [cluster](../ha/), the counts are both
-  nodes' together, the header shows this node's role and its peer, a Cluster panel says whether
-  changes are possible, and cluster problems appear at the top.
+  whether filtering is on, and pauses it for 10 minutes or resumes it. In a [cluster](../ha/), the counts are every
+  node's together, the header shows what this node does in the cluster and how many members are
+  up, a Cluster panel shows the leader, each member and whether changes are possible, and cluster
+  problems appear at the top.
 - **Query log**: the newest queries, following new ones live, with the client, the answer and
   what decided it (the rule, a CNAME, the upstream). Search by name and by answer, and page back
   through older entries. Filters set from the dashboard (a client, a time window) show as chips

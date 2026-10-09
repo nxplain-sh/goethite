@@ -38,18 +38,18 @@ export function ProtectionBadge({ status }: { status: Status }) {
 	)
 }
 
-/** This node's role and its peer's state, in words. */
+/** What this node does in its cluster, and how many members are up, in words. */
 export function ClusterBadges({ cluster }: { cluster: ClusterStatus }) {
+	const others = (cluster.members ?? []).filter((member) => !member.this_node)
+	const up = others.filter((member) => member.reachable).length
 	return (
 		<>
 			<span className="badge">
-				{cluster.node} · {cluster.role.toUpperCase()}
+				{cluster.node} · {(cluster.state ?? 'unknown').toUpperCase()}
 			</span>
-			{cluster.peer.reachable ? (
-				<span className="badge ok">PEER {cluster.peer.node} UP</span>
-			) : (
-				<span className="badge blocked">PEER {cluster.peer.node} DOWN</span>
-			)}
+			<span className={up === others.length ? 'badge ok' : 'badge blocked'}>
+				{up}/{others.length} MEMBERS UP
+			</span>
 		</>
 	)
 }

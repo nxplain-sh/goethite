@@ -72,6 +72,7 @@ use crate::{cluster, handlers};
         cluster::get_cluster,
         cluster::promote,
         cluster::demote,
+        cluster::remove_member,
     ),
     modifiers(&BearerToken),
     tags(
@@ -85,7 +86,7 @@ use crate::{cluster, handlers};
         (name = "schedules", description = "Weekly time windows for scheduled lists"),
         (name = "querylog", description = "The query log and statistics"),
         (name = "audit", description = "Every configuration change"),
-        (name = "cluster", description = "This node's cluster: roles, the other node, following the primary"),
+        (name = "cluster", description = "This node's cluster: its leader and members, taking over and joining"),
     ),
 )]
 struct ApiDoc;

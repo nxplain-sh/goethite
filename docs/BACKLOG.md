@@ -173,6 +173,17 @@ Phase 3's scope shipped in v0.3.0. These items came up along the way.
 ## Phase 5: v0.5
 
 - **[P5] Landlock and seccomp sandboxing.**
+- **[later] Leadership transfer.** openraft 0.9 cannot hand leadership to another member, so
+  `promote` inside a healthy cluster is refused rather than moving the leader (for example
+  before maintenance). openraft 0.10 can; revisit when it is stable (ADR 0031).
+- **[later] Cluster metrics:** this node's Raft state, term, leader changes and how far each
+  member's log reaches, in Prometheus metrics.
+- **[later] Keep-alive connections between members.** Raft opens a TLS connection per message
+  (session resumption keeps it cheap), about two a second per follower.
+- **[later] Configurable Raft timeouts** for members across a WAN; they are constants tuned for
+  a LAN today.
+- **[later] Learners that never vote,** for read-only members in another site, kept as learners
+  even when they would make three voters.
 
 ## Unscheduled / tooling
 
