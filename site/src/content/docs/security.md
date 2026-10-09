@@ -155,8 +155,9 @@ thread, then gives the privileges up:
   that it cannot become root again. Started as root without `user`, it logs a warning.
 
 Either way, goethite then empties its capability sets and sets `no_new_privs`, so it cannot gain
-privileges again, even by running a program. The filter lists and their `cache_dir` must be
-readable, and the `cache_dir` writable, by the user goethite runs as. Dropping privileges is
+privileges again, even by running a program, and confines itself ([the sandbox](#the-sandbox)).
+The filter lists and their `cache_dir` must be readable, and the `cache_dir` writable, by the user
+goethite runs as. Dropping privileges is
 supported on Linux; on other platforms, which are for development only, `server.user` is an error.
 
 A [floating IP](../ha/#a-floating-ip) needs privileges the DNS server never gets, so a separate
@@ -166,6 +167,43 @@ It starts with `CAP_NET_RAW` and `CAP_NET_ADMIN`, opens its raw sockets, then ke
 `CAP_NET_ADMIN` (to add and remove the address) and sets `no_new_privs`. Its sandbox matches the
 DNS server's, with netlink and packet sockets allowed and nothing writable;
 `systemd-analyze security goethite-vrrp` rates it 1.9, "OK".
+
+## The sandbox
+
+Once its privileges are gone, and before it handles any query, goethite confines itself on Linux,
+wherever it runs: under systemd, in a container or started by hand. A bug in a parser, or in a
+library goethite uses, then cannot reach much beyond what goethite already needs.
+
+- **Files**, with [Landlock](https://landlock.io). `goethite run` may read only the system
+  directories (`/usr` and the like, for its libraries and time zones), `/proc`, the config file's
+  directory, the directories of the certificates, keys and services file the config names, and
+  the local lists directory (`[filter] local_lists_dir`). It may change only the store's
+  directory, the downloaded lists (`cache_dir`) and its runtime directory, and it opens no new
+  TCP listeners. `goethite witness` may change only its store's directory and read nothing else;
+  `goethite vrrp` may open no file at all.
+- **System calls**, with seccomp. Mounting, loading modules, rebooting, debugging other processes
+  (`ptrace`), BPF, `io_uring`, `userfaultfd`, new namespaces, keyrings and setting the clock are
+  refused with `EPERM`, as are sockets other than IPv4, IPv6 and Unix ones (`goethite vrrp` also
+  keeps netlink and packet sockets). The witness and `goethite vrrp` may not start programs;
+  `goethite run` may, but only the new goethite of an upgrade, which runs inside the old one's
+  sandbox.
+
+The log says what is in force:
+
+```
+INFO goethite::sandbox::linux: sandboxed: Landlock limits files, seccomp system calls process="goethite run" landlock_abi=6 system_calls_denied=47
+```
+
+Landlock needs Linux 5.13 or newer with Landlock enabled (it is on in Debian, Ubuntu, Fedora and
+RHEL kernels); older ABIs lack some of its rights, and the log then says the files are limited
+"as far as this kernel supports". Without Landlock, goethite warns and seccomp still applies.
+
+An upgrade starts the new goethite inside the running one's sandbox, so the new one can reach
+only what the old one could. If you moved the store, the certificates or the lists elsewhere in
+the config file, restart goethite instead (`systemctl restart goethite`).
+
+`[security] sandbox = false` turns the sandbox off, for diagnosing a problem you suspect it causes;
+the log then warns. The systemd units sandbox goethite from the outside too.
 
 ## The API, the web UI and the logs
 

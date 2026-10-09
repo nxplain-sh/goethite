@@ -59,14 +59,18 @@ cache_dir = "lists"          # where downloaded lists are kept
 update_hours = 24            # how often URL lists are refreshed (1 to 168)
 
 [[filter.list]]
-path = "/var/lib/goethite/lists/hosts.txt"
+path = "/etc/goethite/lists/hosts.txt"
 
 [[filter.list]]
 url = "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts"
 ```
 
 Each `[[filter.list]]` has either a `path` or a `url`. Relative paths are relative to the config
-file. Unlike lines in a list, each entry in `rules` must be a supported rule: anything else is
+file. A list given by a path must be in the local lists directory, `local_lists_dir`: by default
+`lists` beside the config file, which is `/etc/goethite/lists` for the packages. goethite reads
+lists from nowhere else (with [the sandbox](../security/#the-sandbox), it cannot), whether the list
+comes from the config file or the API; a list elsewhere is skipped, and its status says why. In a
+cluster, a list file must be there on every node. Unlike lines in a list, each entry in `rules` must be a supported rule: anything else is
 reported as an error when the config is loaded.
 
 `block_response = "null_ip"` answers `A` queries with `0.0.0.0`, `AAAA` with `::`, and other types

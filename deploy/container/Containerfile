@@ -28,6 +28,8 @@ COPY --chmod=0644 LICENSE-MIT LICENSE-APACHE /usr/share/doc/goethite/
 # Directories from an empty one first: a --chmod on a file would also give
 # the directory it creates the file's mode.
 COPY --chmod=0755 empty/ /etc/goethite/
+# Local lists: the only directory goethite reads lists given by a path from.
+COPY --chmod=0755 empty/ /etc/goethite/lists/
 COPY --chmod=0644 goethite.toml /etc/goethite/goethite.toml
 # The store and the downloaded lists: owned by the user goethite runs as.
 COPY --chown=65532:65532 --chmod=0750 empty/ /var/lib/goethite/

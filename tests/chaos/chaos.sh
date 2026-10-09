@@ -85,6 +85,7 @@ queries_per_second = 0
 address = "192.0.2.1"
 
 [filter]
+local_lists_dir = "$W/lists"
 [[filter.list]]
 path = "$W/lists/chaos.txt"
 

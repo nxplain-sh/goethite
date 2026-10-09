@@ -490,6 +490,14 @@ impl Config {
             .clone()
             .unwrap_or_else(|| self.state_dir().join("lists"))
     }
+
+    /// The only directory lists given by a path are read from.
+    pub(crate) fn local_lists_dir(&self) -> PathBuf {
+        self.filter
+            .local_lists_dir
+            .clone()
+            .unwrap_or_else(|| self.dir.join("lists"))
+    }
 }
 
 /// The `[security]` table.
@@ -500,12 +508,16 @@ pub(crate) struct SecuritySection {
     pub rebinding_protection: bool,
     /// Names below these may resolve to private addresses.
     pub private_domains: Vec<String>,
+    /// Confine the process once it runs (Linux): Landlock for files,
+    /// seccomp for system calls.
+    pub sandbox: bool,
 }
 
 impl Default for SecuritySection {
     fn default() -> Self {
         Self {
             rebinding_protection: true,
+            sandbox: true,
             private_domains: DEFAULT_PRIVATE_DOMAINS
                 .iter()
                 .map(|&domain| domain.to_owned())
@@ -560,6 +572,9 @@ pub(crate) struct FilterSection {
     pub list: Vec<ListSection>,
     /// Where downloaded lists are kept. Required if any list has a `url`.
     pub cache_dir: Option<PathBuf>,
+    /// The only directory lists given by a path are read from. Defaults to
+    /// `lists` beside the config file.
+    pub local_lists_dir: Option<PathBuf>,
     /// How often downloaded lists are refreshed, in hours.
     pub update_hours: u32,
     /// What to do when filtering fails. A node setting: it is not
@@ -612,6 +627,7 @@ impl Default for FilterSection {
             rules: Vec::new(),
             list: Vec::new(),
             cache_dir: None,
+            local_lists_dir: None,
             update_hours: 24,
             on_failure: OnFailure::Open,
             default_lists: true,
@@ -754,6 +770,9 @@ impl FilterSection {
             }
         };
         if let Some(dir) = &mut self.cache_dir {
+            resolve(dir);
+        }
+        if let Some(dir) = &mut self.local_lists_dir {
             resolve(dir);
         }
         if let Some(file) = &mut self.services_file {

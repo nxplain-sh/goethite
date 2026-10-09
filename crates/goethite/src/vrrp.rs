@@ -53,7 +53,7 @@ pub(crate) fn run(config_path: &Path) -> Result<()> {
     let check = section
         .check_address(&config.server)
         .context("nothing to check goethite on")?;
-    imp::run(section.to_vrrp_config(), check)
+    imp::run(section.to_vrrp_config(), check, config.security.sandbox)
 }
 
 #[cfg(target_os = "linux")]
@@ -64,12 +64,17 @@ mod imp {
     use goethite_cluster::vrrp::{Vrrp, VrrpConfig};
     use tokio::sync::watch;
 
-    use crate::{notify, privileges};
+    use crate::{notify, privileges, sandbox};
 
-    pub(super) fn run(config: VrrpConfig, check: SocketAddr) -> Result<()> {
+    pub(super) fn run(config: VrrpConfig, check: SocketAddr, confine: bool) -> Result<()> {
         let vrrp = Vrrp::open(config)?;
         // Sockets open: only changing addresses needs a privilege now.
         privileges::keep_net_admin()?;
+        if confine {
+            sandbox::apply(&sandbox::Policy::vrrp())?;
+        } else {
+            tracing::warn!("the sandbox is turned off ([security] sandbox = false)");
+        }
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -94,7 +99,7 @@ mod imp {
     use anyhow::{Result, bail};
     use goethite_cluster::vrrp::VrrpConfig;
 
-    pub(super) fn run(_config: VrrpConfig, _check: SocketAddr) -> Result<()> {
+    pub(super) fn run(_config: VrrpConfig, _check: SocketAddr, _confine: bool) -> Result<()> {
         bail!("goethite vrrp needs Linux; other platforms are for development only")
     }
 }

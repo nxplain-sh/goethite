@@ -39,7 +39,8 @@ CHECK='goethite --version
 goethite check-config --config /etc/goethite/goethite.toml >/dev/null 2>&1
 test -f /usr/lib/systemd/system/goethite.service
 test -f /usr/lib/systemd/system/goethite-vrrp.service
-test -f /usr/lib/systemd/system/goethite-witness.service'
+test -f /usr/lib/systemd/system/goethite-witness.service
+test -d /etc/goethite/lists'
 
 for image in "${DEB_IMAGES[@]}"; do
     echo "== $image"

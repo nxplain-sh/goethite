@@ -127,6 +127,7 @@ API.
 | `directory` | `true` | Whether the node looks lists up for the web UI, only when someone browses them: the [FilterLists directory](../filtering/#finding-more-lists), and the sizes the [recommended lists](../filtering/#recommended-lists-and-presets) state. A node setting, never copied into the store. |
 | `services` | `true` | Whether groups can [block services](../groups/#blocked-services): the node downloads AdGuard's services catalog with the lists. A node setting, never copied into the store. |
 | `services_file` | none | Reads the services catalog from this file instead of downloading it, for nodes without internet access (re-read on reload). Relative paths are relative to the config file. |
+| `local_lists_dir` | `lists` beside the config file | The only directory lists given by a `path` are read from, whether from the config file or the API. A node setting. |
 | `on_failure` | `"open"` | What to do when filtering fails: `"open"` keeps resolving (unfiltered if need be) and reports it, `"closed"` refuses to start or answers SERVFAIL. A node setting, never copied into the store. See [Security](../security/#when-filtering-fails). |
 
 ### `[[filter.list]]`
@@ -135,7 +136,7 @@ Up to 63 lists, each with exactly one of:
 
 | Key | Meaning |
 | --- | --- |
-| `path` | A list file on disk. Relative paths are relative to the config file. |
+| `path` | A list file in `local_lists_dir`. Relative paths are relative to the config file. |
 | `url` | An `https://` URL. The list is downloaded at startup and every `update_hours`, checked, and kept in `cache_dir`, so goethite starts with the last good copy when offline. |
 
 Lists may be at most 128 MiB.
@@ -232,9 +233,13 @@ anyone.
 | --- | --- | --- |
 | `rebinding_protection` | `true` | Remove private, loopback and link-local addresses from forwarded answers for public names (see [DNS rebinding protection](../security/#dns-rebinding-protection)). |
 | `private_domains` | `["lan", "home.arpa", "internal", "local"]` | Names below these may resolve to private addresses. Setting it replaces the defaults. |
+| `sandbox` | `true` | Whether goethite confines itself with Landlock and seccomp on Linux ([the sandbox](../security/#the-sandbox)). Also read by `goethite witness` and `goethite vrrp`. |
 
 ## Logging
 
 Logs go to standard error, and the `RUST_LOG` environment variable sets the level (default
 `info`). For example, `RUST_LOG=debug` shows dropped and rejected packets, and
-`RUST_LOG=goethite_resolver=debug` shows only the resolver's details.
+`RUST_LOG=goethite_resolver=debug` shows only the resolver's details. Two libraries say less
+unless `RUST_LOG` names them, since goethite reports what they would itself: hickory-proto, which
+would quote malformed packets, is off, and openraft, which logs every election and membership
+change, logs warnings only (`RUST_LOG=info,openraft=info` shows them).

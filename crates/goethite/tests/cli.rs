@@ -175,8 +175,13 @@ fn check_config_rejects_problems() {
         ),
         (
             "check_missing_list",
-            "[[filter.list]]\npath = \"/nonexistent/goethite/list.txt\"\n",
+            "[[filter.list]]\npath = \"lists/nonexistent-goethite-list.txt\"\n",
             "cannot open filter list",
+        ),
+        (
+            "check_list_elsewhere",
+            "[[filter.list]]\npath = \"/nonexistent/goethite/list.txt\"\n",
+            "outside the local lists directory",
         ),
         (
             "check_missing_services_file",
@@ -486,7 +491,10 @@ mod serving {
 
     #[test]
     fn blocks_listed_names_and_reloads_lists_on_sighup() {
-        let list = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("blocklist.txt");
+        // Local lists live in `lists` beside the config file.
+        let lists = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("lists");
+        std::fs::create_dir_all(&lists).unwrap();
+        let list = lists.join("blocklist.txt");
         std::fs::write(&list, "0.0.0.0 ads.example\n").unwrap();
         let extra = format!(
             "\n[filter]\nrules = [\"||tracker.example^\"]\n\n[[filter.list]]\npath = {:?}\n",
@@ -513,6 +521,35 @@ mod serving {
             "config rules stay"
         );
 
+        server.signal("TERM");
+        assert!(server.wait_for_exit().success());
+    }
+
+    /// Landlock keeps goethite to its own files: a local list that is a
+    /// link to a file elsewhere passes goethite's own check, and the kernel
+    /// refuses to open it.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_sandbox_keeps_goethite_to_its_files() {
+        let lists = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("sandbox-lists");
+        let _ = std::fs::remove_dir_all(&lists);
+        std::fs::create_dir_all(&lists).unwrap();
+        std::os::unix::fs::symlink("/etc/hostname", lists.join("escape.txt")).unwrap();
+        let extra = format!(
+            "\n[filter]\nlocal_lists_dir = {lists:?}\n\n[[filter.list]]\npath = {:?}\n",
+            lists.join("escape.txt").display().to_string()
+        );
+        let mut server = Running::start_with("sandbox", upstream(), &extra);
+        let sandbox = server.wait_for_log("Landlock");
+        // A kernel without Landlock has nothing more to show.
+        if !sandbox.contains("Landlock is not available") {
+            assert!(
+                sandbox.contains("sandboxed: Landlock limits files"),
+                "{sandbox}"
+            );
+            let refused = server.wait_for_log("cannot open filter list");
+            assert!(refused.contains("Permission denied"), "{refused}");
+        }
         server.signal("TERM");
         assert!(server.wait_for_exit().success());
     }

@@ -94,6 +94,12 @@ contents:
     type: dir
     file_info:
       mode: 0755
+  # Local lists: the only directory goethite reads lists given by a path
+  # from (the default local_lists_dir).
+  - dst: /etc/goethite/lists
+    type: dir
+    file_info:
+      mode: 0755
   - dst: /usr/share/doc/goethite
     type: dir
     file_info:
