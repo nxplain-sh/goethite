@@ -38,8 +38,9 @@ attested with GitHub's keyless Sigstore attestations.**
   tarball with the binary, the licences, README, changelog, example config and systemd units; a
   CycloneDX SBOM of the crates in the binary (cargo-cyclonedx, for that target); and one CycloneDX
   SBOM of the npm packages in the web UI. The binary also carries its dependency list in a
-  `.dep-v0` section (cargo-auditable), which `cargo audit bin` and other scanners read. npm's
-  random serial number is dropped and its timestamp set to the commit time, so the SBOMs are
+  `.dep-v0` section (cargo-auditable), which `cargo audit bin` and other scanners read. Each
+  SBOM's timestamp is the commit time and its serial number (random from npm, missing from
+  cargo-cyclonedx, required to attest it) a version 5 UUID of its contents, so the SBOMs are
   reproducible too. The web UI's SBOM covers every npm package that is not development-only,
   which is why the API reference (Scalar), whose bundle ships in the binary, is a runtime
   dependency of `web/`.
