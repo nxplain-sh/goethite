@@ -21,6 +21,16 @@ DIST=$(realpath "${1:?usage: install.sh path/to/dist}")
 ENGINE=${ENGINE:-docker}
 SYSTEMD=goethite-package-test
 
+# Every container runs on the packages' architecture, whatever a cached image
+# was pulled for.
+DEB=$(find "$DIST" -maxdepth 1 -name 'goethite_*.deb' | head -n 1)
+ARCH=${DEB##*_}
+ARCH=${ARCH%.deb}
+case "$ARCH" in
+    amd64 | arm64) PLATFORM=linux/$ARCH ;;
+    *) echo "no goethite_*_amd64.deb or goethite_*_arm64.deb in $DIST" >&2; exit 1 ;;
+esac
+
 DEB_IMAGES=(docker.io/library/debian:12 docker.io/library/ubuntu:22.04 docker.io/library/ubuntu:24.04)
 RPM_IMAGES=(docker.io/rockylinux/rockylinux:9 registry.fedoraproject.org/fedora:latest)
 
@@ -32,7 +42,7 @@ test -f /usr/lib/systemd/system/goethite-vrrp.service'
 
 for image in "${DEB_IMAGES[@]}"; do
     echo "== $image"
-    "$ENGINE" run --rm -v "$DIST:/dist:ro" "$image" sh -euc "
+    "$ENGINE" run --rm --platform "$PLATFORM" -v "$DIST:/dist:ro" "$image" sh -euc "
         apt-get update -qq
         apt-get install -y -qq /dist/goethite_*.deb >/dev/null
         $CHECK
@@ -42,7 +52,7 @@ done
 
 for image in "${RPM_IMAGES[@]}"; do
     echo "== $image"
-    "$ENGINE" run --rm -v "$DIST:/dist:ro" "$image" sh -euc "
+    "$ENGINE" run --rm --platform "$PLATFORM" -v "$DIST:/dist:ro" "$image" sh -euc "
         dnf install -y -q /dist/goethite-*.rpm >/dev/null
         $CHECK
         dnf remove -y -q goethite >/dev/null
@@ -53,7 +63,7 @@ echo "== debian:12 with systemd"
 cleanup() { "$ENGINE" rm -f "$SYSTEMD" >/dev/null 2>&1 || true; }
 cleanup
 trap cleanup EXIT
-"$ENGINE" run -d --name "$SYSTEMD" --privileged --cgroupns=private --tmpfs /run --tmpfs /run/lock \
+"$ENGINE" run -d --name "$SYSTEMD" --platform "$PLATFORM" --privileged --cgroupns=private --tmpfs /run --tmpfs /run/lock \
     -v "$DIST:/dist:ro" docker.io/library/debian:12 sh -c '
         apt-get update -qq &&
         apt-get install -y -qq systemd systemd-sysv bind9-dnsutils >/dev/null &&
