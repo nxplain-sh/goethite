@@ -263,7 +263,7 @@ fn checked(fd: OwnedFd, kind: Type, expected: SocketAddr) -> Result<OwnedFd> {
     unsafe_code,
     reason = "adopting descriptors systemd passes by number; see the SAFETY comment"
 )]
-pub fn take_systemd_fds() -> Vec<(String, OwnedFd)> {
+pub(crate) fn take_systemd_fds() -> Vec<(String, OwnedFd)> {
     use std::os::fd::FromRawFd as _;
 
     /// systemd's first passed descriptor (`SD_LISTEN_FDS_START`).

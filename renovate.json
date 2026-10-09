@@ -5,6 +5,7 @@
     "group:allNonMajor",
     "helpers:pinGitHubActionDigests"
   ],
+  "baseBranchPatterns": ["development"],
   "schedule": [
     "before 6am on monday"
   ],

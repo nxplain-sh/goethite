@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, development]
   pull_request:
   # Weekly, so new advisories against unchanged dependencies are noticed.
   schedule:
@@ -22,6 +22,25 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
+  # Work lands on development; main only takes pull requests from it. A
+  # required check, since a ruleset cannot restrict a pull request's source.
+  source-branch:
+    name: source branch
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Only development merges into main
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_REF: ${{ github.head_ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          if [ "$BASE_REF" = main ] && { [ "$HEAD_REF" != development ] || [ "$HEAD_REPO" != "$REPO" ]; }; then
+            echo "::error::Pull requests into main come from development. Retarget this one to development."
+            exit 1
+          fi
+
   fmt:
     name: rustfmt
     runs-on: ubuntu-24.04
