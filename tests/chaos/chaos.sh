@@ -11,6 +11,10 @@
 # The namespaces and the bridge are removed on exit; the logs stay in
 # /tmp/goethite-chaos.
 
+# pass, fail and note always return 0, so `check && pass ... || fail ...`
+# is an if-then-else here.
+# shellcheck disable=SC2015
+
 set -uo pipefail
 
 BIN=$(realpath "${1:?usage: chaos.sh path/to/goethite [scenario ...]}")
@@ -112,12 +116,12 @@ EOF
 }
 
 start_dns() {
-  ip netns exec "$1" "$BIN" run -c $W/$1/goethite.toml >> $W/$1/run.log 2>&1 &
-  echo $! > $W/$1/run.pid
+  ip netns exec "$1" "$BIN" run -c "$W/$1/goethite.toml" >> "$W/$1/run.log" 2>&1 &
+  echo $! > "$W/$1/run.pid"
 }
 start_helper() {
-  ip netns exec "$1" "$BIN" vrrp -c $W/$1/goethite.toml >> $W/$1/vrrp.log 2>&1 &
-  echo $! > $W/$1/vrrp.pid
+  ip netns exec "$1" "$BIN" vrrp -c "$W/$1/goethite.toml" >> "$W/$1/vrrp.log" 2>&1 &
+  echo $! > "$W/$1/vrrp.pid"
 }
 # The DNS server's process: after an upgrade, no longer the one started.
 dns_pid() { ip netns pids "$1" | while read -r pid; do
@@ -169,15 +173,15 @@ healthy_pair() {
 # load <name> <queries per second> <seconds>.
 load() {
   ip netns exec c dnsperf -s $VIP -d $W/queries.txt -Q "$2" -l "$3" -t 1 -c 4 \
-    > $W/$1.dnsperf 2>&1 &
-  echo $! > $W/$1.load
+    > "$W/$1.dnsperf" 2>&1 &
+  echo $! > "$W/$1.load"
 }
 # Waits for the load to finish (in this shell: dnsperf is its child), and
 # sets COMPLETED and LOST.
 finish_load() {
-  wait "$(cat $W/$1.load)" 2>/dev/null
-  COMPLETED=$(awk '/Queries completed:/ {print $3}' $W/$1.dnsperf)
-  LOST=$(awk '/Queries lost:/ {print $3}' $W/$1.dnsperf)
+  wait "$(cat "$W/$1.load")" 2>/dev/null
+  COMPLETED=$(awk '/Queries completed:/ {print $3}' "$W/$1.dnsperf")
+  LOST=$(awk '/Queries lost:/ {print $3}' "$W/$1.dnsperf")
   COMPLETED=${COMPLETED:-0} LOST=${LOST:-?}
   note "dnsperf: $COMPLETED completed, $LOST lost"
 }
@@ -343,7 +347,7 @@ expect "$(ask $VIP goethite.test)" 127.0.0.53 "the floating IP answers"
 expect "$(ask $VIP blocked.chaos.test)" 0.0.0.0 "and filters"
 sleep 1 # The query log writes in batches.
 names=$(api_body a "/api/v1/querylog?limit=1000" | grep -o '"name":"[^"]*"' | sort | uniq -c)
-note "query log names on a: $(echo $names)"
+note "query log names on a: $(tr -s ' \n' '  ' <<< "$names")"
 echo "$names" | grep -q '"goethite.test' && pass "the client's queries are in the query log" \
   || fail "the client's queries are not in the query log"
 echo "$names" | grep -q 'health.goethite.test' && fail "health checks are in the query log" \
