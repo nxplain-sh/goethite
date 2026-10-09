@@ -34,6 +34,10 @@ configuration format.
 
 ### Changed
 
+- **Fuzzing no longer runs in public CI**, where a crash it found would be public before its
+  fix: `cargo xtask fuzz` runs every target locally, as a release step, on a nightly pinned in
+  `fuzz/rust-toolchain.toml`, and CI only builds the targets
+  ([ADR 0028](docs/adr/0028-fuzzing-off-public-ci.md)).
 - The API reference's npm package (`@scalar/api-reference`) is a runtime dependency of the web UI
   rather than a development one: its bundle ships in the binary, so the web UI's SBOM and the
   licence notices now include it and the packages it bundles.

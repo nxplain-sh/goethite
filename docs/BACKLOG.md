@@ -170,9 +170,6 @@ Phase 3's scope shipped in v0.3.0. These items came up along the way.
 
 ## Phase 5: v0.5
 
-- **[P5] Private fuzzing before the first release.** The weekly fuzz job runs in the public
-  repository, so its findings are public. Move it to a private mirror or OSS-Fuzz (with private
-  bug reports) before goethite has users.
 - **[P5] Landlock and seccomp sandboxing.**
 
 ## Unscheduled / tooling
@@ -183,12 +180,11 @@ Phase 3's scope shipped in v0.3.0. These items came up along the way.
   much slower under goethite's multi-threaded load, so this needs another allocator (a new
   dependency) and a bench against the glibc build first (see ADR 0026).
 
-- **[later] Persist the fuzz corpus in CI** (cache or artifact) so weekly runs build on previous
-  coverage instead of starting from the seeds.
+- **[later] Continuous private fuzzing** (a private repository on a schedule, or OSS-Fuzz) once
+  goethite has users who would feel a regression between releases (ADR 0028).
 - **[later] CI canary job** on `beta` or the latest stable toolchain, to catch upcoming lint and
   compiler changes before an MSRV bump.
 - **[later] Site polish:** OG images, search tuning, a logo, and a richer landing page.
-- **[later] Pin the fuzzing nightly** to a dated toolchain so weekly fuzz runs are reproducible.
 - **[later] Lint workflows in CI** with actionlint and zizmor.
 - **[later] `multiple-versions = "deny"` in `deny.toml`** once the remaining duplicate
   (`syn`, through build-time dependencies) is gone.

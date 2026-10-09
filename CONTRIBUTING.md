@@ -85,7 +85,22 @@ it that way when you edit workflows.
 ## Fuzzing
 
 Every parser gets a fuzz target. Targets live in `fuzz/fuzz_targets/` and use
-[cargo-fuzz](https://github.com/rust-fuzz/cargo-fuzz) (libFuzzer, nightly only).
+[cargo-fuzz](https://github.com/rust-fuzz/cargo-fuzz) (libFuzzer) on the nightly pinned in
+`fuzz/rust-toolchain.toml`. Install the tools once:
+
+```sh
+rustup toolchain install "$(sed -n 's/^channel = "\(.*\)"$/\1/p' fuzz/rust-toolchain.toml)" --profile minimal
+cargo install --locked cargo-fuzz@0.13.2
+```
+
+Fuzzing runs on maintainers' machines, never in public CI, where a crash it found would be public
+before its fix ([ADR 0028](docs/adr/0028-fuzzing-off-public-ci.md)). `cargo xtask fuzz` runs
+every target for 5 minutes, or the ones named for as long as asked:
+
+```sh
+cargo xtask fuzz                                  # every target, 300 s each: a release step
+cargo xtask fuzz --seconds 60 decode-query        # one target, after changing its parser
+```
 
 | Target         | What it does                                                                                 |
 | -------------- | -------------------------------------------------------------------------------------------- |
@@ -101,39 +116,32 @@ Seeds are committed in `fuzz/seeds/<target>/`, and `crates/goethite-proto/tests/
 checks that each one still behaves the way its name says. The working corpus (`fuzz/corpus/`) and
 crash artifacts (`fuzz/artifacts/`) are gitignored, so create the corpus directory first.
 
-Run a target for 60 seconds, writing new inputs to the working corpus and reading the seeds:
+`cargo xtask fuzz` keeps each target's corpus in `fuzz/corpus/<target>`, so runs build on each
+other. cargo-fuzz itself works too, with the pinned nightly; inside `fuzz/`, rustup picks it, and
+`cargo fuzz list` names the targets. Reproduce and minimize a crash:
 
 ```sh
-mkdir -p fuzz/corpus/decode-query
-cargo +nightly fuzz run decode-query fuzz/corpus/decode-query fuzz/seeds/decode-query -- -max_total_time=60
-```
-
-The same commands work for every target; `cargo +nightly fuzz list` names them.
-
-Reproduce and minimize a crash:
-
-```sh
-cargo +nightly fuzz run decode-query fuzz/artifacts/decode-query/<crash-file>
-cargo +nightly fuzz tmin decode-query fuzz/artifacts/decode-query/<crash-file>
+cd fuzz
+cargo fuzz run decode-query artifacts/decode-query/<crash-file>
+cargo fuzz tmin decode-query artifacts/decode-query/<crash-file>
 ```
 
 Every fixed crash gets a regression unit test in `goethite-proto` with the minimized input.
 
-CI runs each target weekly (and on manual dispatch) for 5 minutes and uploads any crash artifacts,
-kept for 7 days. The repository is public, so a crash found by CI is public from that moment: while
-goethite is pre-alpha with no releases we accept that. Before the first release, fuzzing moves to
-a private setup (see [`docs/BACKLOG.md`](docs/BACKLOG.md)). If you find a crash locally, report it
-privately as described in [`SECURITY.md`](SECURITY.md).
+CI only checks that every target builds (`.github/workflows/fuzz.yaml`). If you find a crash,
+report it privately as described in [`SECURITY.md`](SECURITY.md); do not open a public issue or
+pull request with the input.
 
 ### Adding a fuzz target
 
-1. `cargo +nightly fuzz add <name>` from the repo root, or copy an existing target in
-   `fuzz/fuzz_targets/`. Names are kebab-case (`parse-thing`): Cargo warns about other binary
-   names.
+1. `cargo fuzz add <name>` inside `fuzz/` (rustup picks the pinned nightly there), or copy an
+   existing target in `fuzz/fuzz_targets/`. Names are kebab-case (`parse-thing`): Cargo warns
+   about other binary names.
 2. Fuzz the public parsing entry point, not internals. Where possible, check a property (such as
    decode, encode, decode round-tripping), not just "does not crash".
 3. Add a few small, valid seed inputs under `fuzz/seeds/<name>/`.
-4. Add the target to the weekly fuzz workflow and to the table above.
+4. Add the target to the table above. `cargo xtask fuzz` and the fuzz workflow find it on
+   their own.
 
 ## Changing the API
 
@@ -263,8 +271,10 @@ machine's architecture locally, the same way (it needs docker or podman). To rel
 2. In `CHANGELOG.md`, turn `[Unreleased]` into `## [X.Y.Z] - <date>`, add a new empty
    `[Unreleased]` above it, and update the compare links at the bottom. The release notes are
    taken from this section.
-3. Open the pull request from `development` to `main` and merge it once CI passes.
-4. Tag the merge commit on `main` and push the tag:
+3. Fuzz every target: `cargo xtask fuzz` (about 90 minutes, on a machine that does not sleep).
+   A finding is fixed privately first (see [`SECURITY.md`](SECURITY.md)).
+4. Open the pull request from `development` to `main` and merge it once CI passes.
+5. Tag the merge commit on `main` and push the tag:
 
    ```sh
    git switch main && git pull
@@ -272,11 +282,11 @@ machine's architecture locally, the same way (it needs docker or podman). To rel
    git push origin vX.Y.Z
    ```
 
-5. The workflow builds both architectures twice, fails unless the builds match, refuses a tag
+6. The workflow builds both architectures twice, fails unless the builds match, refuses a tag
    that is not on `main` or does not match the version, then attests the files and drafts the
    GitHub Release. Check the draft (`gh attestation verify` on a downloaded tarball, see
    [Verifying releases](site/src/content/docs/verify.md)) and publish it.
-6. Publishing runs [`.github/workflows/image.yaml`](.github/workflows/image.yaml), which checks
+7. Publishing runs [`.github/workflows/image.yaml`](.github/workflows/image.yaml), which checks
    the published tarballs, then builds, pushes and attests `ghcr.io/nxplain-sh/goethite`.
    `cargo xtask image` builds the same image locally from `target/dist`, as an OCI archive.
 
