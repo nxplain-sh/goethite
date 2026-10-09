@@ -80,4 +80,5 @@ attested with GitHub's keyless Sigstore attestations.**
 - Releases depend on GitHub (Actions, the attestation store) and Sigstore's public good instance.
   Verifying needs `gh` or another Sigstore client; `SHA256SUMS` alone only shows a download is
   complete.
-- Packages (.deb, .rpm) and a container image are built from these tarballs (Phase 5, M2).
+- The .deb and .rpm packages and the container image come from the same build
+  ([ADR 0027](0027-packages-and-container-image.md)).

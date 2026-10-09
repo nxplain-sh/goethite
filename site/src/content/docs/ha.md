@@ -176,13 +176,13 @@ On `dns2`, the same with `peer = "192.0.2.11"` and a lower priority, such as `10
 listens on the floating IP even while the other node holds it, and answers on it as soon as it
 arrives. All the settings are in the [configuration reference](../configuration/#vrrp).
 
-Then install `goethite-vrrp.service` beside `goethite.service` on both nodes. It is in a
-release's `systemd/` directory, and in
+Then start `goethite-vrrp.service` beside `goethite.service` on both nodes. The packages install
+it; from a tarball, install it from the `systemd/` directory first (it is in
 [`deploy/systemd/`](https://github.com/nxplain-sh/goethite/blob/main/deploy/systemd/goethite-vrrp.service)
-in the repository:
+in the repository):
 
 ```sh
-sudo install -m 0644 systemd/goethite-vrrp.service /etc/systemd/system/
+sudo install -m 0644 systemd/goethite-vrrp.service /etc/systemd/system/   # tarball only
 sudo systemctl daemon-reload
 sudo systemctl restart goethite
 sudo systemctl enable --now goethite-vrrp

@@ -273,6 +273,9 @@ machine's architecture locally, the same way (it needs docker or podman). To rel
    that is not on `main` or does not match the version, then attests the files and drafts the
    GitHub Release. Check the draft (`gh attestation verify` on a downloaded tarball, see
    [Verifying releases](site/src/content/docs/verify.md)) and publish it.
+6. Publishing runs [`.github/workflows/image.yaml`](.github/workflows/image.yaml), which checks
+   the published tarballs, then builds, pushes and attests `ghcr.io/nxplain-sh/goethite`.
+   `cargo xtask image` builds the same image locally from `target/dist`, as an OCI archive.
 
 ## Repository settings (maintainers)
 
@@ -289,6 +292,8 @@ One-time settings on `nxplain-sh/goethite` that the repository cannot set itself
 - **GitHub Pages:** Settings → Pages → Build and deployment → Source: **GitHub Actions**
   (or `gh api -X POST repos/nxplain-sh/goethite/pages -f build_type=workflow`). Without it the
   deploy job in `pages.yaml` fails.
+- **Container package:** after the first image push, make `ghcr.io/nxplain-sh/goethite`
+  public (the organisation's Packages → goethite → Package settings → Change visibility).
 - **Private vulnerability reporting:** Settings → Code security → Private vulnerability
   reporting → Enable (or `gh api -X PUT repos/nxplain-sh/goethite/private-vulnerability-reporting`).
   [`SECURITY.md`](SECURITY.md) relies on it.

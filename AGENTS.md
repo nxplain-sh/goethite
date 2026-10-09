@@ -44,7 +44,8 @@ site/                 project website + docs (Astro Starlight), deployed to GitH
 fuzz/                 cargo-fuzz targets (own nightly workspace)
 bench/                dnsperf script + recorded results; criterion benches live in crates/*/benches/
 tests/chaos/          chaos lab: two nodes and a client in network namespaces
-deploy/               hardened systemd units
+tests/packages/       installs the .deb and .rpm on each supported distribution
+deploy/               hardened systemd units, server config, package and container image definitions
 config/               example config
 docs/                 architecture, threat model, ADRs
 ```
