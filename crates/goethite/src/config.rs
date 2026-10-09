@@ -80,15 +80,22 @@ pub(crate) struct Config {
     pub dir: PathBuf,
 }
 
-/// The `[cluster]` table: this node's place in a two-node cluster.
+/// The `[cluster]` table: this node's place in a cluster.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ClusterSection {
     /// This node's name, as in its certificate.
     pub node: NodeId,
-    /// Its role when it starts.
-    pub role: Role,
-    /// Where it listens for its peer.
+    /// Whether to start a new cluster on this node, with its configuration,
+    /// while it is in none. On one node only.
+    #[serde(default)]
+    pub bootstrap: bool,
+    /// goethite 0.4's role: `primary` starts the cluster, as `bootstrap`
+    /// does; `replica` waits to be added to it.
+    #[serde(default)]
+    pub role: Option<Role>,
+    /// Where it listens for the other members; also the address it gives
+    /// them when it starts a cluster.
     #[serde(default = "default_cluster_listen")]
     pub listen: SocketAddr,
     /// The cluster's CA certificate (PEM), from `goethite cluster init`.
@@ -97,19 +104,26 @@ pub(crate) struct ClusterSection {
     pub cert: PathBuf,
     /// This node's private key (PEM).
     pub key: PathBuf,
-    /// The other node.
-    pub peer: PeerSection,
+    /// The other members: `[[cluster.member]]` tables.
+    #[serde(default, rename = "member")]
+    pub members: Vec<MemberSection>,
+    /// goethite 0.4's one other member, as `[[cluster.member]]`.
+    #[serde(default)]
+    pub peer: Option<MemberSection>,
 }
 
-/// The `[cluster.peer]` table.
+/// A `[[cluster.member]]` table, or goethite 0.4's `[cluster.peer]`.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct PeerSection {
-    /// The peer's name, as in its certificate.
+pub(crate) struct MemberSection {
+    /// Its name, as in its certificate.
     pub node: NodeId,
-    /// The peer's cluster listener.
+    /// Its cluster listener.
     pub address: SocketAddr,
 }
+
+/// The most other members a cluster may list.
+const MAX_MEMBERS: usize = 15;
 
 fn default_cluster_listen() -> SocketAddr {
     SocketAddr::from((Ipv4Addr::UNSPECIFIED, 8054))
@@ -117,13 +131,52 @@ fn default_cluster_listen() -> SocketAddr {
 
 impl ClusterSection {
     fn validate(&self) -> Result<()> {
-        if self.node == self.peer.node {
-            bail!(
-                "cluster.peer.node must name the other node, not {}",
-                self.node
-            );
+        if self.bootstrap && self.role == Some(Role::Replica) {
+            bail!("cluster.bootstrap and role = \"replica\" contradict each other: drop role");
+        }
+        let members: Vec<&MemberSection> = self.members().collect();
+        if members.len() > MAX_MEMBERS {
+            bail!("a cluster may list at most {MAX_MEMBERS} other members");
+        }
+        let mut ids = std::collections::HashMap::new();
+        ids.insert(goethite_cluster::raft::raft_id(&self.node), &self.node);
+        for member in members {
+            if member.node == self.node {
+                bail!(
+                    "cluster.member lists this node, {}: list only the other members",
+                    self.node
+                );
+            }
+            if let Some(other) =
+                ids.insert(goethite_cluster::raft::raft_id(&member.node), &member.node)
+            {
+                if *other == member.node {
+                    bail!("cluster.member lists {} twice", member.node);
+                }
+                bail!(
+                    "the node names {other} and {} cannot be told apart in the cluster: rename one",
+                    member.node
+                );
+            }
         }
         Ok(())
+    }
+
+    /// The other members: `[[cluster.member]]` and `[cluster.peer]`.
+    pub(crate) fn members(&self) -> impl Iterator<Item = &MemberSection> {
+        self.members.iter().chain(&self.peer)
+    }
+
+    /// Whether this node starts the cluster, given the role goethite 0.4
+    /// kept in the store after promote or demote (`stored`, and the config
+    /// file's role then, `stored_base`): that one wins until the config
+    /// file's role changes.
+    pub(crate) fn bootstraps(&self, stored: Option<Role>, stored_base: Option<Role>) -> bool {
+        let role = match (stored, stored_base, self.role) {
+            (Some(stored), Some(base), Some(configured)) if base == configured => Some(stored),
+            _ => self.role,
+        };
+        self.bootstrap || role == Some(Role::Primary)
     }
 
     fn resolve_paths(&mut self, base: &Path) {
@@ -1295,6 +1348,20 @@ impl RateLimitSection {
 impl Config {
     /// Reads and parses the configuration file at `path`.
     pub(crate) fn load(path: &Path) -> Result<Self> {
+        Self::load_for(path, true)
+    }
+
+    /// Loads the config file of a witness (`goethite witness`), which
+    /// resolves nothing and so needs no upstreams.
+    ///
+    /// # Errors
+    ///
+    /// As [`Config::load`].
+    pub(crate) fn load_witness(path: &Path) -> Result<Self> {
+        Self::load_for(path, false)
+    }
+
+    fn load_for(path: &Path, resolves: bool) -> Result<Self> {
         let file = File::open(path)
             .with_context(|| format!("cannot open config file {}", path.display()))?;
         let limit = u64::try_from(MAX_CONFIG_LEN)?.saturating_add(1);
@@ -1312,7 +1379,7 @@ impl Config {
         let config = Self::parse(&text)
             .with_context(|| format!("invalid config file {}", path.display()))?;
         match (config.upstream.is_empty(), config.recursion.enabled) {
-            (true, false) => bail!(
+            (true, false) if resolves => bail!(
                 "no upstream resolvers configured in {}: add at least one [[upstream]] table, \
                  for example\n\n[[upstream]]\naddress = \"9.9.9.9\"\n\nor resolve from the \
                  root servers yourself:\n\n[recursion]\nenabled = true",
@@ -1467,6 +1534,55 @@ mod tests {
             }
         );
         assert!(config.upstream.iter().all(|u| u.validate().is_ok()));
+    }
+
+    #[test]
+    fn cluster_members() {
+        let cluster = |text: &str| {
+            let config = Config::parse(&format!(
+                "[cluster]\nnode = \"dns1\"\nca = \"ca.crt\"\ncert = \"dns1.crt\"\nkey = \"dns1.key\"\n{text}"
+            ))
+            .unwrap();
+            config.cluster.unwrap()
+        };
+        let three = cluster(
+            "bootstrap = true\n[[cluster.member]]\nnode = \"dns2\"\naddress = \"192.0.2.12:8054\"\n\
+             [[cluster.member]]\nnode = \"witness\"\naddress = \"192.0.2.13:8054\"\n",
+        );
+        three.validate().unwrap();
+        assert_eq!(three.members().count(), 2);
+        assert!(three.bootstraps(None, None));
+
+        // goethite 0.4's tables still work: the primary starts the cluster.
+        let legacy = cluster(
+            "role = \"primary\"\n[cluster.peer]\nnode = \"dns2\"\naddress = \"192.0.2.12:8054\"\n",
+        );
+        legacy.validate().unwrap();
+        assert_eq!(legacy.members().next().unwrap().node.as_str(), "dns2");
+        assert!(legacy.bootstraps(None, None));
+        // Unless promote and demote changed the role since.
+        assert!(!legacy.bootstraps(Some(Role::Replica), Some(Role::Primary)));
+        let replica = cluster("role = \"replica\"\n");
+        assert!(!replica.bootstraps(None, None));
+        assert!(replica.bootstraps(Some(Role::Primary), Some(Role::Replica)));
+        // ...until the config file's role changes.
+        assert!(!replica.bootstraps(Some(Role::Primary), Some(Role::Primary)));
+
+        for (text, problem) in [
+            (
+                "[[cluster.member]]\nnode = \"dns1\"\naddress = \"192.0.2.11:8054\"\n",
+                "lists this node",
+            ),
+            (
+                "[[cluster.member]]\nnode = \"dns2\"\naddress = \"192.0.2.12:8054\"\n\
+                 [cluster.peer]\nnode = \"dns2\"\naddress = \"192.0.2.12:8054\"\n",
+                "twice",
+            ),
+            ("bootstrap = true\nrole = \"replica\"\n", "contradict"),
+        ] {
+            let err = cluster(text).validate().unwrap_err().to_string();
+            assert!(err.contains(problem), "{text}: {err}");
+        }
     }
 
     #[test]

@@ -233,19 +233,25 @@ web_ui = true
 docs = false
 
 # [cluster]
-# Two goethite nodes sharing one configuration: the primary owns it, the
-# replica copies it over mutual TLS. Create the certificates with
-# `goethite cluster init` and `goethite cluster cert <node>`.
+# goethite nodes sharing one configuration: they agree on every change with
+# Raft, over mutual TLS. Two nodes and a witness (`goethite witness`, which
+# only votes) keep working when any one of them is lost. Create the
+# certificates with `goethite cluster init` and `goethite cluster cert <node>`.
 # node = "dns1"
-# role = "primary"            # or "replica"
-# listen = "0.0.0.0:8054"
+# bootstrap = true            # on one node only: start the cluster here
+# listen = "192.0.2.11:8054"  # also the address the others reach it on
 # ca = "/etc/goethite/cluster/ca.crt"
 # cert = "/etc/goethite/cluster/dns1.crt"
 # key = "/etc/goethite/cluster/dns1.key"
 #
-# [cluster.peer]
+# The other members, one table each.
+# [[cluster.member]]
 # node = "dns2"
 # address = "192.0.2.12:8054"
+#
+# [[cluster.member]]
+# node = "witness"
+# address = "192.0.2.13:8054"
 
 # [vrrp]
 # A floating IP: clients use this one address for DNS, and whichever node

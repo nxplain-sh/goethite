@@ -432,28 +432,14 @@ function Filter({ status, names }: { status: Status; names: Map<string, string> 
 }
 
 function ClusterPanel({ cluster }: { cluster: ClusterStatus }) {
-	const { peer } = cluster
 	return (
 		<Panel title="Cluster">
 			<table className="table">
 				<tbody>
 					<tr>
-						<td>This node</td>
+						<td>Leader</td>
 						<td className="name">
-							{cluster.node} <span className="badge">{cluster.role.toUpperCase()}</span>
-						</td>
-					</tr>
-					<tr>
-						<td>Peer</td>
-						<td className="name">
-							{peer.node}{' '}
-							{peer.reachable ? (
-								<span className="badge ok">UP</span>
-							) : (
-								<span className="badge blocked">DOWN</span>
-							)}
-							{peer.role ? <span className="muted"> {peer.role}</span> : null}
-							{peer.error ? <div className="muted">{peer.error}</div> : null}
+							{cluster.leader ?? <span className="badge blocked">NONE</span>}
 						</td>
 					</tr>
 					<tr>
@@ -466,9 +452,30 @@ function ClusterPanel({ cluster }: { cluster: ClusterStatus }) {
 							)}
 						</td>
 					</tr>
+					{(cluster.members ?? []).map((member) => (
+						<tr key={member.node}>
+							<td className="name">
+								{member.node}
+								{member.this_node ? <span className="muted"> (this node)</span> : null}
+							</td>
+							<td>
+								{member.reachable ? (
+									<span className="badge ok">UP</span>
+								) : (
+									<span className="badge blocked">DOWN</span>
+								)}{' '}
+								{member.state ? <span className="badge">{member.state.toUpperCase()}</span> : null}{' '}
+								{member.witness ? <span className="badge">WITNESS</span> : null}{' '}
+								<span className="muted">
+									{member.membership === 'configured' ? 'not in the cluster yet' : member.membership}
+								</span>
+								{member.error ? <div className="muted">{member.error}</div> : null}
+							</td>
+						</tr>
+					))}
 					{cluster.sync?.last_copy ? (
 						<tr>
-							<td>Last copy</td>
+							<td>Last change</td>
 							<td className="name">{dateTime(cluster.sync.last_copy)}</td>
 						</tr>
 					) : null}

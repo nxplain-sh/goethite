@@ -33,7 +33,7 @@ crates/
   goethite-filter/    rule parsing (hosts, domain lists, AdGuard syntax) + FST/Bloom compiler
   goethite-resolver/  cache, forwarding, upstream pool, (later) recursion + DNSSEC
   goethite-server/    listeners: UDP/TCP 53, DoT, DoH, DoQ; SO_REUSEPORT, per-core sockets
-  goethite-cluster/   config sync, VRRP, (later) Raft via openraft
+  goethite-cluster/   Raft (openraft) for the config, the witness, VRRP
   goethite-api/       axum REST API, /api/v1, OpenAPI via utoipa
   goethite-store/     embedded storage (redb) for query log, stats, config
   goethite-tui/       ratatui client that talks to the API

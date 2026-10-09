@@ -21,6 +21,7 @@ mod services;
 mod sizes;
 mod sockets;
 mod vrrp;
+mod witness;
 
 use std::future::Future;
 use std::io::IsTerminal;
@@ -28,7 +29,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use arc_swap::ArcSwapOption;
 use clap::{Parser, Subcommand};
 use goethite_api::leak::LeakTests;
@@ -92,7 +93,7 @@ enum Command {
     Token,
     /// Print the API's OpenAPI document.
     Openapi,
-    /// Create the certificates a cluster's nodes use to recognize each
+    /// Create the certificates a cluster's members use to recognize each
     /// other.
     Cluster {
         #[command(subcommand)]
@@ -103,6 +104,14 @@ enum Command {
     /// (Linux), until SIGINT or SIGTERM.
     Vrrp {
         /// Path to the TOML configuration file.
+        #[arg(long, short, value_name = "PATH")]
+        config: PathBuf,
+    },
+    /// Vote in a cluster without serving DNS: a third member for two
+    /// goethite nodes, so the cluster can elect a new leader when either
+    /// is lost. Runs until SIGINT or SIGTERM.
+    Witness {
+        /// Path to the TOML configuration file, with a `[cluster]` table.
         #[arg(long, short, value_name = "PATH")]
         config: PathBuf,
     },
@@ -205,6 +214,7 @@ fn main() -> ExitCode {
         Command::CheckConfig { config } => check_config(&config),
         Command::Import { config } => import(&config),
         Command::Vrrp { config } => vrrp::run(&config),
+        Command::Witness { config } => witness::run(&config),
         Command::Token => token(),
         Command::Openapi => print(&goethite_api::openapi_json()),
         Command::Cluster { command } => match command {
@@ -942,6 +952,12 @@ fn add_default_lists(store: &Store) -> Result<()> {
 fn import(config_path: &Path) -> Result<()> {
     let config = Config::load(config_path)?;
     let store = open_store(&config)?;
+    if store.cluster_value("id")?.is_some() {
+        bail!(
+            "this node is in a cluster, whose configuration every member keeps alike: change it \
+             through the API of any member (or Terraform), not with goethite import"
+        );
+    }
     let import = config.filter.to_import();
     let print = fingerprint(&import)?;
     let summary = store.import(import, &Actor::cli())?;

@@ -125,7 +125,7 @@ api http://127.0.0.1:8053/api/v1/leak-tests              # every test of the las
 ```
 
 Tests are kept in memory on the node that made them for an hour, and are not configuration: a
-replica does not forward them to the primary, and the audit log does not list them.
+cluster member does not forward them to the leader, and the audit log does not list them.
 
 ## Query log and statistics
 

@@ -16,8 +16,8 @@ mod store;
 pub use model::{
     AccessSpec, BlockResponseKind, BlockedService, Client, ClientSpec, ConfigSnapshot,
     DEFAULT_GROUP, Group, GroupList, GroupSpec, List, ListSpec, ManagedBy, Record, RecordKind,
-    RecordSpec, Rule, RuleSpec, Schedule, ScheduleSpec, Settings, SettingsSpec, ValidationError,
-    Weekday, Window,
+    RecordSpec, Resource, Rule, RuleSpec, Schedule, ScheduleSpec, Settings, SettingsSpec,
+    ValidationError, Weekday, Window,
 };
 pub use querylog::{
     LogEvent, LogUpstream, NameBuf, Protocol, QueryEntry, QueryLog, QueryLogConfig, QueryOutcome,
@@ -25,6 +25,7 @@ pub use querylog::{
 };
 pub use stats::{Counters, HourPoint, StatsReport, TopEntry};
 pub use store::{
-    Actor, ActorKind, AuditAction, AuditEntry, ConfigExport, ConfigVersion, Import, ImportSummary,
-    Kind, MAX_AUDIT_ENTRIES, ReplaceSummary, Store, StoreError,
+    Actor, ActorKind, Applied, AuditAction, AuditEntry, Change, Command, ConfigExport,
+    ConfigVersion, Import, ImportSummary, Kind, MAX_AUDIT_ENTRIES, ReplaceSummary, Replicator,
+    Seed, Store, StoreError,
 };

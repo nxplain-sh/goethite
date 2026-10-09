@@ -50,6 +50,8 @@ contents:
     dst: /usr/lib/systemd/system/goethite.service
   - src: deploy/systemd/goethite-vrrp.service
     dst: /usr/lib/systemd/system/goethite-vrrp.service
+  - src: deploy/systemd/goethite-witness.service
+    dst: /usr/lib/systemd/system/goethite-witness.service
 
   # Kept as edited on upgrade; a new version of it lands beside it
   # (.dpkg-dist or .rpmnew) for comparison.

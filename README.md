@@ -77,7 +77,7 @@ cd web && npm ci --ignore-scripts && npm run build
 | `crates/goethite-filter`    | Rule parsing (hosts, domain lists, AdGuard syntax) and FST/Bloom compiler |
 | `crates/goethite-resolver`  | Cache, forwarding, recursion with DNSSEC validation                     |
 | `crates/goethite-server`    | Listeners: UDP, TCP, DoT, DoH, DoQ; the Oblivious DoH target            |
-| `crates/goethite-cluster`   | Config sync and VRRP; later Raft                                        |
+| `crates/goethite-cluster`   | Raft for the config (openraft), the witness, and VRRP                   |
 | `crates/goethite-api`       | REST API (`/api/v1`) with OpenAPI                                       |
 | `crates/goethite-store`     | Embedded storage for query log, stats and config                        |
 | `crates/goethite-tui`       | Terminal UI that talks to the API                                       |

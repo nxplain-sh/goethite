@@ -1,7 +1,9 @@
 # Chaos tests
 
 `chaos.sh` builds a two-node goethite cluster with a floating IP, and a client, in Linux network
-namespaces on one bridge, then breaks things while the client queries the floating IP:
+namespaces on one bridge, then breaks things while the client queries the floating IP. The nodes
+use goethite 0.4's `[cluster]` tables, so `a` (the primary) starts the cluster as its only voter
+and leader, and `b` (the replica) follows it as a learner:
 
 | Scenario | What breaks | What must hold |
 | --- | --- | --- |

@@ -85,8 +85,8 @@ impl ApiError {
         )
     }
 
-    /// 503: not possible right now, such as a configuration change on a
-    /// replica that cannot reach the primary.
+    /// 503: not possible right now, such as a configuration change while
+    /// the cluster has no leader.
     pub fn unavailable(message: impl Into<String>) -> Self {
         Self::new(StatusCode::SERVICE_UNAVAILABLE, "unavailable", message)
     }
@@ -118,7 +118,10 @@ impl From<StoreError> for ApiError {
                 "revision_mismatch",
                 message,
             ),
-            StoreError::Locked(_) => {
+            StoreError::Locked(_)
+            | StoreError::Unavailable(_)
+            | StoreError::Incompatible(_)
+            | StoreError::Schema { .. } => {
                 Self::new(StatusCode::SERVICE_UNAVAILABLE, "unavailable", message)
             }
             _ => Self::internal(message),

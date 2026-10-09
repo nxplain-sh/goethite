@@ -132,11 +132,13 @@ jobs:
             2>&1 | tee "$RUNNER_TEMP/root-tests.txt"
           sudo chown -R "$(id -u):$(id -g)" target
           grep -q "test result: ok. 1 passed" "$RUNNER_TEMP/root-tests.txt"
-      - name: Check the systemd unit
+      - name: Check the systemd units
         run: |
-          sed "s|/usr/bin/goethite|$PWD/target/debug/goethite|" deploy/systemd/goethite.service \
-            > "$RUNNER_TEMP/goethite.service"
-          systemd-analyze verify "$RUNNER_TEMP/goethite.service"
+          for unit in goethite goethite-witness; do
+            sed "s|/usr/bin/goethite|$PWD/target/debug/goethite|" "deploy/systemd/$unit.service" \
+              > "$RUNNER_TEMP/$unit.service"
+            systemd-analyze verify "$RUNNER_TEMP/$unit.service"
+          done
 
   # Breaking changes to /api/v1 fail a pull request unless it carries the
   # `api-breaking` label. The committed openapi.json is checked against the

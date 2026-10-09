@@ -57,6 +57,9 @@ http-body-util = "0.1.5"
 hyper = { version = "1.12.0", default-features = false, features = ["client", "http1", "http2"] }
 hyper-util = { version = "0.1.21", default-features = false, features = ["tokio"] }
 jiff = { version = "0.2.38", features = ["serde"] }
+# Raft for the cluster's configuration (ADR 0031). 0.9 is the stable line; storage-v2
+# lets goethite keep the log and the state machine in its own store.
+openraft = { version = "=0.9.25", default-features = false, features = ["serde", "storage-v2"] }
 proptest = "1.11.0"
 quinn = { version = "0.11.12", default-features = false, features = ["runtime-tokio", "rustls-ring"] }
 ratatui = { version = "0.30.2", default-features = false, features = ["crossterm_0_29", "layout-cache"] }
