@@ -1,6 +1,20 @@
-# Stable rustfmt options only: the toolchain is pinned to stable.
+# rustfmt's defaults are the Rust Style Guide; stable options only. Each
+# option below was checked with `cargo fmt --check`: say what it does when
+# adding one, and remove it if the output does not change. (`style_edition`
+# is not set: it follows `edition`.)
+
+# Restates Cargo.toml for a bare `rustfmt` from an editor, which would
+# otherwise parse as edition 2015. `cargo fmt` passes the edition itself.
 edition = "2024"
-style_edition = "2024"
+
+# Override (default "Auto", which keeps whatever line ending a file has):
+# write LF everywhere, as .gitattributes stores it.
 newline_style = "Unix"
+
+# Override (default false): rewrite `Foo { a: a }` as `Foo { a }`.
 use_field_init_shorthand = true
+
+# Override (default false). `try!` cannot appear in edition 2024, but the
+# option still changes how rustfmt lays out closures in method chains:
+# removing it reformats existing code.
 use_try_shorthand = true
