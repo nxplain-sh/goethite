@@ -99,6 +99,32 @@ test('adds, filters, turns off and deletes custom rules', async ({ page }) => {
 	}
 })
 
+test('adds, edits and deletes local records', async ({ page }) => {
+	await page.getByRole('link', { name: 'Records', exact: true }).click()
+	await page.getByLabel('Name', { exact: true }).fill('e2e-nas.lan')
+	await page.getByLabel('Value', { exact: true }).fill('192.168.1.10')
+	await page.getByRole('button', { name: 'Add', exact: true }).click()
+	const row = page.getByRole('row').filter({ hasText: 'e2e-nas.lan' })
+	await expect(row).toContainText('192.168.1.10')
+
+	// The wrong kind of value is refused, with its reason.
+	await page.getByLabel('Name', { exact: true }).fill('e2e-tv.lan')
+	await page.getByRole('combobox').selectOption('AAAA')
+	await page.getByLabel('Value', { exact: true }).fill('192.168.1.11')
+	await page.getByRole('button', { name: 'Add', exact: true }).click()
+	await expect(page.getByRole('alert')).toContainText('IPv6')
+
+	await row.getByRole('link', { name: 'e2e-nas.lan' }).click()
+	await page.getByLabel('Value').fill('192.168.1.12')
+	await page.getByRole('button', { name: 'Save' }).click()
+	await expect(page.getByRole('row').filter({ hasText: 'e2e-nas.lan' })).toContainText('192.168.1.12')
+
+	const target = page.getByRole('row').filter({ hasText: 'e2e-nas.lan' })
+	await target.getByRole('button', { name: 'Delete', exact: true }).click()
+	await target.getByRole('button', { name: 'Delete this record' }).click()
+	await expect(target).toHaveCount(0)
+})
+
 test('puts a client in a group that uses a list during a schedule', async ({ page, request }) => {
 	const list = await apiCall(request, 'POST', '/api/v1/lists', {
 		name: 'E2E social',

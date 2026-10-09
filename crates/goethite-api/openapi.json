@@ -1660,6 +1660,313 @@
         ]
       }
     },
+    "/api/v1/records": {
+      "get": {
+        "tags": [
+          "records"
+        ],
+        "summary": "Lists all local DNS records, oldest first.",
+        "operationId": "list_records",
+        "responses": {
+          "200": {
+            "description": "All of them, oldest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Record"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid admin token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "records"
+        ],
+        "summary": "Creates a local DNS record.",
+        "operationId": "create_record",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordSpec"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Record"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "It refers to something that does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "It is not valid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/records/{id}": {
+      "get": {
+        "tags": [
+          "records"
+        ],
+        "summary": "Gets one local DNS record.",
+        "operationId": "get_record",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "It, with its revision as the ETag",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Record"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such ID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "records"
+        ],
+        "summary": "Replaces a local DNS record's spec.",
+        "operationId": "update_record",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "The revision the change is based on",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordSpec"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Record"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such ID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "It refers to something that does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "It changed since that revision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "It is not valid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "records"
+        ],
+        "summary": "Deletes a local DNS record.",
+        "operationId": "delete_record",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "The revision the deletion is based on",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "404": {
+            "description": "No such ID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Something still refers to it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "It changed since that revision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      }
+    },
     "/api/v1/rules": {
       "get": {
         "tags": [
@@ -4035,6 +4342,94 @@
           }
         }
       },
+      "Record": {
+        "type": "object",
+        "description": "A stored local DNS record.",
+        "required": [
+          "id",
+          "revision",
+          "created_at",
+          "updated_at",
+          "spec"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it was created."
+          },
+          "id": {
+            "type": "string",
+            "description": "The ID, chosen by goethite."
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Counts updates, starting at 1.",
+            "minimum": 0
+          },
+          "spec": {
+            "$ref": "#/components/schemas/RecordSpec",
+            "description": "What it is."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it last changed."
+          }
+        }
+      },
+      "RecordKind": {
+        "type": "string",
+        "description": "The type of a local DNS record.",
+        "enum": [
+          "A",
+          "AAAA",
+          "CNAME"
+        ]
+      },
+      "RecordSpec": {
+        "type": "object",
+        "description": "A DNS record goethite answers itself, for every client and before the\nfilter: a device on the local network such as `nas.lan`, or every name\nbelow one (`*.home.example`). A name with records answers only from\nthem; a CNAME's target is resolved like any other name.",
+        "required": [
+          "name",
+          "type",
+          "value"
+        ],
+        "properties": {
+          "comment": {
+            "type": "string",
+            "description": "Free text."
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether the record is answered."
+          },
+          "managed_by": {
+            "$ref": "#/components/schemas/ManagedBy",
+            "description": "Who manages the record."
+          },
+          "name": {
+            "type": "string",
+            "description": "The name, such as `nas.lan`, or `*.home.example` for every name below\n`home.example` (not that name itself)."
+          },
+          "ttl": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How long clients may cache it, in seconds, at most 86,400.",
+            "minimum": 0
+          },
+          "type": {
+            "$ref": "#/components/schemas/RecordKind",
+            "description": "What the record holds."
+          },
+          "value": {
+            "type": "string",
+            "description": "An IPv4 address for `A`, an IPv6 address for `AAAA`, a name for\n`CNAME`."
+          }
+        },
+        "additionalProperties": false
+      },
       "RecursionStatus": {
         "type": "object",
         "description": "Recursive resolution: from the root servers down, instead of asking\nupstream resolvers.",
@@ -4739,6 +5134,10 @@
     {
       "name": "rules",
       "description": "Custom filtering rules"
+    },
+    {
+      "name": "records",
+      "description": "Local DNS records, answered before the filter"
     },
     {
       "name": "groups",

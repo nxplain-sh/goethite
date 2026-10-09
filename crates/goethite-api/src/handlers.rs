@@ -27,8 +27,8 @@ use axum::{Json, Router};
 use goethite_store::stats::{TOP_FOR_MERGE, TOP_IN_REPORT};
 use goethite_store::{
     Actor, AuditAction, AuditEntry, Client, ClientSpec, Group, GroupSpec, Kind, List, ListSpec,
-    QueryOutcome, QueryPage, Rule, RuleSpec, Schedule, ScheduleSpec, Search, Settings,
-    SettingsSpec, StatsReport, StoreError,
+    QueryOutcome, QueryPage, Record, RecordSpec, Rule, RuleSpec, Schedule, ScheduleSpec, Search,
+    Settings, SettingsSpec, StatsReport, StoreError,
 };
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -258,6 +258,21 @@ resource_handlers!(
     create_rule,
     update_rule,
     delete_rule
+);
+resource_handlers!(
+    Record,
+    RecordSpec,
+    Change::Policy,
+    "records",
+    "/api/v1/records",
+    "/api/v1/records/{id}",
+    "local DNS record",
+    "local DNS records",
+    list_records,
+    get_record,
+    create_record,
+    update_record,
+    delete_record
 );
 resource_handlers!(
     Group,
@@ -752,6 +767,11 @@ pub(crate) fn routes() -> Router<Arc<Api>> {
         .route(
             "/api/v1/rules/{id}",
             get(get_rule).put(update_rule).delete(delete_rule),
+        )
+        .route("/api/v1/records", get(list_records).post(create_record))
+        .route(
+            "/api/v1/records/{id}",
+            get(get_record).put(update_record).delete(delete_record),
         )
         .route("/api/v1/groups", get(list_groups).post(create_group))
         .route(

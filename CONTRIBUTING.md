@@ -110,6 +110,7 @@ cargo xtask fuzz --seconds 60 decode-query        # one target, after changing i
 | `parse-cidr`   | Parses text as a client network. On success, the network's display must parse back to the same network, which contains its own address. |
 | `parse-list`   | Parses and compiles text as a filter list. For every parsed rule's name, its parent and a child, the compiled filter must agree with the rule-by-rule reference. |
 | `parse-name`   | Parses text as a domain name. On success, the name's display must parse back to the same name. |
+| `plan-migration` | Plans a migration from a Pi-hole's or an AdGuard Home's API answers (JSON), and Pi-hole's CNAME record syntax. The plan must hold only what goethite's store accepts: HTTPS lists, supported rules, answerable records with a CNAME alone at its name, valid clients and access entries, unique names. |
 | `request-checks` | Runs the API's `Host`, `Origin` and web UI path checks on text. A `Host` taken for loopback must name this machine with at most a numeric port; an accepted path must not leave the UI's folder. |
 
 Seeds are committed in `fuzz/seeds/<target>/`, and `crates/goethite-proto/tests/fuzz-seeds.rs`

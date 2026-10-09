@@ -305,6 +305,78 @@ impl Server {
 }
 
 #[tokio::test]
+async fn local_records_round_trip() {
+    let server = start(false);
+    let created = server
+        .post(
+            "/api/v1/records",
+            json!({"name": "nas.lan", "type": "A", "value": "192.168.1.10"}),
+        )
+        .await;
+    assert_eq!(created.status, StatusCode::CREATED, "{}", created.text);
+    let id = created.body["id"].as_str().unwrap().to_owned();
+    assert!(id.starts_with("rc_"), "{id}");
+    assert_eq!(created.body["spec"]["ttl"], 300);
+    assert_eq!(created.body["spec"]["enabled"], true);
+
+    let wildcard = server
+        .post(
+            "/api/v1/records",
+            json!({"name": "*.home.example", "type": "CNAME", "value": "nas.lan", "ttl": 60}),
+        )
+        .await;
+    assert_eq!(wildcard.status, StatusCode::CREATED, "{}", wildcard.text);
+    let wrong = server
+        .post(
+            "/api/v1/records",
+            json!({"name": "tv.lan", "type": "AAAA", "value": "192.168.1.11"}),
+        )
+        .await;
+    assert_eq!(
+        wrong.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{}",
+        wrong.text
+    );
+    let clash = server
+        .post(
+            "/api/v1/records",
+            json!({"name": "nas.lan", "type": "CNAME", "value": "tv.lan"}),
+        )
+        .await;
+    assert_eq!(clash.status, StatusCode::CONFLICT, "{}", clash.text);
+
+    let path = format!("/api/v1/records/{id}");
+    let moved = server
+        .send(
+            Method::PUT,
+            &path,
+            Some(json!({"name": "nas.lan", "type": "A", "value": "192.168.1.12"})),
+            &[("if-match", "\"1\"")],
+        )
+        .await;
+    assert_eq!(moved.status, StatusCode::OK, "{}", moved.text);
+    assert_eq!(moved.body["spec"]["value"], "192.168.1.12");
+    let listed = server.get("/api/v1/records").await;
+    assert_eq!(listed.body.as_array().unwrap().len(), 2);
+    let deleted = server.send(Method::DELETE, &path, None, &[]).await;
+    assert_eq!(deleted.status, StatusCode::NO_CONTENT, "{}", deleted.text);
+
+    // Records change only the policy.
+    assert_eq!(
+        *server.control.applied.lock().unwrap(),
+        [
+            Change::Policy,
+            Change::Policy,
+            Change::Policy,
+            Change::Policy
+        ]
+    );
+    let audit = server.get("/api/v1/audit?limit=1").await;
+    assert_eq!(audit.body[0]["kind"], "record");
+}
+
+#[tokio::test]
 async fn resources_round_trip_with_revisions_and_references() {
     let server = start(false);
     let created = server

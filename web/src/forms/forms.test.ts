@@ -5,7 +5,10 @@ import {
 	clientSpec,
 	isAccessEntry,
 	isClientId,
+	isRecordTtl,
 	parseAccessEntries,
+	recordForm,
+	recordSpec,
 	parseClientIds,
 	describeDays,
 	describeWindows,
@@ -105,6 +108,29 @@ describe('groups', () => {
 			managed_by: 'api' as const,
 		}
 		expect(groupSpec(groupForm(spec), 'api')).toEqual(spec)
+	})
+})
+
+describe('local records', () => {
+	it('round-trips, lowercase', () => {
+		const spec = {
+			name: 'nas.lan',
+			type: 'A' as const,
+			value: '192.168.1.10',
+			ttl: 300,
+			enabled: true,
+			comment: '',
+			managed_by: 'api' as const,
+		}
+		expect(recordSpec(recordForm(spec), 'api')).toEqual(spec)
+		const cname = recordSpec({ ...recordForm(), name: ' *.Home.Example ', kind: 'CNAME', value: 'NAS.lan' })
+		expect([cname.name, cname.value]).toEqual(['*.home.example', 'nas.lan'])
+		expect(recordForm().ttl).toBe('300')
+	})
+
+	it('takes TTLs from 0 to a day', () => {
+		for (const valid of ['0', '300', '86400']) expect(isRecordTtl(valid)).toBe(true)
+		for (const invalid of ['', '-1', '86401', '1.5', 'soon']) expect(isRecordTtl(invalid)).toBe(false)
 	})
 })
 

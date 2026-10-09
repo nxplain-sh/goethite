@@ -423,6 +423,43 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/records": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Lists all local DNS records, oldest first. */
+        get: operations["list_records"];
+        put?: never;
+        /** Creates a local DNS record. */
+        post: operations["create_record"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/records/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Gets one local DNS record. */
+        get: operations["get_record"];
+        /** Replaces a local DNS record's spec. */
+        put: operations["update_record"];
+        post?: never;
+        /** Deletes a local DNS record. */
+        delete: operations["delete_record"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/rules": {
         parameters: {
             query?: never;
@@ -1330,6 +1367,64 @@ export interface components {
             fetched_at: string;
             /** @description The lists whose header states a size; others are left out. */
             lists: components["schemas"]["StatedSize"][];
+        };
+        /** @description A stored local DNS record. */
+        Record: {
+            /**
+             * Format: date-time
+             * @description When it was created.
+             */
+            created_at: string;
+            /** @description The ID, chosen by goethite. */
+            id: string;
+            /**
+             * Format: int64
+             * @description Counts updates, starting at 1.
+             */
+            revision: number;
+            /** @description What it is. */
+            spec: components["schemas"]["RecordSpec"];
+            /**
+             * Format: date-time
+             * @description When it last changed.
+             */
+            updated_at: string;
+        };
+        /**
+         * @description The type of a local DNS record.
+         * @enum {string}
+         */
+        RecordKind: "A" | "AAAA" | "CNAME";
+        /**
+         * @description A DNS record goethite answers itself, for every client and before the
+         *     filter: a device on the local network such as `nas.lan`, or every name
+         *     below one (`*.home.example`). A name with records answers only from
+         *     them; a CNAME's target is resolved like any other name.
+         */
+        RecordSpec: {
+            /** @description Free text. */
+            comment?: string;
+            /** @description Whether the record is answered. */
+            enabled?: boolean;
+            /** @description Who manages the record. */
+            managed_by?: components["schemas"]["ManagedBy"];
+            /**
+             * @description The name, such as `nas.lan`, or `*.home.example` for every name below
+             *     `home.example` (not that name itself).
+             */
+            name: string;
+            /**
+             * Format: int32
+             * @description How long clients may cache it, in seconds, at most 86,400.
+             */
+            ttl?: number;
+            /** @description What the record holds. */
+            type: components["schemas"]["RecordKind"];
+            /**
+             * @description An IPv4 address for `A`, an IPv6 address for `AAAA`, a name for
+             *     `CNAME`.
+             */
+            value: string;
         };
         /**
          * @description Recursive resolution: from the root servers down, instead of asking
@@ -2848,6 +2943,226 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["QueryPage"];
+                };
+            };
+        };
+    };
+    list_records: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description All of them, oldest first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Record"][];
+                };
+            };
+            /** @description No valid admin token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    create_record: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecordSpec"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Record"];
+                };
+            };
+            /** @description It refers to something that does not exist */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description It is not valid */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    get_record: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description It, with its revision as the ETag */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Record"];
+                };
+            };
+            /** @description No such ID */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    update_record: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The revision the change is based on */
+                "If-Match"?: string | null;
+            };
+            path: {
+                /** @description The ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecordSpec"];
+            };
+        };
+        responses: {
+            /** @description Updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Record"];
+                };
+            };
+            /** @description No such ID */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description It refers to something that does not exist */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description It changed since that revision */
+            412: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description It is not valid */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    delete_record: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The revision the deletion is based on */
+                "If-Match"?: string | null;
+            };
+            path: {
+                /** @description The ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such ID */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Something still refers to it */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description It changed since that revision */
+            412: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
                 };
             };
         };

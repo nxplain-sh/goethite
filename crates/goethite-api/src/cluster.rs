@@ -2,10 +2,10 @@
 //! go, and handing them to the primary.
 //!
 //! On a replica, a configuration change (a `POST`, `PUT` or `DELETE` of a
-//! list, rule, group, client, schedule or the settings) is forwarded to the
-//! primary with the caller's identity, and answered with the primary's
-//! answer once this node has copied the change, so the caller reads its own
-//! write. While the primary is unreachable such changes are refused; reads,
+//! list, rule, local record, group, client, schedule or the settings) is
+//! forwarded to the primary with the caller's identity, and answered with
+//! the primary's answer once this node has copied the change, so the caller
+//! reads its own write. While the primary is unreachable such changes are refused; reads,
 //! pausing and list downloads stay local. The binary does the forwarding
 //! ([`Control::forward`]); the primary runs forwarded changes through the
 //! same routes ([`execute`]).
@@ -169,7 +169,7 @@ fn is_config_write(method: &Method, path: &str) -> bool {
     let resource = rest.split('/').next().unwrap_or_default();
     matches!(
         resource,
-        "lists" | "rules" | "groups" | "clients" | "schedules" | "settings"
+        "lists" | "rules" | "records" | "groups" | "clients" | "schedules" | "settings"
     ) && rest != "lists/refresh"
 }
 
@@ -429,6 +429,7 @@ mod tests {
             (Method::DELETE, "/api/v1/rules/ru_1"),
             (Method::PUT, "/api/v1/settings"),
             (Method::POST, "/api/v1/clients"),
+            (Method::DELETE, "/api/v1/records/rc_1"),
         ] {
             assert!(is_config_write(&method, path), "{method} {path}");
         }

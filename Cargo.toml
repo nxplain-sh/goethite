@@ -6,6 +6,7 @@ members = [
     "crates/goethite-api",
     "crates/goethite-cluster",
     "crates/goethite-filter",
+    "crates/goethite-migrate",
     "crates/goethite-proto",
     "crates/goethite-resolver",
     "crates/goethite-server",
@@ -36,6 +37,7 @@ publish = false
 goethite-api = { path = "crates/goethite-api", version = "0.4.0" }
 goethite-cluster = { path = "crates/goethite-cluster", version = "0.4.0" }
 goethite-filter = { path = "crates/goethite-filter", version = "0.4.0" }
+goethite-migrate = { path = "crates/goethite-migrate", version = "0.4.0" }
 goethite-proto = { path = "crates/goethite-proto", version = "0.4.0" }
 goethite-resolver = { path = "crates/goethite-resolver", version = "0.4.0" }
 goethite-server = { path = "crates/goethite-server", version = "0.4.0" }

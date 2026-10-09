@@ -4,8 +4,8 @@ description: Run two goethite nodes that share one configuration and one floatin
 ---
 
 Two goethite nodes can form a cluster. Each answers DNS on its own, so either one can serve your
-network, and they share one filtering configuration: lists, rules, groups, clients, schedules and
-settings.
+network, and they share one filtering configuration: lists, rules, local records, groups, clients,
+schedules and settings.
 
 - The **primary** owns the configuration.
 - The **replica** copies the primary's configuration within moments of every change. If the
@@ -70,7 +70,7 @@ store schema and says so in its log.
 ## Changing the configuration
 
 Through the primary, changes work as on a node of its own. Through the replica, a change to lists,
-rules, groups, clients, schedules or settings is forwarded to the primary with your identity, and
+rules, local records, groups, clients, schedules or settings is forwarded to the primary with your identity, and
 answered with the primary's answer once the replica has copied it, so reading it back right away
 works. `If-Match` revisions mean the same on both nodes. The primary's audit log records you as
 the caller, with `"node": "dns2"` for the replica it came through.

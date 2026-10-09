@@ -4,7 +4,8 @@ description: Configure and observe goethite over HTTP with /api/v1.
 ---
 
 goethite has a REST API at `/api/v1` for everything the config file does not cover: filter lists,
-custom rules, clients, groups, schedules, the filtering settings, pausing, the query log,
+custom rules, local DNS records, clients, groups, schedules, the filtering settings and access
+lists, pausing, the query log,
 statistics and the audit log. The [terminal UI](../tui/), the web UI and the Terraform provider all use it. The
 [API reference](../api-reference/) lists every endpoint.
 
@@ -58,7 +59,7 @@ Both are answered with `403 forbidden`.
 
 ## Resources
 
-Lists, rules, groups, clients and schedules all work the same way. `POST` a spec to the
+Lists, rules, local records, groups, clients and schedules all work the same way. `POST` a spec to the
 collection to create one, then `GET`, `PUT` or `DELETE` it by ID:
 
 ```sh

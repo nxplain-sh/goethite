@@ -37,6 +37,7 @@ crates/
   goethite-api/       axum REST API, /api/v1, OpenAPI via utoipa
   goethite-store/     embedded storage (redb) for query log, stats, config
   goethite-tui/       ratatui client that talks to the API
+  goethite-migrate/   reads Pi-hole / AdGuard Home API answers and plans the same in goethite
   goethite/           the binary: CLI (clap), wiring, systemd integration
 xtask/                repository automation: `cargo xtask ci` runs what CI runs
 web/                  Vite + React + TanStack Router SPA (embedded into the binary)

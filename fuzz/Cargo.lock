@@ -612,11 +612,24 @@ dependencies = [
  "goethite-api",
  "goethite-cluster",
  "goethite-filter",
+ "goethite-migrate",
  "goethite-proto",
  "goethite-resolver",
  "goethite-server",
  "goethite-store",
  "libfuzzer-sys",
+ "serde_json",
+]
+
+[[package]]
+name = "goethite-migrate"
+version = "0.4.0"
+dependencies = [
+ "goethite-filter",
+ "goethite-resolver",
+ "goethite-store",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
