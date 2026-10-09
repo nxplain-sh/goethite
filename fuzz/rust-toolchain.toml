@@ -1,0 +1,8 @@
+# The nightly the fuzz targets build with: cargo-fuzz needs nightly for
+# libFuzzer's sanitizer flags. A dated one, so every run builds the targets
+# the same way until it is bumped on purpose. `cargo xtask fuzz` and the fuzz
+# workflow read it from here (`cargo +<channel> fuzz ...`), and rustup uses it
+# for commands run inside fuzz/.
+[toolchain]
+channel = "nightly-2026-10-08"
+profile = "minimal"
