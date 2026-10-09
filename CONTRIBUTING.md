@@ -181,8 +181,17 @@ The full list is in [`AGENTS.md`](AGENTS.md). The short version:
   debug builds) workspace-wide in non-test code. `clippy.toml` allows the panic family inside
   `#[test]` functions and `#[cfg(test)]` modules. Helpers in integration tests (`tests/*.rs`) are
   not covered, so those files carry a crate-level `#![allow(...)]` with a reason.
-- **No `unsafe`.** `unsafe_code = "forbid"` is set workspace-wide, and `goethite-proto`,
-  `goethite-filter` and `goethite-resolver` also carry `#![forbid(unsafe_code)]`.
+- **No `unsafe`.** `unsafe_code` is denied workspace-wide, and every crate root carries
+  `#![forbid(unsafe_code)]` except the binary and `goethite-cluster`, which each have one item
+  under `#[allow(unsafe_code)]` with a `SAFETY` comment.
+  [ADR 0025](docs/adr/0025-standard-rust-project-layout.md) says why this is not a workspace
+  `forbid`.
+- **Visibility and `Debug`.** `unreachable_pub` and `missing_debug_implementations` are on: what no
+  other crate reaches is `pub(crate)`, and a public type's `Debug` prints neither secrets (keys,
+  tokens, decrypted queries) nor bulk (filter tables, cache entries).
+- **Layout.** Modules with children are `foo.rs` beside `foo/`; files in `tests/`, `benches/` and
+  `examples/` are kebab-case. The rest of the layout and its deliberate deviations are in
+  [ADR 0025](docs/adr/0025-standard-rust-project-layout.md).
 - **Bound everything:** message sizes, label counts, loops, chain depths, cache sizes, connection
   counts, timeouts.
 - Errors: `thiserror` in libraries, `anyhow` only in the binary.

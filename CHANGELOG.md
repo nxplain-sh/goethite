@@ -7,6 +7,21 @@ configuration format.
 
 ## [Unreleased]
 
+### Changed
+
+- **The systemd units moved from `dist/systemd/` to `deploy/systemd/`.** Install them from the
+  new path; the units themselves are unchanged.
+- Release builds use thin LTO and one codegen unit: the binary is about a quarter smaller
+  (24.9 to 19.0 MB on macOS arm64) and lookups move by a few nanoseconds either way
+  ([bench/README.md](bench/README.md#release-profile)).
+- The repository follows the
+  [standard Rust project layout](https://github.com/miguelmartens/standard-rust-project-layout),
+  with its deviations recorded in [ADR 0025](docs/adr/0025-standard-rust-project-layout.md):
+  `cargo xtask ci` runs every check CI runs, CI also checks rustdoc and the shell scripts, every
+  public type has a `Debug` that prints no secrets, fuzz targets are kebab-case
+  (`cargo fuzz run decode-query`), and `.env` files are ignored, with `.env.example` listing the
+  variables goethite reads.
+
 ## [0.4.0] - 2026-10-08
 
 Phase 4, v0.4: the full web UI, DNS over TLS, HTTPS and QUIC and Oblivious DoH for clients,

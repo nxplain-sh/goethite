@@ -38,13 +38,18 @@ crates/
   goethite-store/     embedded storage (redb) for query log, stats, config
   goethite-tui/       ratatui client that talks to the API
   goethite/           the binary: CLI (clap), wiring, systemd integration
+xtask/                repository automation: `cargo xtask ci` runs what CI runs
 web/                  Vite + React + TanStack Router SPA (embedded into the binary)
 site/                 project website + docs (Astro Starlight), deployed to GitHub Pages
-fuzz/                 cargo-fuzz targets
-bench/                criterion benches + dnsperf/resperf scripts
+fuzz/                 cargo-fuzz targets (own nightly workspace)
+bench/                dnsperf script + recorded results; criterion benches live in crates/*/benches/
+tests/chaos/          chaos lab: two nodes and a client in network namespaces
+deploy/               hardened systemd units
+config/               example config
 docs/                 architecture, threat model, ADRs
-
 ```
+
+The layout follows the [standard Rust project layout](https://github.com/miguelmartens/standard-rust-project-layout); [ADR 0025](docs/adr/0025-standard-rust-project-layout.md) records where goethite deviates and why. Read it before adding a crate, a top-level directory or a workspace lint.
 
 The Terraform provider lives in a separate repo (`terraform-provider-goethite`, Go, terraform-plugin-framework) and is built from the OpenAPI spec. Do not start it before Phase 3.5.
 
@@ -73,7 +78,8 @@ The Terraform provider lives in a separate repo (`terraform-provider-goethite`, 
 
 ## Code conventions
 
-- `cargo fmt`, `cargo clippy --all-targets -- -D warnings` must pass.
+- `cargo xtask ci` must pass: it runs every check CI runs.
+- Modules with children use `foo.rs` beside `foo/`; only shared integration-test helpers live in `tests/<name>/mod.rs`. File names in `tests/`, `benches/` and `examples/` are kebab-case: they are target names.
 - Errors: `thiserror` in libraries, `anyhow` only in the binary. Log with `tracing`, never `println!`.
 - Public items get doc comments. Architectural decisions get a short ADR in `docs/adr/`.
 - Tests: unit tests next to code, integration tests in `tests/`, property tests (proptest) for encode/decode round-trips.
@@ -113,5 +119,5 @@ Shared by the web UI and (where possible) the TUI.
 - Plan before coding: for any non-trivial task, outline the approach and files to touch first.
 - Stay inside the current phase. If something belongs to a later phase, note it in [`docs/BACKLOG.md`](docs/BACKLOG.md) instead of building it.
 - Ask before adding a dependency, changing the public API, or changing anything in the security rules above.
-- Before saying a task is done: fmt, clippy, tests, and (for parser changes) a short fuzz run all pass. Summarize what changed and what is left.
+- Before saying a task is done: `cargo xtask ci` and (for parser changes) a short fuzz run pass. Summarize what changed and what is left.
 - Development binds to port `15353` by default so it runs without root; production uses `53`. (Not `5353`: that is the multicast DNS port, held by mDNSResponder on macOS and often by Avahi on Linux.)

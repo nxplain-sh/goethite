@@ -82,14 +82,18 @@ cd web && npm ci --ignore-scripts && npm run build
 | `crates/goethite-store`     | Embedded storage for query log, stats and config                        |
 | `crates/goethite-tui`       | Terminal UI that talks to the API                                       |
 | `crates/goethite`           | The binary: CLI, wiring, signal handling                                |
+| `xtask/`                    | Repository automation: `cargo xtask ci` runs the checks CI runs         |
 | `web/`                      | Web UI (Vite, React, TanStack), embedded into the binary                |
 | `site/`                     | Project website and docs (Astro Starlight), deployed to GitHub Pages    |
 | `fuzz/`                     | cargo-fuzz targets                                                      |
 | `tests/chaos/`              | Chaos tests: two nodes and a client in network namespaces               |
 | `deploy/`                   | Deployment files: the hardened systemd units                            |
+| `config/`                   | The example configuration                                               |
 | `docs/`                     | Threat model, ADRs, backlog                                             |
 
-Benchmarks and how to record them are in [`bench/`](bench/README.md).
+Benchmarks and how to record them are in [`bench/`](bench/README.md). The layout follows the
+[standard Rust project layout](https://github.com/miguelmartens/standard-rust-project-layout);
+[ADR 0025](docs/adr/0025-standard-rust-project-layout.md) records where goethite deviates from it.
 
 ## Documentation
 
