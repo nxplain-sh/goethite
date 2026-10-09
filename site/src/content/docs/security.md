@@ -98,7 +98,7 @@ goethite needs privileges only to bind port 53. It binds its sockets first, befo
 thread, then gives the privileges up:
 
 - **Under systemd**, with the unit in
-  [`dist/systemd/goethite.service`](https://github.com/nxplain-sh/goethite/blob/main/dist/systemd/goethite.service),
+  [`deploy/systemd/goethite.service`](https://github.com/nxplain-sh/goethite/blob/main/deploy/systemd/goethite.service),
   goethite runs as a dynamic, unprivileged user that may only bind ports below 1024, and gives that
   up once its sockets are bound. The unit also makes the file system read-only except
   `/var/lib/goethite` (keep downloaded lists there with `cache_dir = "/var/lib/goethite/lists"`),
@@ -122,7 +122,7 @@ supported on Linux; on other platforms, which are for development only, `server.
 
 A [floating IP](../ha/#a-floating-ip) needs privileges the DNS server never gets, so a separate
 process holds them: `goethite vrrp`, under
-[`dist/systemd/goethite-vrrp.service`](https://github.com/nxplain-sh/goethite/blob/main/dist/systemd/goethite-vrrp.service).
+[`deploy/systemd/goethite-vrrp.service`](https://github.com/nxplain-sh/goethite/blob/main/deploy/systemd/goethite-vrrp.service).
 It starts with `CAP_NET_RAW` and `CAP_NET_ADMIN`, opens its raw sockets, then keeps only
 `CAP_NET_ADMIN` (to add and remove the address) and sets `no_new_privs`. Its sandbox matches the
 DNS server's, with netlink and packet sockets allowed and nothing writable;

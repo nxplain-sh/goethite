@@ -20,7 +20,7 @@ listen = "127.0.0.1:15353"
 
 # Started as root (Linux, without systemd), goethite switches to this user
 # right after binding its sockets, and keeps no capabilities. Under the systemd
-# unit in dist/systemd it already runs unprivileged; leave this unset there.
+# unit in deploy/systemd it already runs unprivileged; leave this unset there.
 # user = "goethite"
 
 # TCP connections served at once, in total and from one client (an IPv4
@@ -199,7 +199,7 @@ private_domains = ["lan", "home.arpa", "internal", "local"]
 # goethite's database: the filtering configuration (lists, rules, groups,
 # clients, schedules) and the audit log of every change. It defaults to
 # goethite.redb in the state directory: systemd's StateDirectory
-# (/var/lib/goethite with the unit in dist/systemd), otherwise the directory
+# (/var/lib/goethite with the unit in deploy/systemd), otherwise the directory
 # of this file. Only one goethite process can use it at a time.
 # path = "/var/lib/goethite/goethite.redb"
 

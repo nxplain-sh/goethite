@@ -25,7 +25,7 @@ is audit-logged, and a DNS leak test shows whether a device's lookups reach it. 
 share one configuration over mutual TLS and one floating IP over VRRP, and goethite upgrades
 without dropping a query. It protects against DNS rebinding, rate limits clients, pads encrypted
 messages, drops its privileges after binding port 53, and ships hardened systemd units
-([`dist/systemd/`](dist/systemd/)). See the [changelog](CHANGELOG.md) and the roadmap in
+([`deploy/systemd/`](deploy/systemd/)). See the [changelog](CHANGELOG.md) and the roadmap in
 [`AGENTS.md`](AGENTS.md#roadmap-respect-the-order).
 
 ## Quick start (development)
@@ -86,7 +86,7 @@ cd web && npm ci --ignore-scripts && npm run build
 | `site/`                     | Project website and docs (Astro Starlight), deployed to GitHub Pages    |
 | `fuzz/`                     | cargo-fuzz targets                                                      |
 | `tests/chaos/`              | Chaos tests: two nodes and a client in network namespaces               |
-| `dist/`                     | Deployment files: the hardened systemd units                            |
+| `deploy/`                   | Deployment files: the hardened systemd units                            |
 | `docs/`                     | Threat model, ADRs, backlog                                             |
 
 Benchmarks and how to record them are in [`bench/`](bench/README.md).
