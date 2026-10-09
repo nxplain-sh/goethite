@@ -1,10 +1,11 @@
-//! Per-client limits: UDP query rate limiting and TCP connection counts.
+//! Per-client limits: query rate limiting and TCP connection counts.
 //!
 //! Rate limiting keeps goethite from being used to flood a third party with
 //! answers to queries sent from a spoofed source address, and keeps one
-//! client from using up the resolver. It applies to UDP only: a TCP client
-//! has completed a handshake, so its address is real, and TCP is bounded by
-//! the connection limits instead.
+//! client from using up the resolver. One limiter counts a client's queries
+//! over UDP, TCP, DNS over TLS, HTTPS and QUIC together. Oblivious DoH is
+//! not limited: its peer is a proxy relaying many clients, which the
+//! connection limits bound instead.
 //!
 //! Clients are grouped into networks (by default each IPv4 address and each
 //! IPv6 /64) and every network gets a token bucket, implemented as GCRA: one
@@ -18,17 +19,23 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
+use goethite_resolver::Cidr;
+
 /// Number of independently locked parts of the rate limiter table.
 const SHARDS: usize = 16;
 
 /// The most client networks the rate limiter tracks, whatever the setting.
 pub const MAX_RATE_LIMITED_CLIENTS: usize = 1_000_000;
 
+/// The most networks [`RateLimitConfig::exempt`] may list.
+pub const MAX_RATE_LIMIT_EXEMPTIONS: usize = 256;
+
 /// How often a full shard may be swept for networks that are back to a full
 /// bucket, so a flood of new sources cannot make every query scan the table.
 const SWEEP_INTERVAL: Duration = Duration::from_secs(1);
 
-/// Rate limiting settings for UDP queries.
+/// Rate limiting settings, for queries over every transport but Oblivious
+/// DoH.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RateLimitConfig {
     /// Queries per second one client network may send on average; 0 turns
@@ -51,6 +58,10 @@ pub struct RateLimitConfig {
     /// the network, and they are often a local stub resolver serving every
     /// program on the host.
     pub exempt_loopback: bool,
+    /// Networks never limited, such as the local network behind a router
+    /// that forwards every household's queries; at most
+    /// [`MAX_RATE_LIMIT_EXEMPTIONS`] are used.
+    pub exempt: Vec<Cidr>,
 }
 
 impl Default for RateLimitConfig {
@@ -63,6 +74,7 @@ impl Default for RateLimitConfig {
             ipv6_prefix: 64,
             max_clients: 65_536,
             exempt_loopback: true,
+            exempt: Vec::new(),
         }
     }
 }
@@ -173,7 +185,7 @@ impl Shard {
     }
 }
 
-/// Limits the rate of UDP queries per client network.
+/// Limits the rate of queries per client network.
 #[derive(Debug)]
 pub(crate) struct RateLimiter {
     interval: Duration,
@@ -182,6 +194,7 @@ pub(crate) struct RateLimiter {
     ipv4_prefix: u8,
     ipv6_prefix: u8,
     exempt_loopback: bool,
+    exempt: Vec<Cidr>,
     per_shard: usize,
     shards: Box<[Mutex<Shard>]>,
     hasher: RandomState,
@@ -201,6 +214,12 @@ impl RateLimiter {
             ipv4_prefix: config.ipv4_prefix,
             ipv6_prefix: config.ipv6_prefix,
             exempt_loopback: config.exempt_loopback,
+            exempt: config
+                .exempt
+                .iter()
+                .take(MAX_RATE_LIMIT_EXEMPTIONS)
+                .copied()
+                .collect(),
             per_shard: max_clients.div_ceil(SHARDS),
             shards: (0..SHARDS).map(|_| Mutex::default()).collect(),
             hasher: RandomState::new(),
@@ -210,7 +229,9 @@ impl RateLimiter {
     /// Accounts for a query from `ip` arriving at `now`.
     pub(crate) fn check(&self, ip: IpAddr, now: Instant) -> (Decision, Network) {
         let network = Network::of(ip, self.ipv4_prefix, self.ipv6_prefix);
-        if self.exempt_loopback && is_loopback(ip) {
+        if (self.exempt_loopback && is_loopback(ip))
+            || self.exempt.iter().any(|exempt| exempt.contains(ip))
+        {
             return (Decision::Allow, network);
         }
         let index = usize::try_from(self.hasher.hash_one(network))
@@ -443,6 +464,35 @@ mod tests {
         assert_eq!(strict.check(ip("127.0.0.1"), now).0, Decision::Allow);
         assert!(matches!(
             strict.check(ip("127.0.0.1"), now).0,
+            Decision::Limited { .. }
+        ));
+    }
+
+    #[test]
+    fn exempt_networks_are_never_limited() {
+        let limiter = RateLimiter::new(&RateLimitConfig {
+            queries_per_second: 1,
+            burst: 1,
+            exempt: vec![
+                "192.168.0.0/16".parse().unwrap(),
+                "2001:db8::/32".parse().unwrap(),
+            ],
+            ..RateLimitConfig::default()
+        })
+        .unwrap();
+        let now = Instant::now();
+        for _ in 0..10 {
+            for exempt in ["192.168.7.8", "::ffff:192.168.7.8", "2001:db8::53"] {
+                assert_eq!(
+                    limiter.check(ip(exempt), now).0,
+                    Decision::Allow,
+                    "{exempt}"
+                );
+            }
+        }
+        assert_eq!(limiter.check(ip("10.0.0.1"), now).0, Decision::Allow);
+        assert!(matches!(
+            limiter.check(ip("10.0.0.1"), now).0,
             Decision::Limited { .. }
         ));
     }

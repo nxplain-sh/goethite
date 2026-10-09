@@ -582,6 +582,7 @@ fn grouped() -> Policy {
         blocked_ttl: 10,
         protection: true,
         services: Arc::new(ServiceFilter::empty()),
+        access: goethite_resolver::Access::default(),
     })
     .unwrap()
 }
@@ -697,6 +698,7 @@ async fn groups_block_services_always_or_on_a_schedule() {
         blocked_ttl: 10,
         protection: true,
         services,
+        access: goethite_resolver::Access::default(),
     })
     .unwrap();
     let state = Arc::new(PolicyState::new(policy));

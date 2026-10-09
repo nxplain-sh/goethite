@@ -26,11 +26,34 @@ configuration format.
   tarball ships the same server config as `goethite.toml`. See the
   [install guide](https://nxplain-sh.github.io/goethite/install/) and
   [ADR 0027](docs/adr/0027-packages-and-container-image.md).
+- **Third-party licence notices.** Releases include `THIRD-PARTY-LICENSES.txt` with the notices
+  of every crate and npm package built into the binary; the packages install it in
+  `/usr/share/doc/goethite`.
+- **Access control.** Allowed and blocked clients, by address, network or client ID, for every
+  transport: a query is answered when its client is allowed (or nobody is listed) and not
+  blocked. Refused UDP queries get no answer, refused connections are closed before their TLS
+  handshake, and a client ID refused after the handshake gets `REFUSED`. The lists are part of
+  the replicated settings (`access` in `/api/v1/settings`, the web UI's Settings), so they apply
+  at once on every node. Loopback addresses always pass. Counted in
+  `goethite_access_refused_total{protocol}`.
+- **Rate limiting over every transport.** TCP, DNS over TLS, HTTPS and QUIC queries count against
+  the same per-client limit as UDP; over it, they get `REFUSED` and are not logged. Oblivious DoH
+  stays limited by connections only. `[server.rate_limit] exempt` lists networks that are never
+  limited.
 - `cargo xtask versions`, also in CI: the internal crates and the web UI carry the workspace
   version.
 
 ### Changed
 
+- `goethite_rate_limited_total` has a `protocol` label, now that every transport is limited; sum
+  it for the old total.
+- **Fuzzing no longer runs in public CI**, where a crash it found would be public before its
+  fix: `cargo xtask fuzz` runs every target locally, as a release step, on a nightly pinned in
+  `fuzz/rust-toolchain.toml`, and CI only builds the targets
+  ([ADR 0028](docs/adr/0028-fuzzing-off-public-ci.md)).
+- The API reference's npm package (`@scalar/api-reference`) is a runtime dependency of the web UI
+  rather than a development one: its bundle ships in the binary, so the web UI's SBOM and the
+  licence notices now include it and the packages it bundles.
 - **The systemd units moved from `dist/systemd/` to `deploy/systemd/`.** Install them from the
   new path; the units themselves are unchanged.
 - Release builds use thin LTO and one codegen unit: the binary is about a quarter smaller

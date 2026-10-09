@@ -46,7 +46,7 @@ use tracing::{debug, error, info, trace, warn};
 
 pub use crate::bind::{Listeners, MAX_LISTEN_ADDRESSES, MAX_UDP_SOCKETS, default_udp_sockets};
 use crate::limits::{ClientConnections, Decision, RateLimiter};
-pub use crate::limits::{MAX_RATE_LIMITED_CLIENTS, RateLimitConfig};
+pub use crate::limits::{MAX_RATE_LIMIT_EXEMPTIONS, MAX_RATE_LIMITED_CLIENTS, RateLimitConfig};
 use crate::stream::Kind;
 
 /// The largest UDP query accepted; larger datagrams are dropped.
@@ -153,6 +153,27 @@ pub enum Transport {
 }
 
 impl Transport {
+    /// Every transport, in the order [`ByTransport`] counts them.
+    pub const ALL: [Self; 6] = [
+        Self::Udp,
+        Self::Tcp,
+        Self::Tls,
+        Self::Https,
+        Self::Quic,
+        Self::Oblivious,
+    ];
+
+    fn index(self) -> usize {
+        match self {
+            Self::Udp => 0,
+            Self::Tcp => 1,
+            Self::Tls => 2,
+            Self::Https => 3,
+            Self::Quic => 4,
+            Self::Oblivious => 5,
+        }
+    }
+
     /// Whether it is DNS over TLS, HTTPS or QUIC, or Oblivious DoH.
     pub fn is_encrypted(self) -> bool {
         matches!(self, Self::Tls | Self::Https | Self::Quic | Self::Oblivious)
@@ -242,12 +263,38 @@ pub struct QueryEvent<'a> {
     pub elapsed: Duration,
 }
 
+/// A counter per transport.
+#[derive(Debug, Default)]
+pub struct ByTransport([AtomicU64; Transport::ALL.len()]);
+
+impl ByTransport {
+    /// The count for `transport`.
+    pub fn get(&self, transport: Transport) -> u64 {
+        self.0
+            .get(transport.index())
+            .map_or(0, |counter| counter.load(Ordering::Relaxed))
+    }
+
+    /// Adds one to the count for `transport`.
+    pub fn count(&self, transport: Transport) {
+        if let Some(counter) = self.0.get(transport.index()) {
+            ServerStats::count(counter);
+        }
+    }
+}
+
 /// Counts of queries and connections the listeners turned away, for
 /// metrics.
 #[derive(Debug, Default)]
 pub struct ServerStats {
-    /// UDP queries over the rate limit.
-    pub rate_limited: AtomicU64,
+    /// Queries over the rate limit: dropped over UDP (or answered with a
+    /// truncated response), refused over the other transports.
+    pub rate_limited: ByTransport,
+    /// Queries and connections refused by the access lists: UDP queries
+    /// dropped, TCP, DNS over TLS, HTTPS and QUIC connections closed before
+    /// their handshake, and queries refused once a client ID showed the
+    /// client may not use goethite.
+    pub access_refused: ByTransport,
     /// Truncated answers sent to rate-limited clients.
     pub rate_limit_slips: AtomicU64,
     /// UDP queries dropped because too many were in flight.
@@ -358,11 +405,14 @@ impl Server {
         let dot = register(listeners.dot)?;
         let doh = register(listeners.doh)?;
         let doq = listeners.doq;
+        let stats = Arc::<ServerStats>::default();
         let engine = Arc::new(Engine {
             codec: Box::new(HickoryCodec),
             resolver,
             observer: None,
             require_client_id: config.require_client_id,
+            rate_limiter: RateLimiter::new(&config.rate_limit),
+            stats: Arc::clone(&stats),
         });
         Ok(Self {
             addresses,
@@ -372,7 +422,7 @@ impl Server {
             tls: None,
             engine,
             config,
-            stats: Arc::default(),
+            stats,
         })
     }
 
@@ -486,7 +536,6 @@ impl Server {
             udp_slots: Arc::new(Semaphore::new(
                 config.max_inflight_udp_queries.min(Semaphore::MAX_PERMITS),
             )),
-            rate_limiter: RateLimiter::new(&config.rate_limit),
             // `Semaphore::new` panics above its limit, so a huge setting is clamped.
             tcp_slots: Arc::new(Semaphore::new(
                 config.max_tcp_connections.min(Semaphore::MAX_PERMITS),
@@ -495,8 +544,8 @@ impl Server {
             config: config.clone(),
             stats: self.stats,
         });
-        if shared.rate_limiter.is_none() {
-            info!("udp rate limiting is turned off");
+        if shared.engine.rate_limiter.is_none() {
+            info!("rate limiting is turned off");
         }
 
         let (stop_tx, stop_rx) = watch::channel(false);
@@ -657,7 +706,6 @@ struct Shared {
     odoh: Option<Arc<odoh::OdohKeys>>,
     config: ServerConfig,
     udp_slots: Arc<Semaphore>,
-    rate_limiter: Option<RateLimiter>,
     tcp_slots: Arc<Semaphore>,
     tcp_clients: Arc<ClientConnections>,
     stats: Arc<ServerStats>,
@@ -670,6 +718,10 @@ struct Engine {
     observer: Option<Arc<dyn QueryObserver>>,
     /// See [`ServerConfig::require_client_id`].
     require_client_id: bool,
+    /// One limiter for every transport, so a client's queries count
+    /// together; `None` when rate limiting is off.
+    rate_limiter: Option<RateLimiter>,
+    stats: Arc<ServerStats>,
 }
 
 /// A response [`Engine::answer`] encoded.
@@ -693,10 +745,20 @@ impl Engine {
         out: &mut Vec<u8>,
     ) -> Option<Answered> {
         let (response, udp_limit) = match self.codec.decode_query(wire) {
+            // Over the rate limit: refused, and not logged, so a flood does
+            // not fill the query log.
+            Ok(query) if self.over_rate_limit(transport, peer) => (
+                Response::for_query(&query, ResponseCode::REFUSED),
+                query.max_udp_response_len(),
+            ),
             Ok(query) => {
                 let time = SystemTime::now();
                 let start = Instant::now();
-                let resolution = if self.refuses(transport, client_id) {
+                let admitted = self.resolver.admits(peer.ip(), client_id);
+                if !admitted {
+                    self.stats.access_refused.count(transport);
+                }
+                let resolution = if !admitted || self.refuses(transport, client_id) {
                     Resolution {
                         response: Response::for_query(&query, ResponseCode::REFUSED),
                         outcome: Outcome::Rejected,
@@ -770,6 +832,28 @@ impl Engine {
         }
     }
 
+    /// Whether a query from `peer` over `transport` is over the rate limit,
+    /// which counts it. UDP queries are checked before they are decoded, in
+    /// [`serve_udp`], and Oblivious DoH queries come from a proxy, so only
+    /// the other transports are checked here.
+    fn over_rate_limit(&self, transport: Transport, peer: SocketAddr) -> bool {
+        if matches!(transport, Transport::Udp | Transport::Oblivious) {
+            return false;
+        }
+        let Some(limiter) = &self.rate_limiter else {
+            return false;
+        };
+        let (Decision::Limited { first, .. }, network) = limiter.check(peer.ip(), Instant::now())
+        else {
+            return false;
+        };
+        if first {
+            debug!(%peer, %network, %transport, "client is over the rate limit");
+        }
+        self.stats.rate_limited.count(transport);
+        true
+    }
+
     /// Whether a query must be refused for lack of a known client ID.
     fn refuses(&self, transport: Transport, client_id: Option<&str>) -> bool {
         transport.is_encrypted()
@@ -836,14 +920,20 @@ async fn serve_udp(socket: UdpSocket, shared: Arc<Shared>, mut stop: watch::Rece
             ServerStats::count(&shared.stats.udp_oversized);
             continue;
         };
-        if let Some(limiter) = &shared.rate_limiter
+        // Dropped without an answer, so a forged source address gets nothing.
+        if !shared.engine.resolver.admits(peer.ip(), None) {
+            trace!(%peer, "access lists refuse the client, dropping");
+            shared.stats.access_refused.count(Transport::Udp);
+            continue;
+        }
+        if let Some(limiter) = &shared.engine.rate_limiter
             && let (Decision::Limited { slip: send, first }, network) =
                 limiter.check(peer.ip(), Instant::now())
         {
             if first {
                 debug!(%peer, %network, "client is over the udp rate limit");
             }
-            ServerStats::count(&shared.stats.rate_limited);
+            shared.stats.rate_limited.count(Transport::Udp);
             slip.clear();
             // Sent without waiting: if the socket is busy, dropping is fine.
             if send && shared.engine.truncated(wire, &mut slip) {

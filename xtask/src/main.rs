@@ -39,6 +39,9 @@ Tasks:
                   architecture, built from the last commit in the pinned build
                   image (needs docker or podman), into target/dist
     dist-inside   what `dist` runs inside the build image
+    fuzz          every fuzz target (or those named) for 300 seconds each, or
+                  `--seconds N`, on the pinned nightly (needs cargo-fuzz); a
+                  release step, never run in public CI
     image         the container image from the release tarballs in target/dist,
                   as an OCI archive there (needs docker with buildx); with
                   `--push <name:tag>...`, pushed to a registry instead
@@ -47,6 +50,9 @@ Tasks:
 
 /// The cargo-deny checks CI runs.
 const DENY_CHECKS: [&str; 4] = ["advisories", "bans", "licenses", "sources"];
+
+/// How long `fuzz` runs each target unless told otherwise, in seconds.
+const FUZZ_SECONDS: u32 = 300;
 
 /// The local tag of the image `dist` builds in.
 const DIST_IMAGE: &str = "goethite-dist";
@@ -62,7 +68,8 @@ const DIST_SOURCE: &str = "/goethite";
 const DIST_GLIBC: (u32, u32) = (2, 34);
 
 /// What a release tarball holds, from the repository root to its place in
-/// the tarball's top directory. The binary comes from the target directory.
+/// the tarball's top directory. The binary and THIRD-PARTY-LICENSES.txt
+/// come from the target directory.
 const DIST_FILES: [(&str, &str); 8] = [
     ("LICENSE-APACHE", "LICENSE-APACHE"),
     ("LICENSE-MIT", "LICENSE-MIT"),
@@ -97,6 +104,7 @@ fn main() -> ExitCode {
             None => Err("usage: cargo xtask dist-inside <output directory>".into()),
         },
         Some("image") => image(&env::args().skip(2).collect::<Vec<_>>()),
+        Some("fuzz") => fuzz(&env::args().skip(2).collect::<Vec<_>>()),
         Some("help" | "--help" | "-h") | None => {
             print_help();
             return ExitCode::SUCCESS;
@@ -345,6 +353,7 @@ fn dist_inside(out: &Path) -> Result {
     dist_web(&root)?;
     dist_binary(&root)?;
     dist_glibc(&root)?;
+    dist_notices(&root, &host)?;
     dist_sboms(&root, &out, &host, &version, &name)?;
     dist_tarball(&root, &out, &name, &epoch)?;
     dist_packages(&root, &out, &host, &version)?;
@@ -430,6 +439,56 @@ fn dist_binary(root: &Path) -> Result {
     )
 }
 
+/// THIRD-PARTY-LICENSES.txt in the target directory, for the tarball, the
+/// packages and the image: the notices of the crates built into the binary
+/// (cargo-about, from their sources as Cargo.lock pins them) and of the npm
+/// packages bundled into the web UI (web/scripts/licenses.mjs). Their
+/// licences ask that the notices go with the binary.
+fn dist_notices(root: &Path, host: &str) -> Result {
+    const HEADER: &str = "\
+goethite is dual-licensed under the MIT licence and the Apache License, Version
+2.0 (LICENSE-MIT and LICENSE-APACHE). Its binary also contains the software
+below, whose licences ask that these notices go with it.
+
+==============================================================================
+Rust crates
+==============================================================================
+";
+    const NPM: &str = "
+==============================================================================
+npm packages in the web UI and the API reference
+==============================================================================
+
+";
+    let crates = capture(
+        Command::new(env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo")))
+            .current_dir(root)
+            .args([
+                "about",
+                "generate",
+                "--manifest-path",
+                "crates/goethite/Cargo.toml",
+            ])
+            .args(["--config", "xtask/dist/about.toml", "--target", host])
+            .args(["--locked", "--fail", "xtask/dist/about.hbs"]),
+    )?;
+    let npm = capture(
+        Command::new("npm")
+            .current_dir(root.join("web"))
+            .args(["run", "--silent", "licenses"]),
+    )?;
+    let notices = format!("{HEADER}{crates}\n{NPM}{npm}\n");
+    fs::write(dist_notices_path(root), notices)?;
+    Ok(())
+}
+
+/// Where [`dist_notices`] writes the notices.
+fn dist_notices_path(root: &Path) -> PathBuf {
+    env::var_os("CARGO_TARGET_DIR")
+        .map_or_else(|| root.join("target"), PathBuf::from)
+        .join("THIRD-PARTY-LICENSES.txt")
+}
+
 /// Fails if the binary needs a glibc newer than [`DIST_GLIBC`].
 fn dist_glibc(root: &Path) -> Result {
     let versions = capture(
@@ -479,11 +538,17 @@ fn dist_tarball(root: &Path, out: &Path, name: &str, epoch: &str) -> Result {
     let stage = out.join(name);
     remove_dir_if_exists(&stage)?;
     fs::create_dir_all(stage.join("systemd"))?;
-    let binary = dist_binary_path(root);
+    let built = [
+        (dist_binary_path(root), stage.join("goethite")),
+        (
+            dist_notices_path(root),
+            stage.join("THIRD-PARTY-LICENSES.txt"),
+        ),
+    ];
     let files = DIST_FILES
         .iter()
         .map(|&(from, to)| (root.join(from), stage.join(to)));
-    for (from, to) in [(binary, stage.join("goethite"))].into_iter().chain(files) {
+    for (from, to) in built.into_iter().chain(files) {
         fs::copy(&from, &to).map_err(|error| format!("copying {}: {error}", from.display()))?;
     }
     let tarball = fs::File::create(out.join(format!("{name}.tar.gz")))?;
@@ -527,7 +592,8 @@ fn dist_packages(root: &Path, out: &Path, host: &str, version: &str) -> Result {
             .arg(out)
             .env("GOETHITE_VERSION", version)
             .env("GOETHITE_ARCH", arch)
-            .env("GOETHITE_BINARY", &binary))?;
+            .env("GOETHITE_BINARY", &binary)
+            .env("GOETHITE_NOTICES", dist_notices_path(root)))?;
     }
     Ok(())
 }
@@ -622,14 +688,18 @@ fn image(args: &[String]) -> Result {
         if !tarball.is_file() {
             continue;
         }
-        let binary = fs::File::create(context.join(format!("goethite-{arch}")))?;
-        run(Command::new("tar")
-            .arg("--extract")
-            .arg("--to-stdout")
-            .arg("--file")
-            .arg(&tarball)
-            .arg(format!("{name}/goethite"))
-            .stdout(binary))?;
+        for (file, copy) in [
+            ("goethite", format!("goethite-{arch}")),
+            ("THIRD-PARTY-LICENSES.txt", format!("notices-{arch}.txt")),
+        ] {
+            run(Command::new("tar")
+                .arg("--extract")
+                .arg("--to-stdout")
+                .arg("--file")
+                .arg(&tarball)
+                .arg(format!("{name}/{file}"))
+                .stdout(fs::File::create(context.join(copy))?))?;
+        }
         platforms.push(format!("linux/{arch}"));
     }
     if platforms.is_empty() {
@@ -639,10 +709,13 @@ fn image(args: &[String]) -> Result {
         )
         .into());
     }
-    fs::copy(
-        root.join("deploy").join("container").join("goethite.toml"),
-        context.join("goethite.toml"),
-    )?;
+    for (from, to) in [
+        ("deploy/container/goethite.toml", "goethite.toml"),
+        ("LICENSE-MIT", "LICENSE-MIT"),
+        ("LICENSE-APACHE", "LICENSE-APACHE"),
+    ] {
+        fs::copy(root.join(from), context.join(to))?;
+    }
     let epoch = capture(git(&root).args(["log", "-1", "--format=%ct", "HEAD"]))?;
     let mut build = Command::new("docker");
     build
@@ -674,6 +747,79 @@ fn image(args: &[String]) -> Result {
     run(build.arg(&context))?;
     fs::remove_dir_all(&context)?;
     Ok(())
+}
+
+/// Runs the fuzz targets one after another, on the nightly that
+/// fuzz/rust-toolchain.toml pins, each for `--seconds` (300 by default). The
+/// corpus in `fuzz/corpus/<target>` (gitignored) grows from run to run,
+/// seeded from `fuzz/seeds/<target>`. Fuzzing runs here and never in public CI, where
+/// a crash it found would be public before its fix (ADR 0028). A crash stops
+/// only its own target; the others still run, and every failure is named at
+/// the end, with its input in `fuzz/artifacts/<target>`.
+fn fuzz(args: &[String]) -> Result {
+    let mut seconds = FUZZ_SECONDS;
+    let mut targets = Vec::new();
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        if arg == "--seconds" {
+            seconds = args
+                .next()
+                .and_then(|value| value.parse().ok())
+                .filter(|value| (1..=86_400).contains(value))
+                .ok_or("--seconds takes a number of seconds from 1 to 86400")?;
+        } else {
+            targets.push(arg.clone());
+        }
+    }
+    if which("cargo-fuzz").is_none() {
+        return Err("fuzz needs cargo-fuzz: cargo install --locked cargo-fuzz@0.13.2".into());
+    }
+    let root = root()?;
+    let fuzz = root.join("fuzz");
+    let channel = toml_string(&fuzz.join("rust-toolchain.toml"), "channel")?;
+    if targets.is_empty() {
+        for entry in fs::read_dir(fuzz.join("fuzz_targets"))? {
+            let path = entry?.path();
+            if path.extension().is_some_and(|extension| extension == "rs")
+                && let Some(stem) = path.file_stem()
+            {
+                targets.push(stem.to_string_lossy().into_owned());
+            }
+        }
+        targets.sort();
+    }
+    let mut failed = Vec::new();
+    for target in &targets {
+        let corpus = fuzz.join("corpus").join(target);
+        fs::create_dir_all(&corpus)?;
+        // rustup's own cargo, not the one running xtask: it picks the nightly.
+        let result = run(Command::new("cargo")
+            .env_remove("RUSTUP_TOOLCHAIN")
+            .current_dir(&root)
+            .arg(format!("+{channel}"))
+            .args(["fuzz", "run", target])
+            .arg(&corpus)
+            .arg(fuzz.join("seeds").join(target))
+            .arg("--")
+            .arg(format!("-max_total_time={seconds}")));
+        if let Err(error) = result {
+            say(&format!("error: {error}"));
+            failed.push(target.as_str());
+        }
+    }
+    if failed.is_empty() {
+        say(&format!(
+            "{} targets fuzzed for {seconds} s each: no findings",
+            targets.len()
+        ));
+        Ok(())
+    } else {
+        Err(format!(
+            "findings in {}: inputs in fuzz/artifacts; report them privately (SECURITY.md)",
+            failed.join(", ")
+        )
+        .into())
+    }
 }
 
 fn remove_dir_if_exists(dir: &Path) -> Result {

@@ -1,8 +1,9 @@
 # The .deb and .rpm packages. `cargo xtask dist` builds them with nfpm, from
 # the repository root, out of the same files as the release tarball. It sets
 # GOETHITE_VERSION, GOETHITE_ARCH (amd64 or arm64; nfpm names them x86_64 and
-# aarch64 in the .rpm), GOETHITE_BINARY and SOURCE_DATE_EPOCH, which dates
-# every file, so a package is reproducible like the tarball.
+# aarch64 in the .rpm), GOETHITE_BINARY, GOETHITE_NOTICES (the third-party
+# licence notices) and SOURCE_DATE_EPOCH, which dates every file, so a
+# package is reproducible like the tarball.
 
 name: goethite
 version: ${GOETHITE_VERSION}
@@ -62,6 +63,11 @@ contents:
     dst: /usr/share/doc/goethite/README.md
   - src: CHANGELOG.md
     dst: /usr/share/doc/goethite/CHANGELOG.md
+
+  # The notices of the crates and npm packages built into the binary.
+  - src: ${GOETHITE_NOTICES}
+    dst: /usr/share/doc/goethite/THIRD-PARTY-LICENSES.txt
+    expand: true
 
   # Licences where each format expects them.
   - src: deploy/package/copyright

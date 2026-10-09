@@ -15,7 +15,7 @@ For amd64 (`x86_64`) and arm64 (`aarch64`):
 
 | File                                                   | What it is                                                                                   |
 | ------------------------------------------------------ | -------------------------------------------------------------------------------------------- |
-| `goethite-<version>-<arch>-unknown-linux-gnu.tar.gz`   | The binary (web UI included), the systemd units, a server config, the example config, the docs |
+| `goethite-<version>-<arch>-unknown-linux-gnu.tar.gz`   | The binary (web UI included), the systemd units, a server config, the example config, the docs and the third-party licence notices |
 | `goethite_<version>-1_<arch>.deb`                      | The Debian and Ubuntu package (`amd64`, `arm64`)                                             |
 | `goethite-<version>-1.<arch>.rpm`                      | The RHEL and Fedora package (`x86_64`, `aarch64`)                                            |
 | `goethite-<version>-<arch>-unknown-linux-gnu.cdx.json` | A [CycloneDX](https://cyclonedx.org) SBOM of the Rust crates built into that binary          |

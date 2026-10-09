@@ -31,12 +31,12 @@ goethite is a pre-alpha project maintained by volunteers. Best effort applies:
   available and credit you unless you prefer otherwise.
 - There is no bug bounty.
 
-## Fuzzing in public CI
+## Fuzzing
 
-The weekly fuzz job runs in this public repository, so a crash it finds is visible in the
-workflow logs and artifacts (kept for 7 days). While goethite is pre-alpha with no releases, we
-accept that trade-off. Before the first release, fuzzing moves to a private setup. Crashes you
-find yourself should still be reported privately as described above.
+Every parser has a fuzz target. Fuzzing runs on maintainers' machines before every release
+(`cargo xtask fuzz`), never in this public repository's CI, where a crash it found would be
+public before its fix; CI only checks that the targets build. If you fuzz goethite and find a
+crash, report it privately as described above, without posting the input publicly.
 
 ## Supported versions
 

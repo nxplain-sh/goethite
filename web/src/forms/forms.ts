@@ -187,6 +187,24 @@ export function isClientId(id: string): boolean {
 	return /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/.test(id)
 }
 
+/**
+ * Access list entries, typed like addresses: addresses, networks and client
+ * IDs, lowercase.
+ */
+export function parseAccessEntries(text: string): string[] {
+	return parseAddresses(text.toLowerCase())
+}
+
+/**
+ * Whether an access list entry looks like an address, a network or a client
+ * ID. A rough check, for the form's hint: goethite checks each one exactly
+ * when the settings are saved.
+ */
+export function isAccessEntry(entry: string): boolean {
+	const address = /^[0-9a-f.:]+(\/[0-9]{1,3})?$/.test(entry) && /[.:]/.test(entry)
+	return address || isClientId(entry)
+}
+
 export function clientSpec(form: ClientForm, managedBy?: ManagedBy): ClientSpec {
 	return {
 		name: form.name.trim(),

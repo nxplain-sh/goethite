@@ -28,7 +28,9 @@ uses it.
 
 ### `[server.rate_limit]`
 
-UDP queries per client network; see [rate limiting](../security/#rate-limiting).
+Queries per client network, over UDP, TCP, DNS over TLS, HTTPS and QUIC together; see
+[rate limiting](../security/#rate-limiting). Which clients may use goethite at all is not set
+here but in the replicated settings ([access control](../security/#access-control)).
 
 | Key | Default | Meaning |
 | --- | --- | --- |
@@ -38,6 +40,7 @@ UDP queries per client network; see [rate limiting](../security/#rate-limiting).
 | `ipv4_prefix` | `32` | Leading bits of an IPv4 address that make one client network, 8 to 32. |
 | `ipv6_prefix` | `64` | Leading bits of an IPv6 address that make one client network, 16 to 128. |
 | `max_clients` | `65536` | Client networks tracked at once, 16 to 1,000,000. Beyond that, untracked networks share one limit. |
+| `exempt` | `[]` | Addresses or networks never limited, such as `["192.168.0.0/16", "fd00::/8"]`, at most 256. |
 
 Loopback clients are never limited.
 

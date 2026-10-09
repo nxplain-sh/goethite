@@ -4,7 +4,9 @@
 //! All three share the connection limits: [`crate::ServerConfig::max_tcp_connections`]
 //! in total and [`crate::ServerConfig::max_tcp_connections_per_client`] per
 //! client count every TCP connection, encrypted or not. TLS handshakes are
-//! bounded in time, and so is every read and write.
+//! bounded in time, and so is every read and write. A client the access
+//! lists refuse is closed on accept, before it takes a slot or a handshake;
+//! one that may still be allowed by its client ID is decided per query.
 
 use std::io;
 use std::net::SocketAddr;
@@ -85,6 +87,11 @@ pub(crate) async fn serve(
                         continue;
                     }
                 };
+                if !admits(&kind, peer, &shared) {
+                    trace!(%peer, %transport, "access lists refuse the client, closing connection");
+                    shared.stats.access_refused.count(transport);
+                    continue;
+                }
                 let Ok(permit) = Arc::clone(&shared.tcp_slots).try_acquire_owned() else {
                     debug!(%peer, %transport, "connection limit reached, closing connection");
                     ServerStats::count(&shared.stats.tcp_refused);
@@ -117,6 +124,16 @@ pub(crate) async fn serve(
         shared.config.shutdown_grace,
     )
     .await;
+}
+
+/// Whether the access lists let a connection from `peer` in: over TCP the
+/// address decides; over TLS and HTTPS, a client ID may still allow it.
+fn admits(kind: &Kind, peer: SocketAddr, shared: &Shared) -> bool {
+    let resolver = &shared.engine.resolver;
+    match kind {
+        Kind::Tcp => resolver.admits(peer.ip(), None),
+        Kind::Tls(_) | Kind::Https(_) => resolver.may_admit(peer.ip()),
+    }
 }
 
 /// Serves one accepted connection.

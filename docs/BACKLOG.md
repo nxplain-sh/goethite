@@ -67,7 +67,6 @@ Phase 1's scope shipped in v0.1.0. These items came up along the way; they are c
   bound to `0.0.0.0` or `[::]` answers from the address the kernel picks, which may not be the one
   the query was sent to. Needs `IP_PKTINFO` / `IPV6_RECVPKTINFO`; until then, list specific
   addresses on multihomed hosts.
-- **[P2] Rate limiting exemptions for trusted networks** (beyond loopback).
 
 ## Phase 2: v0.2 control
 
@@ -154,9 +153,10 @@ Phase 3's scope shipped in v0.3.0. These items came up along the way.
   once 0.4.0 is out; its test nodes need `[filter] services = false` (or a `services_file`).
 - **[later] `$dnsrewrite=NXDOMAIN` rules,** which only block: the services catalog's iCloud
   Private Relay uses nothing else, so goethite leaves that service out today.
-- **[P5] Access control beyond client IDs:** allowed and blocked client networks for every
-  transport, and per-client query rate limits for DoT and DoH, which are not rate limited today
-  (only connection-limited).
+- **[P5] Access lists in the Terraform provider:** `access` (`allowed`, `blocked`) on
+  `goethite_settings`, once 0.5.0 is out.
+- **[later] Per-client rate limits for Oblivious DoH:** its peer is the proxy, so only the
+  connection limits bound it; a proxy could be given its own, higher limit.
 - **[P4] Differential fuzzing** of `HickoryCodec` against the fast-path decoder, once it exists.
 
 - **[P4] Scalar's AI SDK advisory.** `npm audit` reports a low-severity resource consumption
@@ -170,9 +170,6 @@ Phase 3's scope shipped in v0.3.0. These items came up along the way.
 
 ## Phase 5: v0.5
 
-- **[P5] Private fuzzing before the first release.** The weekly fuzz job runs in the public
-  repository, so its findings are public. Move it to a private mirror or OSS-Fuzz (with private
-  bug reports) before goethite has users.
 - **[P5] Landlock and seccomp sandboxing.**
 
 ## Unscheduled / tooling
@@ -183,12 +180,11 @@ Phase 3's scope shipped in v0.3.0. These items came up along the way.
   much slower under goethite's multi-threaded load, so this needs another allocator (a new
   dependency) and a bench against the glibc build first (see ADR 0026).
 
-- **[later] Persist the fuzz corpus in CI** (cache or artifact) so weekly runs build on previous
-  coverage instead of starting from the seeds.
+- **[later] Continuous private fuzzing** (a private repository on a schedule, or OSS-Fuzz) once
+  goethite has users who would feel a regression between releases (ADR 0028).
 - **[later] CI canary job** on `beta` or the latest stable toolchain, to catch upcoming lint and
   compiler changes before an MSRV bump.
 - **[later] Site polish:** OG images, search tuning, a logo, and a richer landing page.
-- **[later] Pin the fuzzing nightly** to a dated toolchain so weekly fuzz runs are reproducible.
 - **[later] Lint workflows in CI** with actionlint and zizmor.
 - **[later] `multiple-versions = "deny"` in `deny.toml`** once the remaining duplicate
   (`syn`, through build-time dependencies) is gone.
