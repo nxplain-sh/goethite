@@ -197,6 +197,10 @@ INFO goethite::sandbox::linux: sandboxed: Landlock limits files, seccomp system 
 Landlock needs Linux 5.13 or newer with Landlock enabled (it is on in Debian, Ubuntu, Fedora and
 RHEL kernels); older ABIs lack some of its rights, and the log then says the files are limited
 "as far as this kernel supports". Without Landlock, goethite warns and seccomp still applies.
+A sandbox around goethite can refuse the system calls that set either up: an older systemd's
+`SystemCallFilter=@system-service` (the shipped units allow them), or a container runtime's
+filter. goethite then warns that it runs without that part of its own sandbox, and the outer one
+still confines it.
 
 An upgrade starts the new goethite inside the running one's sandbox, so the new one can reach
 only what the old one could. If you moved the store, the certificates or the lists elsewhere in

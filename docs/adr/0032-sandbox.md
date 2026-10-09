@@ -54,9 +54,13 @@ is built for x86-64 and 64-bit Arm from a table of numbers in the code, not from
 the dependency list as it is.
 
 **Best effort, and said.** With an older kernel, Landlock enforces what it supports (the crate
-handles each ABI's rights); without Landlock, only seccomp applies. The log names the kernel's
-Landlock ABI and the number of denied calls, or warns. A refusal by a kernel that supports the
-sandbox stops goethite with a message naming `[security] sandbox = false`, which turns it off.
+handles each ABI's rights); without Landlock, only seccomp applies. A sandbox around goethite that
+refuses the calls (`EPERM`, `EACCES`, `ENOSYS`) counts as not having them: systemd before 253
+leaves `seccomp` and the Landlock calls out of `@system-service`, which the units therefore allow
+explicitly, and container runtimes may refuse them too. goethite then runs within that outer
+sandbox. The log names the kernel's Landlock ABI and the number of denied calls, or warns. Any
+other failure, such as a filter the kernel finds invalid, stops goethite with a message naming
+`[security] sandbox = false`, which turns it off.
 
 **Local lists come from one directory.** `[filter] local_lists_dir` (default `lists` beside the
 config file, `/etc/goethite/lists` for the packages) is the only place lists given by a `path` are
