@@ -97,6 +97,18 @@ jobs:
             status=1
           fi
           exit "$status"
+      # actions/attest takes a CycloneDX SBOM only with these three fields;
+      # without this check, a tag would be the first to find out.
+      - name: Check that the SBOMs can be attested
+        run: |
+          status=0
+          for sbom in dist/dist-*-first/*.cdx.json; do
+            if ! jq -e '.bomFormat and .serialNumber and .specVersion' "$sbom" > /dev/null; then
+              echo "::error::$sbom lacks bomFormat, serialNumber or specVersion"
+              status=1
+            fi
+          done
+          exit "$status"
       - name: Install the pinned toolchain
         run: rustup toolchain install
       # The image is built from the tarballs, so it is the same twice if they are.

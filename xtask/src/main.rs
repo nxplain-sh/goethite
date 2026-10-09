@@ -608,15 +608,27 @@ fn dist_sboms(root: &Path, out: &Path, host: &str, version: &str, name: &str) ->
     // cargo-cyclonedx writes one SBOM beside every workspace member's
     // Cargo.toml; goethite's is the one that describes the binary.
     const SBOM: &str = "dist-sbom";
-    // npm stamps its SBOM with a random serial number and the current time;
-    // the serial number is optional in CycloneDX, and the time becomes the
-    // commit's, as cargo-cyclonedx makes it.
-    const STABLE: &str = "let json = ''; \
+    // npm stamps its SBOM with a random serial number and the current time,
+    // and cargo-cyclonedx leaves the serial number out, which attesting an
+    // SBOM requires. So both get the commit's time and a serial number made
+    // from their contents (a version 5 UUID in the URL namespace), and stay
+    // reproducible.
+    const STABLE: &str = "const { createHash } = require('node:crypto'); \
+        let json = ''; \
         process.stdin.on('data', (chunk) => (json += chunk)).on('end', () => { \
-            const bom = JSON.parse(json); \
-            delete bom.serialNumber; \
+            const { bomFormat, specVersion, serialNumber, ...rest } = JSON.parse(json); \
             const epoch = Number(process.env.SOURCE_DATE_EPOCH); \
-            bom.metadata.timestamp = new Date(epoch * 1000).toISOString(); \
+            rest.metadata.timestamp = new Date(epoch * 1000).toISOString(); \
+            const contents = JSON.stringify({ bomFormat, specVersion, ...rest }); \
+            const url = Buffer.from('6ba7b8119dad11d180b400c04fd430c8', 'hex'); \
+            const hash = createHash('sha1').update(url).update(contents).digest(); \
+            hash[6] = (hash[6] & 0x0f) | 0x50; \
+            hash[8] = (hash[8] & 0x3f) | 0x80; \
+            const hex = hash.subarray(0, 16).toString('hex'); \
+            const uuid = [[0, 8], [8, 12], [12, 16], [16, 20], [20, 32]] \
+                .map(([start, end]) => hex.slice(start, end)) \
+                .join('-'); \
+            const bom = { bomFormat, specVersion, serialNumber: 'urn:uuid:' + uuid, ...rest }; \
             process.stdout.write(JSON.stringify(bom, null, 2) + '\\n'); \
         });";
     cargo(&[
@@ -634,10 +646,11 @@ fn dist_sboms(root: &Path, out: &Path, host: &str, version: &str, name: &str) ->
         "--quiet",
     ])?;
     let sbom = format!("{SBOM}.json");
-    fs::rename(
-        root.join("crates").join("goethite").join(&sbom),
-        out.join(format!("{name}.cdx.json")),
-    )?;
+    let binary = fs::File::open(root.join("crates").join("goethite").join(&sbom))?;
+    run(Command::new("node")
+        .args(["--eval", STABLE])
+        .stdin(binary)
+        .stdout(fs::File::create(out.join(format!("{name}.cdx.json")))?))?;
     let mut members = vec![root.join("xtask")];
     for entry in fs::read_dir(root.join("crates"))? {
         members.push(entry?.path());
