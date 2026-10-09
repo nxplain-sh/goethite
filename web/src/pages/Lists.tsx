@@ -248,7 +248,7 @@ function ListFields({
 					value={form.location}
 					onChange={set('location')}
 					placeholder="/etc/goethite/lists/local.txt"
-					hint="An absolute path goethite can read. In a cluster, on both nodes."
+					hint="An absolute path in the local lists directory ([filter] local_lists_dir; /etc/goethite/lists with the packages). In a cluster, on every node."
 					required
 				/>
 			)}

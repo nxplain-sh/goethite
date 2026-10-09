@@ -5,26 +5,57 @@
 //! A download replaces the file only after it passes validation, by writing
 //! a temporary file and renaming it, so the last good copy survives failed,
 //! truncated or hostile downloads, and restarts work offline.
+//!
+//! Lists given by a path are read only from one directory, the local lists
+//! directory ([`ListStore::local`]): the sandbox lets goethite read no other
+//! (see `sandbox`), and an API client cannot point a list at any file the
+//! node can read.
 
 use std::fs;
 use std::io::Write as _;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use goethite_filter::{FilterBuilder, ListStats, Source};
 
 use crate::download::Validators;
 
-/// Where downloaded lists live.
+/// Where downloaded lists live, and where local lists may be read from.
 #[derive(Clone, Debug)]
 pub(crate) struct ListStore {
     dir: PathBuf,
+    local_dir: PathBuf,
 }
 
 impl ListStore {
-    /// A store in `dir`, created when the first list is saved.
-    pub(crate) fn new(dir: PathBuf) -> Self {
-        Self { dir }
+    /// A store in `dir`, created when the first list is saved, reading local
+    /// lists from `local_dir` only.
+    pub(crate) fn new(dir: PathBuf, local_dir: PathBuf) -> Self {
+        Self { dir, local_dir }
+    }
+
+    /// The local list at `path`, if it lies in the local lists directory:
+    /// an absolute path, below the directory (as configured or with its
+    /// symbolic links resolved), without `..`.
+    ///
+    /// # Errors
+    ///
+    /// Why it cannot be read, for the list's status.
+    pub(crate) fn local(&self, path: &Path) -> Result<PathBuf, String> {
+        let inside = |dir: &Path| path.starts_with(dir) && path != dir;
+        let resolved = fs::canonicalize(&self.local_dir).ok();
+        if path.is_absolute()
+            && !path.components().any(|part| part == Component::ParentDir)
+            && (inside(&self.local_dir) || resolved.as_deref().is_some_and(inside))
+        {
+            return Ok(path.to_path_buf());
+        }
+        Err(format!(
+            "{} is outside the local lists directory {}: move it there, or set [filter] \
+             local_lists_dir",
+            path.display(),
+            self.local_dir.display()
+        ))
     }
 
     /// The file holding the last good copy of `url`.
@@ -134,7 +165,38 @@ mod tests {
             std::process::id(),
             fnv1a(format!("{:?}", std::thread::current().id()).as_bytes())
         ));
-        (ListStore::new(dir.clone()), dir)
+        (ListStore::new(dir.clone(), dir.join("local")), dir)
+    }
+
+    #[test]
+    fn local_lists_come_from_one_directory() {
+        let store = ListStore::new(
+            "/var/lib/goethite/lists".into(),
+            "/etc/goethite/lists".into(),
+        );
+        assert_eq!(
+            store.local(Path::new("/etc/goethite/lists/family.txt")),
+            Ok(PathBuf::from("/etc/goethite/lists/family.txt"))
+        );
+        assert!(
+            store
+                .local(Path::new("/etc/goethite/lists/sub/kids.txt"))
+                .is_ok()
+        );
+        for outside in [
+            "/etc/shadow",
+            "/etc/goethite/lists",
+            "/etc/goethite/lists/../goethite.toml",
+            "/etc/goethite/listsmore/x.txt",
+            "lists/family.txt",
+            "/var/lib/goethite/lists/list-0000000000000000.txt",
+        ] {
+            let err = store.local(Path::new(outside)).unwrap_err();
+            assert!(
+                err.contains("outside the local lists directory"),
+                "{outside}: {err}"
+            );
+        }
     }
 
     #[test]

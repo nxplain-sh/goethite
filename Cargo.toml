@@ -57,6 +57,8 @@ http-body-util = "0.1.5"
 hyper = { version = "1.12.0", default-features = false, features = ["client", "http1", "http2"] }
 hyper-util = { version = "0.1.21", default-features = false, features = ["tokio"] }
 jiff = { version = "0.2.38", features = ["serde"] }
+# The sandbox (ADR 0032), Linux only: Landlock for files, seccomp for system calls.
+landlock = "0.4.7"
 # Raft for the cluster's configuration (ADR 0031). 0.9 is the stable line; storage-v2
 # lets goethite keep the log and the state machine in its own store.
 openraft = { version = "=0.9.25", default-features = false, features = ["serde", "storage-v2"] }
@@ -70,6 +72,7 @@ ring = { version = "0.17.14", default-features = false }
 rust-embed = { version = "8.13.0", default-features = false, features = ["deterministic-timestamps"] }
 rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
 rustix = { version = "1.1.5", default-features = false, features = ["std", "process", "thread", "net"] }
+seccompiler = "0.5.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 socket2 = { version = "0.6.5", features = ["all"] }

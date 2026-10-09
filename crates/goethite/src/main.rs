@@ -16,6 +16,7 @@ mod notify;
 mod observe;
 mod plane;
 mod privileges;
+mod sandbox;
 mod secrets;
 mod services;
 mod sizes;
@@ -334,11 +335,32 @@ fn start(
         // Waits for the previous goethite to close the store.
         child.adopted()?;
     }
+    confine(config, config_path, binary)?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .context("cannot start the async runtime")?;
     runtime.block_on(serve(config, config_path, binary, sockets, &secrets, child))
+}
+
+/// Confines `goethite run` (see [`sandbox`]), unless `[security] sandbox`
+/// is off. The directories it may change are created first: rules can only
+/// name what exists.
+fn confine(config: &Config, config_path: &Path, binary: &Path) -> Result<()> {
+    if !config.security.sandbox {
+        warn!("the sandbox is turned off ([security] sandbox = false)");
+        return Ok(());
+    }
+    let store_dir = config.store_path().parent().map(Path::to_path_buf);
+    for dir in store_dir.iter().chain([&config.lists_dir()]) {
+        std::fs::create_dir_all(dir).with_context(|| format!("cannot create {}", dir.display()))?;
+    }
+    sandbox::apply(&sandbox::Policy::run(
+        config,
+        config_path,
+        binary,
+        &runtime_dir(config),
+    ))
 }
 
 /// The sockets systemd kept, if they still fit the config file; otherwise
@@ -806,7 +828,10 @@ fn check_config(config_path: &Path) -> Result<()> {
     if !config.recursion.enabled {
         forwarder(&config)?;
     }
-    filters::check(&config.filter, &ListStore::new(config.lists_dir()))?;
+    filters::check(
+        &config.filter,
+        &ListStore::new(config.lists_dir(), config.local_lists_dir()),
+    )?;
     if let Some(services::ServicesFrom::File(path)) = config.filter.services_from() {
         match services::read(&path, None)? {
             services::Read::Changed(catalog) => {

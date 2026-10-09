@@ -181,10 +181,14 @@ services = true
 # start or answers SERVFAIL.
 on_failure = "open"
 
-# A list from a local file:
+# Lists from local files are read from this directory only. This is the
+# default: lists beside this file.
+# local_lists_dir = "lists"
+#
+# A list from a local file, in local_lists_dir:
 #
 # [[filter.list]]
-# path = "/var/lib/goethite/lists/hosts.txt"
+# path = "lists/hosts.txt"
 #
 # A list downloaded over HTTPS, refreshed every update_hours:
 #
@@ -198,6 +202,10 @@ on_failure = "open"
 # goethite itself. These are the defaults.
 rebinding_protection = true
 private_domains = ["lan", "home.arpa", "internal", "local"]
+# On Linux goethite confines itself once running: Landlock limits the files
+# it can reach, seccomp the system calls it can make. Turn it off only to
+# diagnose a problem you suspect it causes.
+sandbox = true
 
 [store]
 # goethite's database: the filtering configuration (lists, rules, groups,

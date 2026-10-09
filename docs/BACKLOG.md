@@ -172,7 +172,14 @@ Phase 3's scope shipped in v0.3.0. These items came up along the way.
 
 ## Phase 5: v0.5
 
-- **[P5] Landlock and seccomp sandboxing.**
+- **[later] Landlock network rules for outgoing connections.** The sandbox stops new TCP
+  listeners only: upstreams, list hosts and cluster members can be on any port, some of them
+  added at run time. Restricting outgoing TCP to the ports in use would need the policy to follow
+  the configuration (ADR 0032).
+- **[later] Namespaces through `clone3`.** seccomp cannot see `clone3`'s flags, so the filter
+  refuses `unshare` and `setns` but not a `clone3` that creates namespaces. Returning `ENOSYS` for
+  `clone3` (so the C library falls back to `clone`, whose flags it can check) would close it.
+- **[later] The sandbox in the status API and the metrics**, not only the log.
 - **[later] Leadership transfer.** openraft 0.9 cannot hand leadership to another member, so
   `promote` inside a healthy cluster is refused rather than moving the leader (for example
   before maintenance). openraft 0.10 can; revisit when it is stable (ADR 0031).

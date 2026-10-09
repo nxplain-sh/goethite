@@ -98,8 +98,12 @@ pub(crate) fn compile(config: &ConfigSnapshot, lists: &ListStore) -> Result<Comp
         source_ids.push(list.id.as_str().into());
         let mut status = ListStatus::default();
         match list_file(list, lists) {
-            None => info!(list = %list.spec.name, "not downloaded yet"),
-            Some(path) => match read_list(&path) {
+            Err(err) => {
+                error!(list = %list.spec.name, "{err}; skipping this list");
+                status.error = Some(err);
+            }
+            Ok(None) => info!(list = %list.spec.name, "not downloaded yet"),
+            Ok(Some(path)) => match read_list(&path) {
                 Ok(text) => {
                     let read = builder.add_list(source, &text);
                     log_stats(&list.spec.name, read);
@@ -121,13 +125,14 @@ pub(crate) fn compile(config: &ConfigSnapshot, lists: &ListStore) -> Result<Comp
     })
 }
 
-/// The file `list` is read from: its path, or the downloaded copy of its URL
-/// (`None` if not downloaded yet).
-fn list_file(list: &List, lists: &ListStore) -> Option<PathBuf> {
+/// The file `list` is read from: its path, if it lies in the local lists
+/// directory, or the downloaded copy of its URL (`None` if not downloaded
+/// yet).
+fn list_file(list: &List, lists: &ListStore) -> Result<Option<PathBuf>, String> {
     match (&list.spec.path, &list.spec.url) {
-        (Some(path), _) => Some(PathBuf::from(path)),
-        (None, Some(url)) => Some(lists.path_for(url)).filter(|path| path.exists()),
-        (None, None) => None,
+        (Some(path), _) => lists.local(Path::new(path)).map(Some),
+        (None, Some(url)) => Ok(Some(lists.path_for(url)).filter(|path| path.exists())),
+        (None, None) => Ok(None),
     }
 }
 
@@ -144,7 +149,10 @@ pub(crate) fn check(section: &FilterSection, lists: &ListStore) -> Result<()> {
     }
     for list in &section.list {
         let (name, path) = match (&list.path, &list.url) {
-            (Some(path), _) => (path.display().to_string(), Some(path.clone())),
+            (Some(path), _) => (
+                path.display().to_string(),
+                Some(lists.local(path).map_err(anyhow::Error::msg)?),
+            ),
             (None, Some(url)) => (
                 url.clone(),
                 Some(lists.path_for(url)).filter(|p| p.exists()),
@@ -312,12 +320,23 @@ mod tests {
             list("li_missing", Some(&dir.join("missing.txt")), None, true),
             list("li_off", Some(&good), None, false),
             list("li_url", None, Some("https://lists.example/x"), true),
+            list("li_outside", Some(Path::new("/etc/hosts")), None, true),
         ];
-        let compiled = compile(&config, &ListStore::new(dir.join("lists"))).unwrap();
+        let compiled = compile(&config, &ListStore::new(dir.join("lists"), dir.clone())).unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
         assert_eq!(compiled.filter.rule_count(), 2);
         let ids: Vec<&str> = compiled.source_ids.iter().map(|id| &**id).collect();
-        assert_eq!(ids, ["custom", "li_good", "li_missing", "li_url"]);
+        assert_eq!(
+            ids,
+            ["custom", "li_good", "li_missing", "li_url", "li_outside"]
+        );
+        assert!(
+            compiled.lists["li_outside"]
+                .error
+                .as_ref()
+                .unwrap()
+                .contains("outside the local lists directory")
+        );
         let only = |id: &str| Sources::NONE.with(compiled.source(id).unwrap());
         let ads = "ads.example".parse().unwrap();
         assert!(compiled.filter.check(&ads, only("li_good")).is_blocked());
@@ -349,9 +368,20 @@ mod tests {
             }],
             ..FilterSection::default()
         };
-        let err = check(&section, &ListStore::new(PathBuf::from("/nonexistent"))).unwrap_err();
+        let lists = ListStore::new(
+            PathBuf::from("/nonexistent"),
+            PathBuf::from("/nonexistent/goethite"),
+        );
+        let err = check(&section, &lists).unwrap_err();
         assert!(
             err.to_string().contains("cannot open filter list"),
+            "{err:#}"
+        );
+        let elsewhere = ListStore::new(PathBuf::from("/nonexistent"), PathBuf::from("/srv"));
+        let err = check(&section, &elsewhere).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("outside the local lists directory"),
             "{err:#}"
         );
     }
@@ -554,7 +584,7 @@ mod update_tests {
             std::process::id(),
             String::from_utf8_lossy(alpn)
         ));
-        let lists = ListStore::new(cache_dir.clone());
+        let lists = ListStore::new(cache_dir.clone(), cache_dir.join("local"));
         let base = format!("https://dns.goethite.test:{}", addr.port());
         let url = format!("{base}/list");
         let downloader = downloader(MAX_LIST_LEN);
@@ -616,7 +646,7 @@ mod update_tests {
         ));
 
         // Too large: refused.
-        let tiny = ListStore::new(cache_dir.join("tiny"));
+        let tiny = ListStore::new(cache_dir.join("tiny"), cache_dir.join("local"));
         assert!(matches!(
             download(&url, &tiny, &self::downloader(4)).await,
             Downloaded::Failed(_)

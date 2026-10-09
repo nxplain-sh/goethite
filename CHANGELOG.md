@@ -9,6 +9,16 @@ configuration format.
 
 ### Added
 
+- **A sandbox on Linux.** Once its privileges are gone, goethite confines itself: Landlock lets
+  `goethite run` read only the system directories, its config, certificates and local lists, and
+  change only its store, downloaded lists and runtime directory, with no new TCP listeners; a
+  seccomp filter refuses mounting, modules, `ptrace`, BPF, `io_uring`, new namespaces and other
+  system calls goethite never makes, and sockets other than IPv4, IPv6 and Unix ones.
+  `goethite witness` may change only its store and start no program; `goethite vrrp` may open no
+  file. Upgrades work inside it: the new goethite starts within the old one's sandbox. Older
+  kernels get what they support, and the log says what is in force; `[security] sandbox = false`
+  turns it off. See [Security](https://nxplain-sh.github.io/goethite/security/#the-sandbox) and
+  [ADR 0032](docs/adr/0032-sandbox.md).
 - **Raft clustering, with a witness.** The members of a cluster agree on every configuration
   change with Raft (openraft) and apply it in the same order; one leads, and the others forward
   changes to it. With two nodes and a witness (`goethite witness`, which votes, never leads and
@@ -67,6 +77,13 @@ configuration format.
 
 ### Changed
 
+- **Breaking: lists given by a path must be in one directory**, `[filter] local_lists_dir`, by
+  default `lists` beside the config file (`/etc/goethite/lists`, which the packages and the image
+  now create). goethite reads lists from nowhere else, whether they come from the config file or
+  the API: move list files there. A list elsewhere is skipped, with its status and the log saying
+  why, and `goethite check-config` fails on it.
+- openraft, which logs every election and membership change, logs only warnings unless
+  `RUST_LOG` names it: goethite logs those events itself.
 - **Clusters run on Raft instead of primary and replica** (ADR 0031 supersedes ADR 0010).
   goethite 0.4's `[cluster]` tables keep working: the primary starts the cluster with its
   configuration, the replica is added to it, and two nodes alone still have one voter. `promote`

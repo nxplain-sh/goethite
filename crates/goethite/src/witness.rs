@@ -23,8 +23,8 @@ use tokio::sync::watch;
 use tracing::{info, warn};
 
 use crate::config::{ClusterSection, Config};
-use crate::notify;
 use crate::secrets::Secrets;
+use crate::{notify, sandbox};
 
 /// Cluster connections served at once.
 const MAX_CONNECTIONS: usize = 32;
@@ -69,6 +69,11 @@ pub(crate) fn run(config_path: &Path) -> Result<()> {
     )?;
     let listeners = ApiListeners::bind(&[section.listen])?;
     let store = crate::open_store(&config)?;
+    if config.security.sandbox {
+        sandbox::apply(&sandbox::Policy::witness(&config))?;
+    } else {
+        warn!("the sandbox is turned off ([security] sandbox = false)");
+    }
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
