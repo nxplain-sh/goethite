@@ -83,7 +83,7 @@ Every parser gets a fuzz target. Targets live in `fuzz/fuzz_targets/` and use
 | `parse_name`   | Parses text as a domain name. On success, the name's display must parse back to the same name. |
 | `request_checks` | Runs the API's `Host`, `Origin` and web UI path checks on text. A `Host` taken for loopback must name this machine with at most a numeric port; an accepted path must not leave the UI's folder. |
 
-Seeds are committed in `fuzz/seeds/<target>/`, and `crates/goethite-proto/tests/fuzz_seeds.rs`
+Seeds are committed in `fuzz/seeds/<target>/`, and `crates/goethite-proto/tests/fuzz-seeds.rs`
 checks that each one still behaves the way its name says. The working corpus (`fuzz/corpus/`) and
 crash artifacts (`fuzz/artifacts/`) are gitignored, so create the corpus directory first.
 
