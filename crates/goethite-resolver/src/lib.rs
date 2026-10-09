@@ -8,6 +8,7 @@
 
 #![forbid(unsafe_code)]
 
+mod access;
 mod blocking;
 mod cache;
 mod cidr;
@@ -16,6 +17,7 @@ mod forward;
 mod guard;
 mod policy;
 mod rebinding;
+mod records;
 pub mod recurse;
 mod safe_search;
 mod services;
@@ -32,6 +34,7 @@ use goethite_proto::{
     Edns, Name, NameError, Query, Question, Record, RecordClass, RecordType, Response, ResponseCode,
 };
 
+pub use access::{Access, AccessList, MAX_ACCESS_ENTRIES};
 pub use blocking::BlockResponse;
 pub use cache::{Cache, CacheConfig, CacheStats, MAX_CACHED_RECORDS, MAX_CNAME_CHAIN, MAX_ENTRIES};
 pub use cidr::{Cidr, CidrError};
@@ -45,6 +48,8 @@ pub use policy::{
     PolicyState, ScheduledServices, ScheduledSources, is_client_id,
 };
 pub use rebinding::{DEFAULT_PRIVATE_DOMAINS, RebindingProtection, is_private};
+use records::LocalAnswer;
+pub use records::{LocalData, LocalRecord, LocalRecords, MAX_LOCAL_RECORDS};
 pub use recurse::{Recursor, RecursorConfig, RecursorStats};
 pub use services::{
     MAX_SERVICE_ID_LEN, MAX_SERVICES, ServiceError, ServiceFilter, ServiceMask, ServiceRules,
@@ -334,10 +339,14 @@ impl Resolver {
     ///   Unbound answers them (RFC 6895);
     /// - classes other than `IN` (e.g. `CH` server-identification probes):
     ///   `REFUSED`, never forwarded;
-    /// - a name with local records: those records of the asked type,
+    /// - a name with built-in records: those records of the asked type,
     ///   authoritatively, or an empty `NOERROR` (NODATA) if there are none;
     ///   any other name under [`TEST_NAME`] (such as the DNS leak test's):
     ///   `NXDOMAIN`, authoritatively, never forwarded or filtered;
+    /// - a name with configured local records ([`LocalRecords`]): the same,
+    ///   for every client and before the filter, CNAMEs followed; a CNAME
+    ///   that leaves the local records is followed by its target's answer,
+    ///   resolved as below;
     /// - a name the filter blocks for the client's group: the configured
     ///   block response, even if an answer is cached;
     /// - a search host, when the group has safe search on: a CNAME to the
@@ -389,6 +398,24 @@ impl Resolver {
             .is_some_and(|state| state.policy().client_with_id(id).is_some())
     }
 
+    /// Whether the access lists let a query from `client`, which named
+    /// itself `client_id` (if it did), be answered (see [`Access::admits`]).
+    /// Without a policy, every query is.
+    pub fn admits(&self, client: IpAddr, client_id: Option<&str>) -> bool {
+        self.policy
+            .as_ref()
+            .is_none_or(|state| state.access(|access| access.admits(client, client_id)))
+    }
+
+    /// Whether the access lists could let a client at `client` be answered
+    /// once it names its client ID, for deciding before a TLS handshake
+    /// (see [`Access::may_admit`]).
+    pub fn may_admit(&self, client: IpAddr) -> bool {
+        self.policy
+            .as_ref()
+            .is_none_or(|state| state.access(|access| access.may_admit(client)))
+    }
+
     fn asker(&self, client: IpAddr, client_id: Option<&str>) -> Asker {
         let Some(state) = &self.policy else {
             return Asker {
@@ -434,6 +461,47 @@ impl Resolver {
         if let Some(response) = self.local_answer(query) {
             return (response, Outcome::Local, None);
         }
+        let local = asker.policy.as_ref().map_or(LocalAnswer::None, |policy| {
+            policy.records().answer(&question.name, question.qtype)
+        });
+        match local {
+            LocalAnswer::None => self.answer_remote(query, asker).await,
+            LocalAnswer::Records(records) => {
+                let mut response = Response::for_query(query, ResponseCode::NO_ERROR);
+                response.authoritative = true;
+                response.answers = records;
+                (response, Outcome::Local, None)
+            }
+            LocalAnswer::Loop => {
+                debug!(name = %question.name, "local CNAMEs loop");
+                (
+                    Response::for_query(query, ResponseCode::SERV_FAIL),
+                    Outcome::Local,
+                    None,
+                )
+            }
+            LocalAnswer::Alias { chain, target } => {
+                let mut inner = query.clone();
+                inner.question.name = target;
+                let (answer, outcome, hit) = self.answer_remote(&inner, asker).await;
+                let mut response = Response::for_query(query, answer.rcode);
+                response.answers = chain;
+                response.answers.extend(answer.answers);
+                response.authority = answer.authority;
+                (response, outcome, hit)
+            }
+        }
+    }
+
+    /// [`Resolver::answer`] past the local records: the filter, safe search,
+    /// the cache, then the upstreams or recursion.
+    async fn answer_remote(
+        &self,
+        query: &Query,
+        asker: &Asker,
+    ) -> (Response, Outcome, Option<FilterHit>) {
+        let question = &query.question;
+        let rejected = |rcode| (Response::for_query(query, rcode), Outcome::Rejected, None);
         let mut exception = None;
         if let (true, Some(policy)) = (asker.filtering, &asker.policy) {
             // A blocked service is the group's own choice: no list's

@@ -10,16 +10,19 @@ mod filters;
 mod handoff;
 mod lists;
 mod metrics;
+mod migrate;
 mod node;
 mod notify;
 mod observe;
 mod plane;
 mod privileges;
+mod sandbox;
 mod secrets;
 mod services;
 mod sizes;
 mod sockets;
 mod vrrp;
+mod witness;
 
 use std::future::Future;
 use std::io::IsTerminal;
@@ -27,7 +30,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use arc_swap::ArcSwapOption;
 use clap::{Parser, Subcommand};
 use goethite_api::leak::LeakTests;
@@ -91,7 +94,7 @@ enum Command {
     Token,
     /// Print the API's OpenAPI document.
     Openapi,
-    /// Create the certificates a cluster's nodes use to recognize each
+    /// Create the certificates a cluster's members use to recognize each
     /// other.
     Cluster {
         #[command(subcommand)]
@@ -105,20 +108,77 @@ enum Command {
         #[arg(long, short, value_name = "PATH")]
         config: PathBuf,
     },
+    /// Vote in a cluster without serving DNS: a third member for two
+    /// goethite nodes, so the cluster can elect a new leader when either
+    /// is lost. Runs until SIGINT or SIGTERM.
+    Witness {
+        /// Path to the TOML configuration file, with a `[cluster]` table.
+        #[arg(long, short, value_name = "PATH")]
+        config: PathBuf,
+    },
     /// Open the terminal UI for a goethite node, through its API.
     Tui {
-        /// The API's address. Defaults to `GOETHITE_API`, then
-        /// `http://127.0.0.1:8053`.
-        #[arg(long, value_name = "URL")]
-        api: Option<String>,
-        /// A file holding the admin token. Without it, the `GOETHITE_TOKEN`
-        /// environment variable is used, if set.
-        #[arg(long, value_name = "PATH")]
-        token_file: Option<PathBuf>,
-        /// A PEM CA certificate, for a node that serves HTTPS with its own.
-        #[arg(long, value_name = "PATH")]
-        ca_file: Option<PathBuf>,
+        #[command(flatten)]
+        api: ApiArgs,
     },
+    /// Bring a Pi-hole's or an AdGuard Home's configuration over, through
+    /// their API and goethite's. Shows what would change; `--apply` makes
+    /// the changes. Running it again adds only what is still missing.
+    Migrate {
+        #[command(subcommand)]
+        from: MigrateFrom,
+    },
+}
+
+/// How to reach a goethite node's API.
+#[derive(Debug, clap::Args)]
+struct ApiArgs {
+    /// The API's address. Defaults to `GOETHITE_API`, then
+    /// `http://127.0.0.1:8053`.
+    #[arg(long, value_name = "URL")]
+    api: Option<String>,
+    /// A file holding the admin token. Without it, the `GOETHITE_TOKEN`
+    /// environment variable is used, if set.
+    #[arg(long, value_name = "PATH")]
+    token_file: Option<PathBuf>,
+    /// A PEM CA certificate, for a node that serves HTTPS with its own.
+    #[arg(long, value_name = "PATH")]
+    ca_file: Option<PathBuf>,
+}
+
+#[derive(Debug, Subcommand)]
+enum MigrateFrom {
+    /// From Pi-hole v6: lists, exact domains, groups, clients, local DNS and
+    /// CNAME records, the blocking mode.
+    Pihole(MigrateArgs),
+    /// From AdGuard Home: lists, custom rules, clients and their settings,
+    /// DNS rewrites, safe search, blocked services, access lists, the
+    /// blocking mode.
+    AdguardHome(MigrateArgs),
+}
+
+#[derive(Debug, clap::Args)]
+struct MigrateArgs {
+    /// The old server's web address, such as `http://pi.hole` or
+    /// `http://192.168.1.2:3000`.
+    #[arg(long, value_name = "URL")]
+    from: String,
+    /// AdGuard Home's user name (default `admin`).
+    #[arg(long)]
+    user: Option<String>,
+    /// A file holding the old server's password: for Pi-hole, its web
+    /// password or an app password. None for a server without one.
+    #[arg(long, value_name = "PATH")]
+    password_file: Option<PathBuf>,
+    /// A PEM CA certificate, for an old server that serves HTTPS with its
+    /// own.
+    #[arg(long, value_name = "PATH")]
+    from_ca_file: Option<PathBuf>,
+    /// Make the changes in goethite; without it, only show them.
+    #[arg(long)]
+    apply: bool,
+    #[command(flatten)]
+    api: ApiArgs,
 }
 
 #[derive(Debug, Subcommand)]
@@ -155,6 +215,7 @@ fn main() -> ExitCode {
         Command::CheckConfig { config } => check_config(&config),
         Command::Import { config } => import(&config),
         Command::Vrrp { config } => vrrp::run(&config),
+        Command::Witness { config } => witness::run(&config),
         Command::Token => token(),
         Command::Openapi => print(&goethite_api::openapi_json()),
         Command::Cluster { command } => match command {
@@ -163,11 +224,11 @@ fn main() -> ExitCode {
                 cluster::cert(&dir, &node, force).and_then(|text| print(&text))
             }
         },
-        Command::Tui {
-            api,
-            token_file,
-            ca_file,
-        } => tui(api, token_file.as_deref(), ca_file.as_deref()),
+        Command::Tui { api } => tui(&api),
+        Command::Migrate { from } => match from {
+            MigrateFrom::Pihole(args) => migrate(migrate::From::Pihole, args),
+            MigrateFrom::AdguardHome(args) => migrate(migrate::From::AdguardHome, args),
+        },
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -188,15 +249,25 @@ fn main() -> ExitCode {
 /// attacker-controlled bytes at a much larger size than the packet. goethite
 /// reports rejected messages itself, so hickory stays silent unless `RUST_LOG`
 /// names it explicitly.
+///
+/// openraft logs its elections and membership changes at `info`, with its
+/// internal state and members' raw numbers. goethite logs the same events
+/// itself, by name, so openraft logs only warnings and errors unless
+/// `RUST_LOG` names it.
 fn init_logging() {
     let directives = std::env::var(EnvFilter::DEFAULT_ENV).unwrap_or_default();
     let mut filter = EnvFilter::builder()
         .with_default_directive(LevelFilter::INFO.into())
         .parse_lossy(&directives);
-    if !directives.contains("hickory")
-        && let Ok(quiet) = "hickory_proto=off".parse()
-    {
-        filter = filter.add_directive(quiet);
+    for (name, quiet) in [
+        ("hickory", "hickory_proto=off"),
+        ("openraft", "openraft=warn"),
+    ] {
+        if !directives.contains(name)
+            && let Ok(quiet) = quiet.parse()
+        {
+            filter = filter.add_directive(quiet);
+        }
     }
     // Only fails if a global subscriber is already set, which never happens here.
     let _ = tracing_subscriber::fmt()
@@ -264,11 +335,35 @@ fn start(
         // Waits for the previous goethite to close the store.
         child.adopted()?;
     }
+    confine(config, config_path, binary)?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .context("cannot start the async runtime")?;
     runtime.block_on(serve(config, config_path, binary, sockets, &secrets, child))
+}
+
+/// Confines `goethite run` (see [`sandbox`]), unless `[security] sandbox`
+/// is off. The directories it may change are created first, if they can
+/// be: rules can only name what exists. One that cannot be created now
+/// could not be written later either, so that is left to whatever needs it.
+fn confine(config: &Config, config_path: &Path, binary: &Path) -> Result<()> {
+    if !config.security.sandbox {
+        warn!("the sandbox is turned off ([security] sandbox = false)");
+        return Ok(());
+    }
+    let store_dir = config.store_path().parent().map(Path::to_path_buf);
+    for dir in store_dir.iter().chain([&config.lists_dir()]) {
+        if let Err(err) = std::fs::create_dir_all(dir) {
+            tracing::debug!(dir = %dir.display(), %err, "cannot create it before the sandbox");
+        }
+    }
+    sandbox::apply(&sandbox::Policy::run(
+        config,
+        config_path,
+        binary,
+        &runtime_dir(config),
+    ))
 }
 
 /// The sockets systemd kept, if they still fit the config file; otherwise
@@ -628,11 +723,62 @@ fn api(
     })
 }
 
-fn tui(api: Option<String>, token_file: Option<&Path>, ca_file: Option<&Path>) -> Result<()> {
+fn tui(api: &ApiArgs) -> Result<()> {
+    let (url, token, ca) = api_options(api)?;
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .context("cannot start the async runtime")?;
+    runtime.block_on(goethite_tui::run(goethite_tui::Options { url, token, ca }))?;
+    Ok(())
+}
+
+/// Reads the old server's configuration, shows the plan, and applies it
+/// with `--apply`.
+fn migrate(from: migrate::From, args: MigrateArgs) -> Result<()> {
+    let password = args
+        .password_file
+        .as_deref()
+        .map(migrate::read_password)
+        .transpose()?;
+    let ca = args
+        .from_ca_file
+        .as_deref()
+        .map(|path| {
+            std::fs::read(path)
+                .with_context(|| format!("cannot read the CA certificate {}", path.display()))
+        })
+        .transpose()?;
+    let source = migrate::Source {
+        from,
+        url: args.from,
+        user: args.user,
+        password,
+        ca,
+    };
+    let target = if args.apply {
+        let (url, token, ca) = api_options(&args.api)?;
+        Some(goethite_tui::Client::new(&url, token, ca.as_deref())?)
+    } else {
+        None
+    };
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("cannot start the async runtime")?;
+    let report = runtime.block_on(migrate::migrate(source, target))?;
+    print(&report)
+}
+
+/// The API address, token and CA certificate from the options, the
+/// environment and the defaults.
+fn api_options(api: &ApiArgs) -> Result<(String, Option<String>, Option<Vec<u8>>)> {
     let url = api
+        .api
+        .clone()
         .or_else(|| std::env::var("GOETHITE_API").ok())
         .unwrap_or_else(|| "http://127.0.0.1:8053".to_owned());
-    let token = match token_file {
+    let token = match api.token_file.as_deref() {
         Some(path) => Some(
             std::fs::read_to_string(path)
                 .with_context(|| format!("cannot read the token file {}", path.display()))?
@@ -643,18 +789,15 @@ fn tui(api: Option<String>, token_file: Option<&Path>, ca_file: Option<&Path>) -
             .ok()
             .filter(|token| !token.is_empty()),
     };
-    let ca = ca_file
+    let ca = api
+        .ca_file
+        .as_deref()
         .map(|path| {
             std::fs::read(path)
                 .with_context(|| format!("cannot read the CA certificate {}", path.display()))
         })
         .transpose()?;
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .context("cannot start the async runtime")?;
-    runtime.block_on(goethite_tui::run(goethite_tui::Options { url, token, ca }))?;
-    Ok(())
+    Ok((url, token, ca))
 }
 
 /// Prints a new admin token and its hash.
@@ -688,7 +831,10 @@ fn check_config(config_path: &Path) -> Result<()> {
     if !config.recursion.enabled {
         forwarder(&config)?;
     }
-    filters::check(&config.filter, &ListStore::new(config.lists_dir()))?;
+    filters::check(
+        &config.filter,
+        &ListStore::new(config.lists_dir(), config.local_lists_dir()),
+    )?;
     if let Some(services::ServicesFrom::File(path)) = config.filter.services_from() {
         match services::read(&path, None)? {
             services::Read::Changed(catalog) => {
@@ -844,6 +990,12 @@ fn add_default_lists(store: &Store) -> Result<()> {
 fn import(config_path: &Path) -> Result<()> {
     let config = Config::load(config_path)?;
     let store = open_store(&config)?;
+    if store.cluster_value("id")?.is_some() {
+        bail!(
+            "this node is in a cluster, whose configuration every member keeps alike: change it \
+             through the API of any member (or Terraform), not with goethite import"
+        );
+    }
     let import = config.filter.to_import();
     let print = fingerprint(&import)?;
     let summary = store.import(import, &Actor::cli())?;

@@ -7,8 +7,111 @@ configuration format.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-09
+
+Phase 5, v0.5: Raft clustering with a witness, a Landlock and seccomp sandbox, reproducible and
+signed releases with packages and a container image, access control and rate limits on every
+transport, local DNS records, and moving from Pi-hole or AdGuard Home. Fuzzing moved out of
+public CI. This version is the one the external security review looks at
+([docs/security-review.md](docs/security-review.md)).
+
+### Added
+
+- **A sandbox on Linux.** Once its privileges are gone, goethite confines itself: Landlock lets
+  `goethite run` read only the system directories, its config, certificates and local lists, and
+  change only its store, downloaded lists and runtime directory, with no new TCP listeners; a
+  seccomp filter refuses mounting, modules, `ptrace`, BPF, `io_uring`, new namespaces and other
+  system calls goethite never makes, and sockets other than IPv4, IPv6 and Unix ones.
+  `goethite witness` may change only its store and start no program; `goethite vrrp` may open no
+  file. Upgrades work inside it: the new goethite starts within the old one's sandbox. Older
+  kernels get what they support, and the log says what is in force; `[security] sandbox = false`
+  turns it off. See [Security](https://nxplain-sh.github.io/goethite/security/#the-sandbox) and
+  [ADR 0032](docs/adr/0032-sandbox.md).
+- **Raft clustering, with a witness.** The members of a cluster agree on every configuration
+  change with Raft (openraft) and apply it in the same order; one leads, and the others forward
+  changes to it. With two nodes and a witness (`goethite witness`, which votes, never leads and
+  serves no DNS; `goethite-witness.service`), or three nodes, losing any one elects a new leader
+  within seconds (5 to 12 in the chaos lab) and changes go on. Members are listed in
+  `[[cluster.member]]`, one node starts the cluster with `bootstrap = true`, and the leader adds
+  the others as they answer, making them voters once that makes three or more. `GET /api/v1/cluster` adds the members, the
+  leader, the term and this node's state; `DELETE /api/v1/cluster/members/{node}` removes a
+  member. Every member's audit log holds the cluster's changes, by their real actors. See
+  [High availability](https://nxplain-sh.github.io/goethite/ha/) and
+  [ADR 0031](docs/adr/0031-raft-clustering.md).
+- **Release builds.** `cargo xtask dist` builds the release tarball and SBOMs for the machine's
+  architecture in a pinned image, from the last commit; the same commit gives the same bytes. The
+  release workflow builds amd64 and arm64 twice on separate runners and stops unless the bytes
+  match; on a tag it attests the build provenance and the SBOMs with keyless Sigstore signatures
+  and drafts a GitHub Release. Each tarball holds the binary (web UI included, with its
+  dependency list embedded by cargo-auditable), the systemd units and the example config; the
+  binaries need glibc 2.34 or newer. See
+  [Verifying releases](https://nxplain-sh.github.io/goethite/verify/) and
+  [ADR 0026](docs/adr/0026-release-builds.md).
+- **Packages and a container image.** Each release has a .deb and an .rpm per architecture and a
+  container image, `ghcr.io/nxplain-sh/goethite`, all holding the release binary and attested
+  like it. The packages install the units and a server config, start nothing on first install,
+  and on upgrade hand over to the new binary in place without dropping a query. The image is
+  distroless; goethite binds port 53 as root there, then runs as an unprivileged user. The
+  tarball ships the same server config as `goethite.toml`. See the
+  [install guide](https://nxplain-sh.github.io/goethite/install/) and
+  [ADR 0027](docs/adr/0027-packages-and-container-image.md).
+- **Third-party licence notices.** Releases include `THIRD-PARTY-LICENSES.txt` with the notices
+  of every crate and npm package built into the binary; the packages install it in
+  `/usr/share/doc/goethite`.
+- **`goethite migrate pihole|adguard-home`** reads a running Pi-hole v6 or AdGuard Home through
+  its web API and brings lists, rules, groups, clients, local records and settings over through
+  goethite's API, showing first what comes over, what behaves differently and what is left out.
+  Applying only adds what goethite lacks, so it can run again. See
+  [Moving from Pi-hole or AdGuard Home](https://nxplain-sh.github.io/goethite/migrate/) and
+  [ADR 0030](docs/adr/0030-migrating-from-pihole-and-adguard-home.md).
+- **Local DNS records.** goethite answers names of your own, `A`, `AAAA` and `CNAME`, exact or a
+  wildcard (`*.home.example`), for every client and before the filter: in the web UI's Records
+  page or `/api/v1/records`. A `CNAME` is followed, and its target resolved like any other name.
+  See [Local records](https://nxplain-sh.github.io/goethite/local-records/) and
+  [ADR 0029](docs/adr/0029-local-dns-records.md).
+- **Access control.** Allowed and blocked clients, by address, network or client ID, for every
+  transport: a query is answered when its client is allowed (or nobody is listed) and not
+  blocked. Refused UDP queries get no answer, refused connections are closed before their TLS
+  handshake, and a client ID refused after the handshake gets `REFUSED`. The lists are part of
+  the replicated settings (`access` in `/api/v1/settings`, the web UI's Settings), so they apply
+  at once on every node. Loopback addresses always pass. Counted in
+  `goethite_access_refused_total{protocol}`.
+- **Rate limiting over every transport.** TCP, DNS over TLS, HTTPS and QUIC queries count against
+  the same per-client limit as UDP; over it, they get `REFUSED` and are not logged. Oblivious DoH
+  stays limited by connections only. `[server.rate_limit] exempt` lists networks that are never
+  limited.
+- `cargo xtask versions`, also in CI: the internal crates and the web UI carry the workspace
+  version.
+
 ### Changed
 
+- **Breaking: lists given by a path must be in one directory**, `[filter] local_lists_dir`, by
+  default `lists` beside the config file (`/etc/goethite/lists`, which the packages and the image
+  now create). goethite reads lists from nowhere else, whether they come from the config file or
+  the API: move list files there. A list elsewhere is skipped, with its status and the log saying
+  why, and `goethite check-config` fails on it.
+- openraft, which logs every election and membership change, logs only warnings unless
+  `RUST_LOG` names it: goethite logs those events itself.
+- **Clusters run on Raft instead of primary and replica** (ADR 0031 supersedes ADR 0010).
+  goethite 0.4's `[cluster]` tables keep working: the primary starts the cluster with its
+  configuration, the replica is added to it, and two nodes alone still have one voter. `promote`
+  now takes a cluster that cannot elect a leader over, as a new cluster with this node's
+  configuration (refused while a leader answers); `demote` leaves a cluster to join another.
+  Upgrade both nodes; configuration changes are refused until they run the same version. The web
+  UI and the TUI show the leader and how many members are up. `goethite import` refuses to run on
+  a node in a cluster: change the cluster's configuration through any member's API.
+- **The store's schema is version 2** (local records). In a cluster, a replica copies only from a
+  primary on the same version: upgrade both nodes, the replica first, as usual. An older store
+  gains the new table when opened.
+- `goethite_rate_limited_total` has a `protocol` label, now that every transport is limited; sum
+  it for the old total.
+- **Fuzzing no longer runs in public CI**, where a crash it found would be public before its
+  fix: `cargo xtask fuzz` runs every target locally, as a release step, on a nightly pinned in
+  `fuzz/rust-toolchain.toml`, and CI only builds the targets
+  ([ADR 0028](docs/adr/0028-fuzzing-off-public-ci.md)).
+- The API reference's npm package (`@scalar/api-reference`) is a runtime dependency of the web UI
+  rather than a development one: its bundle ships in the binary, so the web UI's SBOM and the
+  licence notices now include it and the packages it bundles.
 - **The systemd units moved from `dist/systemd/` to `deploy/systemd/`.** Install them from the
   new path; the units themselves are unchanged.
 - Release builds use thin LTO and one codegen unit: the binary is about a quarter smaller
@@ -296,7 +399,8 @@ production on Linux. It is pre-alpha software: try it, but do not rely on it yet
   criterion benchmarks, a dnsperf script, and CI with clippy, tests on amd64 and arm64,
   cargo-deny and cargo-audit.
 
-[Unreleased]: https://github.com/nxplain-sh/goethite/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/nxplain-sh/goethite/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/nxplain-sh/goethite/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/nxplain-sh/goethite/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/nxplain-sh/goethite/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/nxplain-sh/goethite/compare/v0.1.0...v0.2.0

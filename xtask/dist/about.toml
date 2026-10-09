@@ -1,0 +1,16 @@
+# cargo-about's configuration: which licences may appear in the notices it
+# writes for the crates built into goethite (THIRD-PARTY-LICENSES.txt in a
+# release). The same licences deny.toml allows, with its exceptions.
+accepted = [
+    "Apache-2.0",
+    "BSD-3-Clause",
+    "ISC",
+    "MIT",
+    "Unicode-3.0",
+    "CDLA-Permissive-2.0",
+    "Zlib",
+]
+# Only what ships in the binary: not build scripts, proc macros or test-only
+# crates.
+ignore-build-dependencies = true
+ignore-dev-dependencies = true

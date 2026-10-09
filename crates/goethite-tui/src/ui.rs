@@ -5,7 +5,7 @@
 //! carry a text label, so nothing depends on color alone.
 
 use goethite_api::leak::{LeakLookup, LeakTest};
-use goethite_api::{ClusterRole, ClusterStatus};
+use goethite_api::{ClusterStatus, MemberState};
 use goethite_store::{ManagedBy, Protocol, QueryOutcome};
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
@@ -102,26 +102,45 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, app: &App) {
     frame.render_widget(Line::from(spans), area);
 }
 
-/// The node's role and its peer, in words; problems in rust.
+/// What the node does in its cluster, the leader and how many members are
+/// up, in words; problems in rust.
 fn cluster_spans(cluster: &ClusterStatus) -> Vec<Span<'static>> {
-    let role = match cluster.role {
-        ClusterRole::Primary => "PRIMARY",
-        ClusterRole::Replica => "REPLICA",
+    let state = match cluster.state {
+        MemberState::Leader => "LEADER",
+        MemberState::Follower => "FOLLOWER",
+        MemberState::Candidate => "CANDIDATE",
+        MemberState::Learner => "LEARNER",
+        MemberState::Stopped => "STOPPED",
+        MemberState::Unknown => "UNKNOWN",
     };
     let mut spans = vec![
         Span::from(format!("  {} ", cluster.node)),
-        Span::from(format!(" {role} "))
+        Span::from(format!(" {state} "))
             .fg(Color::Black)
             .bg(SAND)
             .bold(),
     ];
-    let (peer, color) = if cluster.peer.reachable {
-        (format!(" peer {} UP ", cluster.peer.node), TEAL)
-    } else {
-        (format!(" peer {} DOWN ", cluster.peer.node), RUST)
-    };
+    if let Some(leader) = cluster
+        .leader
+        .as_ref()
+        .filter(|leader| **leader != cluster.node)
+    {
+        spans.push(Span::from(format!(" leader {leader}")));
+    }
+    let others: Vec<_> = cluster
+        .members
+        .iter()
+        .filter(|member| !member.this_node)
+        .collect();
+    let up = others.iter().filter(|member| member.reachable).count();
+    let color = if up == others.len() { TEAL } else { RUST };
     spans.push(Span::from(" "));
-    spans.push(Span::from(peer).fg(Color::Black).bg(color).bold());
+    spans.push(
+        Span::from(format!(" {up}/{} MEMBERS UP ", others.len()))
+            .fg(Color::Black)
+            .bg(color)
+            .bold(),
+    );
     if !cluster.problems.is_empty() {
         spans.push(
             Span::from(format!(" {} PROBLEM(S) ", cluster.problems.len()))
@@ -784,7 +803,7 @@ fn render_groups(frame: &mut Frame<'_>, area: Rect, app: &App) {
 
 #[cfg(test)]
 mod tests {
-    use goethite_api::{FilterStatus, QueryLogStatus, Status, UpstreamStatus};
+    use goethite_api::{ClusterRole, FilterStatus, QueryLogStatus, Status, UpstreamStatus};
     use goethite_store::{
         Client, ClientSpec, Counters, Group, GroupSpec, List, ListSpec, Protocol, QueryEntry,
         StatsReport, TopEntry,
@@ -1051,11 +1070,34 @@ mod tests {
     fn the_cluster_shows_in_words() {
         let mut app = app();
         let mut status = status();
+        let member = |node: &str, this_node, reachable| goethite_api::MemberStatus {
+            node: node.into(),
+            address: "192.0.2.11:8054".into(),
+            this_node,
+            membership: goethite_api::Membership::Voter,
+            witness: false,
+            reachable,
+            checked_at: None,
+            state: None,
+            version: None,
+            config: None,
+            matched: None,
+            error: None,
+        };
         status.cluster = Some(ClusterStatus {
             node: "dns2".into(),
             role: ClusterRole::Replica,
+            state: MemberState::Follower,
+            cluster: None,
+            leader: Some("dns1".into()),
+            term: 3,
             config: goethite_store::ConfigVersion::default(),
             writable: false,
+            members: vec![
+                member("dns2", true, true),
+                member("dns1", false, false),
+                member("witness", false, true),
+            ],
             peer: goethite_api::PeerStatus {
                 node: "dns1".into(),
                 address: "192.0.2.11:8054".into(),
@@ -1067,12 +1109,13 @@ mod tests {
                 error: Some("connection refused".into()),
             },
             sync: None,
-            problems: vec!["cannot copy the primary's configuration".into()],
+            problems: vec!["dns1 is unreachable".into()],
         });
         app.apply(Update::Status(Box::new(status)));
         let text = screen(&app);
-        assert!(text.contains("dns2") && text.contains("REPLICA"), "{text}");
-        assert!(text.contains("peer dns1 DOWN"), "{text}");
+        assert!(text.contains("dns2") && text.contains("FOLLOWER"), "{text}");
+        assert!(text.contains("leader dns1"), "{text}");
+        assert!(text.contains("1/2 MEMBERS UP"), "{text}");
         assert!(text.contains("1 PROBLEM(S)"), "{text}");
     }
 

@@ -22,9 +22,12 @@ export default defineConfig({
 			sidebar: [
 				{ label: 'Quick start', slug: 'quick-start' },
 				{ label: 'Install on Linux', slug: 'install' },
+				{ label: 'Verifying releases', slug: 'verify' },
+				{ label: 'Moving from Pi-hole or AdGuard Home', slug: 'migrate' },
 				{ label: 'Configuration', slug: 'configuration' },
 				{ label: 'Filtering', slug: 'filtering' },
 				{ label: 'Clients and groups', slug: 'groups' },
+				{ label: 'Local records', slug: 'local-records' },
 				{ label: 'DNS leak test', slug: 'leak-test' },
 				{ label: 'Encrypted DNS', slug: 'encrypted-dns' },
 				{ label: 'Recursion', slug: 'recursion' },

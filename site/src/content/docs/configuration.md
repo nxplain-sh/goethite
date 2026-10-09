@@ -28,7 +28,9 @@ uses it.
 
 ### `[server.rate_limit]`
 
-UDP queries per client network; see [rate limiting](../security/#rate-limiting).
+Queries per client network, over UDP, TCP, DNS over TLS, HTTPS and QUIC together; see
+[rate limiting](../security/#rate-limiting). Which clients may use goethite at all is not set
+here but in the replicated settings ([access control](../security/#access-control)).
 
 | Key | Default | Meaning |
 | --- | --- | --- |
@@ -38,6 +40,7 @@ UDP queries per client network; see [rate limiting](../security/#rate-limiting).
 | `ipv4_prefix` | `32` | Leading bits of an IPv4 address that make one client network, 8 to 32. |
 | `ipv6_prefix` | `64` | Leading bits of an IPv6 address that make one client network, 16 to 128. |
 | `max_clients` | `65536` | Client networks tracked at once, 16 to 1,000,000. Beyond that, untracked networks share one limit. |
+| `exempt` | `[]` | Addresses or networks never limited, such as `["192.168.0.0/16", "fd00::/8"]`, at most 256. |
 
 Loopback clients are never limited.
 
@@ -124,6 +127,7 @@ API.
 | `directory` | `true` | Whether the node looks lists up for the web UI, only when someone browses them: the [FilterLists directory](../filtering/#finding-more-lists), and the sizes the [recommended lists](../filtering/#recommended-lists-and-presets) state. A node setting, never copied into the store. |
 | `services` | `true` | Whether groups can [block services](../groups/#blocked-services): the node downloads AdGuard's services catalog with the lists. A node setting, never copied into the store. |
 | `services_file` | none | Reads the services catalog from this file instead of downloading it, for nodes without internet access (re-read on reload). Relative paths are relative to the config file. |
+| `local_lists_dir` | `lists` beside the config file | The only directory lists given by a `path` are read from, whether from the config file or the API. A node setting. |
 | `on_failure` | `"open"` | What to do when filtering fails: `"open"` keeps resolving (unfiltered if need be) and reports it, `"closed"` refuses to start or answers SERVFAIL. A node setting, never copied into the store. See [Security](../security/#when-filtering-fails). |
 
 ### `[[filter.list]]`
@@ -132,7 +136,7 @@ Up to 63 lists, each with exactly one of:
 
 | Key | Meaning |
 | --- | --- |
-| `path` | A list file on disk. Relative paths are relative to the config file. |
+| `path` | A list file in `local_lists_dir`. Relative paths are relative to the config file. |
 | `url` | An `https://` URL. The list is downloaded at startup and every `update_hours`, checked, and kept in `cache_dir`, so goethite starts with the last good copy when offline. |
 
 Lists may be at most 128 MiB.
@@ -162,18 +166,30 @@ See [REST API](../api/) for how to use it.
 
 ## `[cluster]`
 
-Absent for a node on its own. With it, the node is one of a two-node cluster: the primary owns the
-filtering configuration and the replica copies it. See [High availability](../ha/).
+Absent for a node on its own. With it, the node is a member of a cluster whose members agree on
+the filtering configuration with Raft. `goethite witness` reads the same table. See
+[High availability](../ha/).
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `node` | required | This node's name, as in its certificate: 1 to 63 lowercase letters, digits and hyphens, starting with a letter. |
-| `role` | required | `"primary"` or `"replica"`. |
-| `listen` | `"0.0.0.0:8054"` | Where the node listens for its peer, over mutual TLS. |
+| `node` | required | This member's name, as in its certificate: 1 to 63 lowercase letters, digits and hyphens, starting with a letter. |
+| `bootstrap` | `false` | Start a new cluster on this node, with its configuration, while it is in none. On one node only; never on a witness. |
+| `listen` | `"0.0.0.0:8054"` | Where the member listens for the others, over mutual TLS. Also the address it gives the others when it starts the cluster, so prefer its own address to `0.0.0.0`. |
 | `ca` | required | The cluster CA certificate, from `goethite cluster init`. |
-| `cert`, `key` | required | This node's certificate and key, from `goethite cluster cert <node>`. Read before goethite drops its privileges. |
-| `peer.node` | required | The other node's name. Only a certificate with that name is accepted. |
-| `peer.address` | required | The other node's `listen` address. |
+| `cert`, `key` | required | This member's certificate and key, from `goethite cluster cert <node>`. Read before goethite drops its privileges. |
+| `role` | unset | goethite 0.4's role: `"primary"` starts the cluster, as `bootstrap` does; `"replica"` waits to be added. |
+
+### `[[cluster.member]]`
+
+One table for each other member, up to 15. Only members in a member's config file, or already in
+the cluster, may connect to it. The leader adds the members in its config file as they answer.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `node` | required | The member's name. Only a certificate with that name is accepted for it. |
+| `address` | required | The member's `listen` address. |
+
+goethite 0.4's `[cluster.peer]` table, with the same keys, still counts as one member.
 
 ## `[vrrp]`
 
@@ -217,9 +233,13 @@ anyone.
 | --- | --- | --- |
 | `rebinding_protection` | `true` | Remove private, loopback and link-local addresses from forwarded answers for public names (see [DNS rebinding protection](../security/#dns-rebinding-protection)). |
 | `private_domains` | `["lan", "home.arpa", "internal", "local"]` | Names below these may resolve to private addresses. Setting it replaces the defaults. |
+| `sandbox` | `true` | Whether goethite confines itself with Landlock and seccomp on Linux ([the sandbox](../security/#the-sandbox)). Also read by `goethite witness` and `goethite vrrp`. |
 
 ## Logging
 
 Logs go to standard error, and the `RUST_LOG` environment variable sets the level (default
 `info`). For example, `RUST_LOG=debug` shows dropped and rejected packets, and
-`RUST_LOG=goethite_resolver=debug` shows only the resolver's details.
+`RUST_LOG=goethite_resolver=debug` shows only the resolver's details. Two libraries say less
+unless `RUST_LOG` names them, since goethite reports what they would itself: hickory-proto, which
+would quote malformed packets, is off, and openraft, which logs every election and membership
+change, logs warnings only (`RUST_LOG=info,openraft=info` shows them).

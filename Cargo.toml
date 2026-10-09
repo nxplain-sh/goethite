@@ -6,6 +6,7 @@ members = [
     "crates/goethite-api",
     "crates/goethite-cluster",
     "crates/goethite-filter",
+    "crates/goethite-migrate",
     "crates/goethite-proto",
     "crates/goethite-resolver",
     "crates/goethite-server",
@@ -21,7 +22,7 @@ default-members = ["crates/*"]
 exclude = ["fuzz"]
 
 [workspace.package]
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"
 rust-version = "1.99"
 license = "MIT OR Apache-2.0"
@@ -33,14 +34,15 @@ publish = false
 [workspace.dependencies]
 # Internal crates, with `path` for local builds and `version` for what a manifest
 # records. Bump these with `workspace.package.version`.
-goethite-api = { path = "crates/goethite-api", version = "0.4.0" }
-goethite-cluster = { path = "crates/goethite-cluster", version = "0.4.0" }
-goethite-filter = { path = "crates/goethite-filter", version = "0.4.0" }
-goethite-proto = { path = "crates/goethite-proto", version = "0.4.0" }
-goethite-resolver = { path = "crates/goethite-resolver", version = "0.4.0" }
-goethite-server = { path = "crates/goethite-server", version = "0.4.0" }
-goethite-store = { path = "crates/goethite-store", version = "0.4.0" }
-goethite-tui = { path = "crates/goethite-tui", version = "0.4.0" }
+goethite-api = { path = "crates/goethite-api", version = "0.5.0" }
+goethite-cluster = { path = "crates/goethite-cluster", version = "0.5.0" }
+goethite-filter = { path = "crates/goethite-filter", version = "0.5.0" }
+goethite-migrate = { path = "crates/goethite-migrate", version = "0.5.0" }
+goethite-proto = { path = "crates/goethite-proto", version = "0.5.0" }
+goethite-resolver = { path = "crates/goethite-resolver", version = "0.5.0" }
+goethite-server = { path = "crates/goethite-server", version = "0.5.0" }
+goethite-store = { path = "crates/goethite-store", version = "0.5.0" }
+goethite-tui = { path = "crates/goethite-tui", version = "0.5.0" }
 
 # External crates. Every addition must pass `cargo deny check` and be justified in the PR.
 anyhow = "1.0.104"
@@ -55,6 +57,11 @@ http-body-util = "0.1.5"
 hyper = { version = "1.12.0", default-features = false, features = ["client", "http1", "http2"] }
 hyper-util = { version = "0.1.21", default-features = false, features = ["tokio"] }
 jiff = { version = "0.2.38", features = ["serde"] }
+# The sandbox (ADR 0032), Linux only: Landlock for files, seccomp for system calls.
+landlock = "0.4.7"
+# Raft for the cluster's configuration (ADR 0031). 0.9 is the stable line; storage-v2
+# lets goethite keep the log and the state machine in its own store.
+openraft = { version = "=0.9.25", default-features = false, features = ["serde", "storage-v2"] }
 proptest = "1.11.0"
 quinn = { version = "0.11.12", default-features = false, features = ["runtime-tokio", "rustls-ring"] }
 ratatui = { version = "0.30.2", default-features = false, features = ["crossterm_0_29", "layout-cache"] }
@@ -65,6 +72,7 @@ ring = { version = "0.17.14", default-features = false }
 rust-embed = { version = "8.13.0", default-features = false, features = ["deterministic-timestamps"] }
 rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
 rustix = { version = "1.1.5", default-features = false, features = ["std", "process", "thread", "net"] }
+seccompiler = "0.5.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 socket2 = { version = "0.6.5", features = ["all"] }

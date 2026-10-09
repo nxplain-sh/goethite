@@ -14,7 +14,7 @@ agents alike.
 - `dig` (from bind-utils / dnsutils) for manual checks
 - Optional: [shellcheck](https://www.shellcheck.net) for the shell scripts (CI runs it)
 - Node.js 22.19 or newer, only if you work on the web UI in `web/` or the website in `site/`
-  (CI uses Node 24)
+  (CI and release builds use the version in `web/.node-version`)
 
 ## Build, test, lint
 
@@ -85,7 +85,22 @@ it that way when you edit workflows.
 ## Fuzzing
 
 Every parser gets a fuzz target. Targets live in `fuzz/fuzz_targets/` and use
-[cargo-fuzz](https://github.com/rust-fuzz/cargo-fuzz) (libFuzzer, nightly only).
+[cargo-fuzz](https://github.com/rust-fuzz/cargo-fuzz) (libFuzzer) on the nightly pinned in
+`fuzz/rust-toolchain.toml`. Install the tools once:
+
+```sh
+rustup toolchain install "$(sed -n 's/^channel = "\(.*\)"$/\1/p' fuzz/rust-toolchain.toml)" --profile minimal
+cargo install --locked cargo-fuzz@0.13.2
+```
+
+Fuzzing runs on maintainers' machines, never in public CI, where a crash it found would be public
+before its fix ([ADR 0028](docs/adr/0028-fuzzing-off-public-ci.md)). `cargo xtask fuzz` runs
+every target for 5 minutes, or the ones named for as long as asked:
+
+```sh
+cargo xtask fuzz                                  # every target, 300 s each: a release step
+cargo xtask fuzz --seconds 60 decode-query        # one target, after changing its parser
+```
 
 | Target         | What it does                                                                                 |
 | -------------- | -------------------------------------------------------------------------------------------- |
@@ -95,45 +110,39 @@ Every parser gets a fuzz target. Targets live in `fuzz/fuzz_targets/` and use
 | `parse-cidr`   | Parses text as a client network. On success, the network's display must parse back to the same network, which contains its own address. |
 | `parse-list`   | Parses and compiles text as a filter list. For every parsed rule's name, its parent and a child, the compiled filter must agree with the rule-by-rule reference. |
 | `parse-name`   | Parses text as a domain name. On success, the name's display must parse back to the same name. |
+| `plan-migration` | Plans a migration from a Pi-hole's or an AdGuard Home's API answers (JSON), and Pi-hole's CNAME record syntax. The plan must hold only what goethite's store accepts: HTTPS lists, supported rules, answerable records with a CNAME alone at its name, valid clients and access entries, unique names. |
 | `request-checks` | Runs the API's `Host`, `Origin` and web UI path checks on text. A `Host` taken for loopback must name this machine with at most a numeric port; an accepted path must not leave the UI's folder. |
 
 Seeds are committed in `fuzz/seeds/<target>/`, and `crates/goethite-proto/tests/fuzz-seeds.rs`
 checks that each one still behaves the way its name says. The working corpus (`fuzz/corpus/`) and
 crash artifacts (`fuzz/artifacts/`) are gitignored, so create the corpus directory first.
 
-Run a target for 60 seconds, writing new inputs to the working corpus and reading the seeds:
+`cargo xtask fuzz` keeps each target's corpus in `fuzz/corpus/<target>`, so runs build on each
+other. cargo-fuzz itself works too, with the pinned nightly; inside `fuzz/`, rustup picks it, and
+`cargo fuzz list` names the targets. Reproduce and minimize a crash:
 
 ```sh
-mkdir -p fuzz/corpus/decode-query
-cargo +nightly fuzz run decode-query fuzz/corpus/decode-query fuzz/seeds/decode-query -- -max_total_time=60
-```
-
-The same commands work for every target; `cargo +nightly fuzz list` names them.
-
-Reproduce and minimize a crash:
-
-```sh
-cargo +nightly fuzz run decode-query fuzz/artifacts/decode-query/<crash-file>
-cargo +nightly fuzz tmin decode-query fuzz/artifacts/decode-query/<crash-file>
+cd fuzz
+cargo fuzz run decode-query artifacts/decode-query/<crash-file>
+cargo fuzz tmin decode-query artifacts/decode-query/<crash-file>
 ```
 
 Every fixed crash gets a regression unit test in `goethite-proto` with the minimized input.
 
-CI runs each target weekly (and on manual dispatch) for 5 minutes and uploads any crash artifacts,
-kept for 7 days. The repository is public, so a crash found by CI is public from that moment: while
-goethite is pre-alpha with no releases we accept that. Before the first release, fuzzing moves to
-a private setup (see [`docs/BACKLOG.md`](docs/BACKLOG.md)). If you find a crash locally, report it
-privately as described in [`SECURITY.md`](SECURITY.md).
+CI only checks that every target builds (`.github/workflows/fuzz.yaml`). If you find a crash,
+report it privately as described in [`SECURITY.md`](SECURITY.md); do not open a public issue or
+pull request with the input.
 
 ### Adding a fuzz target
 
-1. `cargo +nightly fuzz add <name>` from the repo root, or copy an existing target in
-   `fuzz/fuzz_targets/`. Names are kebab-case (`parse-thing`): Cargo warns about other binary
-   names.
+1. `cargo fuzz add <name>` inside `fuzz/` (rustup picks the pinned nightly there), or copy an
+   existing target in `fuzz/fuzz_targets/`. Names are kebab-case (`parse-thing`): Cargo warns
+   about other binary names.
 2. Fuzz the public parsing entry point, not internals. Where possible, check a property (such as
    decode, encode, decode round-tripping), not just "does not crash".
 3. Add a few small, valid seed inputs under `fuzz/seeds/<name>/`.
-4. Add the target to the weekly fuzz workflow and to the table above.
+4. Add the target to the table above. `cargo xtask fuzz` and the fuzz workflow find it on
+   their own.
 
 ## Changing the API
 
@@ -227,7 +236,10 @@ npm run e2e        # Playwright: Chromium against a real goethite
 ```
 
 `npm run build` also builds the API reference (`web/dist-docs`), which goethite serves at
-`/api/docs` when `[api] docs` is on. The end-to-end tests start goethite themselves
+`/api/docs` when `[api] docs` is on. Both ship in the binary, so every package they bundle is a
+runtime dependency (`dependencies`, not `devDependencies`): release builds list those in the web
+UI's SBOM and put their licence notices, which `npm run licenses` prints, in
+`THIRD-PARTY-LICENSES.txt`. The end-to-end tests start goethite themselves
 (`web/e2e/serve.mjs`), from the workspace's debug build unless `GOETHITE_BIN` names another;
 build goethite after `npm run build`, since release builds embed the files.
 
@@ -245,6 +257,40 @@ npm ci --ignore-scripts
 npm run dev
 ```
 
+## Releasing (maintainers)
+
+Releases are built by [`.github/workflows/release.yaml`](.github/workflows/release.yaml) with
+`cargo xtask dist`, reproducibly, and attested with Sigstore; see
+[ADR 0026](docs/adr/0026-release-builds.md). `cargo xtask dist` builds the release files for your
+machine's architecture locally, the same way (it needs docker or podman). To release `X.Y.Z`:
+
+1. On `development`, bump the version: `workspace.package.version` and the internal crates in
+   `[workspace.dependencies]` in `Cargo.toml`, and `version` in `web/package.json` and both places
+   in `web/package-lock.json`. `cargo xtask versions` checks they agree. Regenerate the OpenAPI
+   document (`GOETHITE_UPDATE_OPENAPI=1 cargo test -p goethite-api --test openapi`), whose version
+   follows.
+2. In `CHANGELOG.md`, turn `[Unreleased]` into `## [X.Y.Z] - <date>`, add a new empty
+   `[Unreleased]` above it, and update the compare links at the bottom. The release notes are
+   taken from this section.
+3. Fuzz every target: `cargo xtask fuzz` (about 90 minutes, on a machine that does not sleep).
+   A finding is fixed privately first (see [`SECURITY.md`](SECURITY.md)).
+4. Open the pull request from `development` to `main` and merge it once CI passes.
+5. Tag the merge commit on `main` and push the tag:
+
+   ```sh
+   git switch main && git pull
+   git tag -a vX.Y.Z -m "goethite X.Y.Z"
+   git push origin vX.Y.Z
+   ```
+
+6. The workflow builds both architectures twice, fails unless the builds match, refuses a tag
+   that is not on `main` or does not match the version, then attests the files and drafts the
+   GitHub Release. Check the draft (`gh attestation verify` on a downloaded tarball, see
+   [Verifying releases](site/src/content/docs/verify.md)) and publish it.
+7. Publishing runs [`.github/workflows/image.yaml`](.github/workflows/image.yaml), which checks
+   the published tarballs, then builds, pushes and attests `ghcr.io/nxplain-sh/goethite`.
+   `cargo xtask image` builds the same image locally from `target/dist`, as an OCI archive.
+
 ## Repository settings (maintainers)
 
 One-time settings on `nxplain-sh/goethite` that the repository cannot set itself:
@@ -254,11 +300,14 @@ One-time settings on `nxplain-sh/goethite` that the repository cannot set itself
     required, merge commits only); every CI job must pass, `source branch` included, which
     fails pull requests into `main` that do not come from `development`.
   - `development`: no deletion or force-push.
+  - Tags `v*`: no deletion or update, so a published release's tag cannot move.
 - **`api-breaking` label:** marks an intended breaking API change (see
   [Changing the API](#changing-the-api)).
 - **GitHub Pages:** Settings → Pages → Build and deployment → Source: **GitHub Actions**
   (or `gh api -X POST repos/nxplain-sh/goethite/pages -f build_type=workflow`). Without it the
   deploy job in `pages.yaml` fails.
+- **Container package:** after the first image push, make `ghcr.io/nxplain-sh/goethite`
+  public (the organisation's Packages → goethite → Package settings → Change visibility).
 - **Private vulnerability reporting:** Settings → Code security → Private vulnerability
   reporting → Enable (or `gh api -X PUT repos/nxplain-sh/goethite/private-vulnerability-reporting`).
   [`SECURITY.md`](SECURITY.md) relies on it.

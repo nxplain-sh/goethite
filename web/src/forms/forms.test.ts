@@ -3,7 +3,12 @@ import { describe, expect, it } from 'vitest'
 import {
 	clientForm,
 	clientSpec,
+	isAccessEntry,
 	isClientId,
+	isRecordTtl,
+	parseAccessEntries,
+	recordForm,
+	recordSpec,
 	parseClientIds,
 	describeDays,
 	describeWindows,
@@ -103,6 +108,48 @@ describe('groups', () => {
 			managed_by: 'api' as const,
 		}
 		expect(groupSpec(groupForm(spec), 'api')).toEqual(spec)
+	})
+})
+
+describe('local records', () => {
+	it('round-trips, lowercase', () => {
+		const spec = {
+			name: 'nas.lan',
+			type: 'A' as const,
+			value: '192.168.1.10',
+			ttl: 300,
+			enabled: true,
+			comment: '',
+			managed_by: 'api' as const,
+		}
+		expect(recordSpec(recordForm(spec), 'api')).toEqual(spec)
+		const cname = recordSpec({ ...recordForm(), name: ' *.Home.Example ', kind: 'CNAME', value: 'NAS.lan' })
+		expect([cname.name, cname.value]).toEqual(['*.home.example', 'nas.lan'])
+		expect(recordForm().ttl).toBe('300')
+	})
+
+	it('takes TTLs from 0 to a day', () => {
+		for (const valid of ['0', '300', '86400']) expect(isRecordTtl(valid)).toBe(true)
+		for (const invalid of ['', '-1', '86401', '1.5', 'soon']) expect(isRecordTtl(invalid)).toBe(false)
+	})
+})
+
+describe('access lists', () => {
+	it('reads entries lowercase, without repeats', () => {
+		expect(parseAccessEntries('192.168.1.0/24\nAnna-Phone, anna-phone 2001:DB8::/32')).toEqual([
+			'192.168.1.0/24',
+			'anna-phone',
+			'2001:db8::/32',
+		])
+	})
+
+	it('knows what looks like an address, a network or a client ID', () => {
+		for (const valid of ['192.168.1.5', '10.0.0.0/8', '2001:db8::/32', '::1', 'anna-phone', 'guest']) {
+			expect(isAccessEntry(valid)).toBe(true)
+		}
+		for (const invalid of ['anna phone', 'a_b', '-a', '10.0.0.0/8/8', 'living-room.tv']) {
+			expect(isAccessEntry(invalid)).toBe(false)
+		}
 	})
 })
 

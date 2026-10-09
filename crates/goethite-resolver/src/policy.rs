@@ -21,8 +21,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use arc_swap::ArcSwap;
 use goethite_filter::{Filter, Source, Sources};
 
+use crate::access::Access;
 use crate::blocking::BlockResponse;
 use crate::cidr::{Cidr, canonical, mask};
+use crate::records::LocalRecords;
 use crate::services::{ServiceFilter, ServiceMask};
 
 /// The most schedules a policy tells apart.
@@ -156,6 +158,10 @@ pub struct PolicyParts {
     /// The blocked services catalog, compiled: the groups' service masks
     /// index into it.
     pub services: Arc<ServiceFilter>,
+    /// Which clients are answered at all.
+    pub access: Access,
+    /// The configured local records.
+    pub records: LocalRecords,
 }
 
 impl std::fmt::Debug for PolicyParts {
@@ -305,6 +311,8 @@ pub struct Policy {
     blocked_ttl: u32,
     protection: bool,
     services: Arc<ServiceFilter>,
+    access: Access,
+    records: LocalRecords,
 }
 
 impl std::fmt::Debug for Policy {
@@ -362,6 +370,8 @@ impl Policy {
             blocked_ttl: parts.blocked_ttl,
             protection: parts.protection,
             services: parts.services,
+            access: parts.access,
+            records: parts.records,
         })
     }
 
@@ -386,6 +396,8 @@ impl Policy {
             blocked_ttl,
             protection,
             services: Arc::new(ServiceFilter::empty()),
+            access: Access::default(),
+            records: LocalRecords::default(),
         }
     }
 
@@ -450,6 +462,16 @@ impl Policy {
     pub fn services(&self) -> &ServiceFilter {
         &self.services
     }
+
+    /// Which clients are answered at all.
+    pub fn access(&self) -> &Access {
+        &self.access
+    }
+
+    /// The configured local records.
+    pub fn records(&self) -> &LocalRecords {
+        &self.records
+    }
 }
 
 /// The current policy and the state that changes between recompiles.
@@ -487,6 +509,12 @@ impl PolicyState {
     /// The current policy.
     pub fn policy(&self) -> Arc<Policy> {
         self.policy.load_full()
+    }
+
+    /// Runs `check` on the current access lists, without taking a reference
+    /// to the policy: it is on every query's path.
+    pub(crate) fn access<R>(&self, check: impl FnOnce(&Access) -> R) -> R {
+        check(self.policy.load().access())
     }
 
     /// Swaps in `policy`; queries in progress finish with the old one.
@@ -557,6 +585,8 @@ mod tests {
             blocked_ttl: 10,
             protection: true,
             services: Arc::new(ServiceFilter::empty()),
+            access: Access::default(),
+            records: LocalRecords::default(),
         }
     }
 

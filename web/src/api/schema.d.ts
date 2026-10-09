@@ -66,8 +66,8 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * This node's cluster: its role, the other node, and how following the
-         *     primary goes.
+         * This node's cluster: what this node does in it, its leader and members,
+         *     and how following the leader goes.
          */
         get: operations["get_cluster"];
         put?: never;
@@ -88,12 +88,34 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Makes this node a replica: it copies the other node's configuration
-         *     from then on, replacing its own. Refused unless the other node is
-         *     reachable and primary, unless forced.
+         * Leaves this node's cluster to join another: after a takeover, on a
+         *     node of the old cluster. It keeps its configuration until the other
+         *     cluster's leader adds it, which then replaces it. Refused unless the
+         *     leader of another cluster is reachable, unless forced.
          */
         post: operations["demote"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/cluster/members/{node}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Removes a member from the cluster for good, such as a node taken out of
+         *     service. Remove it from the leader's config file first, or it is added
+         *     again. Made by the leader, like configuration changes.
+         */
+        delete: operations["remove_member"];
         options?: never;
         head?: never;
         patch?: never;
@@ -109,9 +131,11 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Makes this node the primary. Its configuration becomes the cluster's,
-         *     in a new epoch. Refused while the current primary is reachable, unless
-         *     forced: demote that one first.
+         * Takes the cluster over: this node starts a new cluster, as its only
+         *     voter, with its configuration. For a cluster that has lost most of its
+         *     voters for good, such as two nodes without a witness that lost the
+         *     leader. Refused while a leader is reachable, unless forced. The other
+         *     members join the new cluster once demoted.
          */
         post: operations["promote"];
         delete?: never;
@@ -423,6 +447,43 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/records": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Lists all local DNS records, oldest first. */
+        get: operations["list_records"];
+        put?: never;
+        /** Creates a local DNS record. */
+        post: operations["create_record"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/records/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Gets one local DNS record. */
+        get: operations["get_record"];
+        /** Replaces a local DNS record's spec. */
+        put: operations["update_record"];
+        post?: never;
+        /** Deletes a local DNS record. */
+        delete: operations["delete_record"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/rules": {
         parameters: {
             query?: never;
@@ -592,6 +653,24 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * @description Which clients are answered, over every transport. An entry is an IP
+         *     address, a network in CIDR notation (`192.168.1.0/24`) or a client ID. A
+         *     query is answered when its client is on `allowed`, or `allowed` is
+         *     empty, and is not on `blocked`. Loopback addresses always pass, but a
+         *     blocked client ID is refused even there. Refused UDP queries get no
+         *     answer; refused connections are closed before their TLS handshake; a
+         *     client ID refused after it is known gets `REFUSED`.
+         */
+        AccessSpec: {
+            /**
+             * @description When not empty, only these clients are answered. At most 10,000
+             *     entries.
+             */
+            allowed?: string[];
+            /** @description These clients are never answered. At most 10,000 entries. */
+            blocked?: string[];
+        };
         /** @description Who made a change, and from where. */
         Actor: {
             /** @description The client's IP address, for API requests. */
@@ -604,9 +683,9 @@ export interface components {
              */
             node?: string | null;
         };
-        /** @description Who made a change: `token` (an API client with the admin token), `unauthenticated` (an API client on loopback while no admin token is configured), `cli` (the goethite command line), `system` (goethite itself) or `replication` (copied from the cluster's primary). More may be added: show unknown values as they are. */
+        /** @description Who made a change: `token` (an API client with the admin token), `unauthenticated` (an API client on loopback while no admin token is configured), `cli` (the goethite command line), `system` (goethite itself) or `replication` (a whole configuration taken from another cluster member). More may be added: show unknown values as they are. */
         ActorKind: string;
-        /** @description What an audit entry records: `create`, `update` or `delete` (a resource or the settings), `import` (the config file's `[filter]` table), `pause` or `resume` (filtering), `refresh` (a list download), `replicate` (a copy of the cluster primary's configuration), `promote` or `demote` (this node became the cluster's primary or a replica). More may be added: show unknown values as they are. */
+        /** @description What an audit entry records: `create`, `update` or `delete` (a resource or the settings), `import` (the config file's `[filter]` table), `pause` or `resume` (filtering), `refresh` (a list download), `replicate` (the cluster's whole configuration, taken from another member), `promote` (this node took the cluster over) or `demote` (this node left its cluster to join another). More may be added: show unknown values as they are. */
         AuditAction: string;
         /** @description One entry of the audit log. */
         AuditEntry: {
@@ -725,29 +804,51 @@ export interface components {
             name: string;
         };
         /**
-         * @description A node's role in its cluster.
+         * @description A node's role in its cluster, as goethite 0.4 named it.
          * @enum {string}
          */
         ClusterRole: "primary" | "replica";
         /** @description This node's cluster. */
         ClusterStatus: {
+            /**
+             * @description The cluster's ID, if this node is in one: chosen when the cluster
+             *     started, or was taken over.
+             */
+            cluster?: string | null;
             /** @description Its configuration's version. */
             config: components["schemas"]["ConfigVersion"];
+            /** @description The leader, if there is one. */
+            leader?: string | null;
+            /**
+             * @description Every member: this node, the cluster's other members, and those in
+             *     this node's config file; empty from goethite 0.4.
+             */
+            members?: components["schemas"]["MemberStatus"][];
             /** @description This node's name. */
             node: string;
-            /** @description The other node, as last seen. */
+            /**
+             * @description One other member, for clients of goethite 0.4: the leader, or on
+             *     the leader another member. Use `members`.
+             */
             peer: components["schemas"]["PeerStatus"];
             /**
-             * @description Things someone should look at, in words, such as both nodes being
-             *     primary.
+             * @description Things someone should look at, in words, such as a member in
+             *     another cluster.
              */
             problems: string[];
-            /** @description Its role. */
+            /** @description Its role: `primary` while it leads. */
             role: components["schemas"]["ClusterRole"];
+            /** @description What it does in the cluster; `unknown` from goethite 0.4. */
+            state?: components["schemas"]["MemberState"];
             sync?: components["schemas"]["SyncStatus"] | null;
             /**
+             * Format: int64
+             * @description The Raft term: it counts elections.
+             */
+            term?: number;
+            /**
              * @description Whether configuration changes can be made through this node now:
-             *     on the primary, or on a replica that reaches the primary.
+             *     on the leader, or on a member that reaches the leader.
              */
             writable: boolean;
         };
@@ -755,9 +856,11 @@ export interface components {
          * @description Which configuration a store holds.
          *
          *     `epoch` names a line of history: it is chosen at random when a store is
-         *     created and again when a node becomes the cluster's primary. `version`
-         *     counts the changes along it. A replica takes a configuration whose epoch
-         *     differs from its own, or whose version is newer.
+         *     created, and again when a node's whole configuration becomes a
+         *     cluster's ([`Store::seed`]). `version` counts the changes along it.
+         *     Every member of a cluster goes through the same versions, so a member
+         *     that forwarded a change waits until it holds the version the leader
+         *     reported.
          */
         ConfigVersion: {
             /**
@@ -1135,6 +1238,47 @@ export interface components {
          * @enum {string}
          */
         ManagedBy: "api" | "terraform" | "config_file";
+        /**
+         * @description What a member does in the cluster right now.
+         * @enum {string}
+         */
+        MemberState: "leader" | "follower" | "candidate" | "learner" | "stopped" | "unknown";
+        /** @description A member of the cluster, as last seen. */
+        MemberStatus: {
+            /** @description Its cluster address. */
+            address: string;
+            /**
+             * Format: date-time
+             * @description When it was last checked.
+             */
+            checked_at?: string | null;
+            config?: components["schemas"]["ConfigVersion"] | null;
+            /** @description Why the last check failed, if it did. */
+            error?: string | null;
+            /**
+             * Format: int64
+             * @description On the leader: the last log entry it is known to hold.
+             */
+            matched?: number | null;
+            /** @description How it belongs to the cluster. */
+            membership: components["schemas"]["Membership"];
+            /** @description Its name. */
+            node: string;
+            /** @description Whether it answered the last check. */
+            reachable: boolean;
+            state?: components["schemas"]["MemberState"] | null;
+            /** @description Whether it is this node. */
+            this_node: boolean;
+            /** @description Its goethite version, when last reached. */
+            version?: string | null;
+            /** @description Whether it is a witness: it votes, never leads and answers no DNS. */
+            witness: boolean;
+        };
+        /**
+         * @description How a member belongs to the cluster.
+         * @enum {string}
+         */
+        Membership: "voter" | "learner" | "configured";
         /** @description Whether filtering is paused. */
         Pause: {
             /**
@@ -1151,7 +1295,7 @@ export interface components {
              */
             seconds: number;
         };
-        /** @description The other node, as last seen. */
+        /** @description Another member, as last seen, in goethite 0.4's terms. */
         PeerStatus: {
             /** @description Its cluster address. */
             address: string;
@@ -1163,7 +1307,7 @@ export interface components {
             config?: components["schemas"]["ConfigVersion"] | null;
             /** @description Why the last check failed, if it did. */
             error?: string | null;
-            /** @description Its name. */
+            /** @description Its name; empty when the cluster has no other member. */
             node: string;
             /** @description Whether it answered the last check. */
             reachable: boolean;
@@ -1313,6 +1457,64 @@ export interface components {
             /** @description The lists whose header states a size; others are left out. */
             lists: components["schemas"]["StatedSize"][];
         };
+        /** @description A stored local DNS record. */
+        Record: {
+            /**
+             * Format: date-time
+             * @description When it was created.
+             */
+            created_at: string;
+            /** @description The ID, chosen by goethite. */
+            id: string;
+            /**
+             * Format: int64
+             * @description Counts updates, starting at 1.
+             */
+            revision: number;
+            /** @description What it is. */
+            spec: components["schemas"]["RecordSpec"];
+            /**
+             * Format: date-time
+             * @description When it last changed.
+             */
+            updated_at: string;
+        };
+        /**
+         * @description The type of a local DNS record.
+         * @enum {string}
+         */
+        RecordKind: "A" | "AAAA" | "CNAME";
+        /**
+         * @description A DNS record goethite answers itself, for every client and before the
+         *     filter: a device on the local network such as `nas.lan`, or every name
+         *     below one (`*.home.example`). A name with records answers only from
+         *     them; a CNAME's target is resolved like any other name.
+         */
+        RecordSpec: {
+            /** @description Free text. */
+            comment?: string;
+            /** @description Whether the record is answered. */
+            enabled?: boolean;
+            /** @description Who manages the record. */
+            managed_by?: components["schemas"]["ManagedBy"];
+            /**
+             * @description The name, such as `nas.lan`, or `*.home.example` for every name below
+             *     `home.example` (not that name itself).
+             */
+            name: string;
+            /**
+             * Format: int32
+             * @description How long clients may cache it, in seconds, at most 86,400.
+             */
+            ttl?: number;
+            /** @description What the record holds. */
+            type: components["schemas"]["RecordKind"];
+            /**
+             * @description An IPv4 address for `A`, an IPv6 address for `AAAA`, a name for
+             *     `CNAME`.
+             */
+            value: string;
+        };
         /**
          * @description Recursive resolution: from the root servers down, instead of asking
          *     upstream resolvers.
@@ -1377,8 +1579,9 @@ export interface components {
         /** @description How to change a node's role. */
         RoleChange: {
             /**
-             * @description Change it even though the other node is reachable and would
-             *     disagree, leaving two primaries (or two replicas) until one changes.
+             * @description Change it even though the cluster seems to disagree: take a cluster
+             *     over while its leader is reachable, or leave one without another to
+             *     join. Two clusters can result, until one node is demoted.
              */
             force?: boolean;
         };
@@ -1500,6 +1703,8 @@ export interface components {
         };
         /** @description Node-wide filtering settings. */
         SettingsSpec: {
+            /** @description Which clients are answered at all; by default, everyone. */
+            access?: components["schemas"]["AccessSpec"];
             /** @description How blocked names are answered. */
             block_response?: components["schemas"]["BlockResponseKind"];
             /**
@@ -1594,18 +1799,18 @@ export interface components {
             /** @description The running version. */
             version: string;
         };
-        /** @description How a replica follows the primary. */
+        /** @description How a member follows the leader. */
         SyncStatus: {
-            /** @description Why the last attempt failed, if it did. */
+            /** @description Why it cannot follow, if it cannot. */
             error?: string | null;
             /**
              * Format: date-time
-             * @description When the primary last answered.
+             * @description When the leader last sent changes or a heartbeat.
              */
             last_contact?: string | null;
             /**
              * Format: date-time
-             * @description When its configuration was last copied.
+             * @description When this node's configuration last changed.
              */
             last_copy?: string | null;
         };
@@ -1946,7 +2151,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description This node is a replica */
+            /** @description This node left its cluster */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -1964,8 +2169,58 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description The other node is not a reachable primary */
+            /** @description No other cluster's leader is reachable */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    remove_member: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The member's name */
+                node: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The member is gone */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClusterStatus"];
+                };
+            };
+            /** @description No such member */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description It is the leader, or still in the leader's config file */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The cluster has no leader */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -1988,7 +2243,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description This node is the primary */
+            /** @description This node leads a cluster of its own */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -2006,7 +2261,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description The other node is reachable and primary */
+            /** @description The cluster has a reachable leader */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -2828,6 +3083,226 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["QueryPage"];
+                };
+            };
+        };
+    };
+    list_records: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description All of them, oldest first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Record"][];
+                };
+            };
+            /** @description No valid admin token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    create_record: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecordSpec"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Record"];
+                };
+            };
+            /** @description It refers to something that does not exist */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description It is not valid */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    get_record: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description It, with its revision as the ETag */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Record"];
+                };
+            };
+            /** @description No such ID */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    update_record: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The revision the change is based on */
+                "If-Match"?: string | null;
+            };
+            path: {
+                /** @description The ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecordSpec"];
+            };
+        };
+        responses: {
+            /** @description Updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Record"];
+                };
+            };
+            /** @description No such ID */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description It refers to something that does not exist */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description It changed since that revision */
+            412: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description It is not valid */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    delete_record: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The revision the deletion is based on */
+                "If-Match"?: string | null;
+            };
+            path: {
+                /** @description The ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such ID */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Something still refers to it */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description It changed since that revision */
+            412: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
                 };
             };
         };

@@ -13,10 +13,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use goethite_filter::Sources;
 use goethite_resolver::{
-    BlockResponse, Cidr, ClientPolicy, GroupPolicy, Policy, PolicyError, PolicyParts, PolicyState,
-    ScheduledServices, ScheduledSources, ServiceFilter, ServiceMask,
+    Access, BlockResponse, Cidr, ClientPolicy, GroupPolicy, LocalRecords, Policy, PolicyError,
+    PolicyParts, PolicyState, ScheduledServices, ScheduledSources, ServiceFilter, ServiceMask,
 };
-use goethite_store::{BlockResponseKind, ConfigSnapshot, Store};
+use goethite_store::{AccessSpec, BlockResponseKind, ConfigSnapshot, Store};
 use jiff::Timestamp;
 use tokio::sync::{Notify, watch};
 use tokio::task::JoinSet;
@@ -235,7 +235,7 @@ impl Control {
     }
 
     /// Recompiles the policy around the current filter, after groups,
-    /// clients, schedules or settings changed.
+    /// clients, schedules, local records or settings changed.
     pub(crate) fn rebuild_policy(&self) -> bool {
         let config = self.store.config();
         match build_policy(&config, &self.compiled(), &self.catalog().filter) {
@@ -531,7 +531,29 @@ pub(crate) fn build_policy(
         blocked_ttl: settings.blocked_ttl,
         protection: settings.protection,
         services: Arc::clone(catalog),
+        access: Access::new(
+            &AccessSpec::list(&settings.access.allowed),
+            &AccessSpec::list(&settings.access.blocked),
+        ),
+        records: local_records(config),
     })
+}
+
+/// The enabled local records, compiled.
+fn local_records(config: &ConfigSnapshot) -> LocalRecords {
+    LocalRecords::new(
+        config
+            .records
+            .iter()
+            .filter(|record| record.spec.enabled)
+            .filter_map(|record| {
+                let local = record.spec.local();
+                if local.is_none() {
+                    warn!(record = %record.id, "skipping a local record that is not valid");
+                }
+                local
+            }),
+    )
 }
 
 #[cfg(test)]
@@ -540,8 +562,8 @@ mod tests {
 
     use goethite_filter::{FilterBuilder, Source};
     use goethite_store::{
-        BlockedService, Client, ClientSpec, Group, GroupList, GroupSpec, ManagedBy, Schedule,
-        ScheduleSpec, Weekday, Window,
+        BlockedService, Client, ClientSpec, Group, GroupList, GroupSpec, ManagedBy, Record,
+        RecordKind, RecordSpec, Schedule, ScheduleSpec, Weekday, Window,
     };
 
     use super::*;
@@ -657,6 +679,31 @@ mod tests {
         // The tablet's client ID finds it on any network.
         let (client, _) = policy.identify("203.0.113.5".parse().unwrap(), Some("tablet"));
         assert_eq!(client.unwrap().id.as_ref(), "cl_tablet");
+    }
+
+    #[test]
+    fn enabled_local_records_reach_the_policy() {
+        let now: Timestamp = "2026-10-07T09:00:00Z".parse().unwrap();
+        let mut config = config(now);
+        for (id, name, enabled) in [("rc_nas", "nas.lan", true), ("rc_old", "old.lan", false)] {
+            config.records.push(Record {
+                id: id.into(),
+                revision: 1,
+                created_at: now,
+                updated_at: now,
+                spec: RecordSpec {
+                    name: name.into(),
+                    kind: RecordKind::A,
+                    value: "192.168.1.10".into(),
+                    ttl: 300,
+                    enabled,
+                    comment: String::new(),
+                    managed_by: ManagedBy::Api,
+                },
+            });
+        }
+        let policy = build_policy(&config, &compiled(), &Arc::new(ServiceFilter::empty())).unwrap();
+        assert_eq!(policy.records().len(), 1);
     }
 
     #[test]

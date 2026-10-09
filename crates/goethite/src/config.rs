@@ -19,15 +19,16 @@ use goethite_cluster::{NodeId, Role};
 use goethite_filter::{LineKind, parse_line};
 use goethite_proto::Name;
 use goethite_resolver::{
-    CacheConfig, DEFAULT_PRIVATE_DOMAINS, MAX_ENTRIES, MAX_UPSTREAMS, RebindingProtection,
+    CacheConfig, Cidr, DEFAULT_PRIVATE_DOMAINS, MAX_ENTRIES, MAX_UPSTREAMS, RebindingProtection,
     RecursorConfig, Transport, UpstreamConfig,
 };
 use goethite_server::{
-    MAX_LISTEN_ADDRESSES, MAX_RATE_LIMITED_CLIENTS, MAX_UDP_SOCKETS, RateLimitConfig, ServerConfig,
+    MAX_LISTEN_ADDRESSES, MAX_RATE_LIMIT_EXEMPTIONS, MAX_RATE_LIMITED_CLIENTS, MAX_UDP_SOCKETS,
+    RateLimitConfig, ServerConfig,
 };
 use goethite_store::{
-    BlockResponseKind, Import, ListSpec, ManagedBy, QueryLogConfig, RuleSpec, SettingsSpec,
-    model::MAX_NAME_LEN,
+    AccessSpec, BlockResponseKind, Import, ListSpec, ManagedBy, QueryLogConfig, RuleSpec,
+    SettingsSpec, model::MAX_NAME_LEN,
 };
 use serde::de::{self, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer};
@@ -79,15 +80,22 @@ pub(crate) struct Config {
     pub dir: PathBuf,
 }
 
-/// The `[cluster]` table: this node's place in a two-node cluster.
+/// The `[cluster]` table: this node's place in a cluster.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ClusterSection {
     /// This node's name, as in its certificate.
     pub node: NodeId,
-    /// Its role when it starts.
-    pub role: Role,
-    /// Where it listens for its peer.
+    /// Whether to start a new cluster on this node, with its configuration,
+    /// while it is in none. On one node only.
+    #[serde(default)]
+    pub bootstrap: bool,
+    /// goethite 0.4's role: `primary` starts the cluster, as `bootstrap`
+    /// does; `replica` waits to be added to it.
+    #[serde(default)]
+    pub role: Option<Role>,
+    /// Where it listens for the other members; also the address it gives
+    /// them when it starts a cluster.
     #[serde(default = "default_cluster_listen")]
     pub listen: SocketAddr,
     /// The cluster's CA certificate (PEM), from `goethite cluster init`.
@@ -96,19 +104,26 @@ pub(crate) struct ClusterSection {
     pub cert: PathBuf,
     /// This node's private key (PEM).
     pub key: PathBuf,
-    /// The other node.
-    pub peer: PeerSection,
+    /// The other members: `[[cluster.member]]` tables.
+    #[serde(default, rename = "member")]
+    pub members: Vec<MemberSection>,
+    /// goethite 0.4's one other member, as `[[cluster.member]]`.
+    #[serde(default)]
+    pub peer: Option<MemberSection>,
 }
 
-/// The `[cluster.peer]` table.
+/// A `[[cluster.member]]` table, or goethite 0.4's `[cluster.peer]`.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct PeerSection {
-    /// The peer's name, as in its certificate.
+pub(crate) struct MemberSection {
+    /// Its name, as in its certificate.
     pub node: NodeId,
-    /// The peer's cluster listener.
+    /// Its cluster listener.
     pub address: SocketAddr,
 }
+
+/// The most other members a cluster may list.
+const MAX_MEMBERS: usize = 15;
 
 fn default_cluster_listen() -> SocketAddr {
     SocketAddr::from((Ipv4Addr::UNSPECIFIED, 8054))
@@ -116,13 +131,52 @@ fn default_cluster_listen() -> SocketAddr {
 
 impl ClusterSection {
     fn validate(&self) -> Result<()> {
-        if self.node == self.peer.node {
-            bail!(
-                "cluster.peer.node must name the other node, not {}",
-                self.node
-            );
+        if self.bootstrap && self.role == Some(Role::Replica) {
+            bail!("cluster.bootstrap and role = \"replica\" contradict each other: drop role");
+        }
+        let members: Vec<&MemberSection> = self.members().collect();
+        if members.len() > MAX_MEMBERS {
+            bail!("a cluster may list at most {MAX_MEMBERS} other members");
+        }
+        let mut ids = std::collections::HashMap::new();
+        ids.insert(goethite_cluster::raft::raft_id(&self.node), &self.node);
+        for member in members {
+            if member.node == self.node {
+                bail!(
+                    "cluster.member lists this node, {}: list only the other members",
+                    self.node
+                );
+            }
+            if let Some(other) =
+                ids.insert(goethite_cluster::raft::raft_id(&member.node), &member.node)
+            {
+                if *other == member.node {
+                    bail!("cluster.member lists {} twice", member.node);
+                }
+                bail!(
+                    "the node names {other} and {} cannot be told apart in the cluster: rename one",
+                    member.node
+                );
+            }
         }
         Ok(())
+    }
+
+    /// The other members: `[[cluster.member]]` and `[cluster.peer]`.
+    pub(crate) fn members(&self) -> impl Iterator<Item = &MemberSection> {
+        self.members.iter().chain(&self.peer)
+    }
+
+    /// Whether this node starts the cluster, given the role goethite 0.4
+    /// kept in the store after promote or demote (`stored`, and the config
+    /// file's role then, `stored_base`): that one wins until the config
+    /// file's role changes.
+    pub(crate) fn bootstraps(&self, stored: Option<Role>, stored_base: Option<Role>) -> bool {
+        let role = match (stored, stored_base, self.role) {
+            (Some(stored), Some(base), Some(configured)) if base == configured => Some(stored),
+            _ => self.role,
+        };
+        self.bootstrap || role == Some(Role::Primary)
     }
 
     fn resolve_paths(&mut self, base: &Path) {
@@ -436,6 +490,14 @@ impl Config {
             .clone()
             .unwrap_or_else(|| self.state_dir().join("lists"))
     }
+
+    /// The only directory lists given by a path are read from.
+    pub(crate) fn local_lists_dir(&self) -> PathBuf {
+        self.filter
+            .local_lists_dir
+            .clone()
+            .unwrap_or_else(|| self.dir.join("lists"))
+    }
 }
 
 /// The `[security]` table.
@@ -446,12 +508,16 @@ pub(crate) struct SecuritySection {
     pub rebinding_protection: bool,
     /// Names below these may resolve to private addresses.
     pub private_domains: Vec<String>,
+    /// Confine the process once it runs (Linux): Landlock for files,
+    /// seccomp for system calls.
+    pub sandbox: bool,
 }
 
 impl Default for SecuritySection {
     fn default() -> Self {
         Self {
             rebinding_protection: true,
+            sandbox: true,
             private_domains: DEFAULT_PRIVATE_DOMAINS
                 .iter()
                 .map(|&domain| domain.to_owned())
@@ -506,6 +572,9 @@ pub(crate) struct FilterSection {
     pub list: Vec<ListSection>,
     /// Where downloaded lists are kept. Required if any list has a `url`.
     pub cache_dir: Option<PathBuf>,
+    /// The only directory lists given by a path are read from. Defaults to
+    /// `lists` beside the config file.
+    pub local_lists_dir: Option<PathBuf>,
     /// How often downloaded lists are refreshed, in hours.
     pub update_hours: u32,
     /// What to do when filtering fails. A node setting: it is not
@@ -558,6 +627,7 @@ impl Default for FilterSection {
             rules: Vec::new(),
             list: Vec::new(),
             cache_dir: None,
+            local_lists_dir: None,
             update_hours: 24,
             on_failure: OnFailure::Open,
             default_lists: true,
@@ -684,6 +754,8 @@ impl FilterSection {
                 },
                 blocked_ttl: self.blocked_ttl,
                 list_update_hours: self.update_hours,
+                // Not in the config file: an import keeps the store's.
+                access: AccessSpec::default(),
             },
             lists,
             rules,
@@ -698,6 +770,9 @@ impl FilterSection {
             }
         };
         if let Some(dir) = &mut self.cache_dir {
+            resolve(dir);
+        }
+        if let Some(dir) = &mut self.local_lists_dir {
             resolve(dir);
         }
         if let Some(file) = &mut self.services_file {
@@ -1205,7 +1280,8 @@ fn listen_addresses<'de, D: Deserializer<'de>>(
 #[derive(Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, default)]
 pub(crate) struct RateLimitSection {
-    /// Average UDP queries per second per client network; 0 turns it off.
+    /// Average queries per second per client network, over every transport
+    /// but Oblivious DoH; 0 turns it off.
     pub queries_per_second: u32,
     /// Queries a client network may send at once.
     pub burst: u32,
@@ -1217,6 +1293,8 @@ pub(crate) struct RateLimitSection {
     pub ipv6_prefix: u8,
     /// Client networks tracked at once.
     pub max_clients: usize,
+    /// Networks never limited: addresses or CIDR networks.
+    pub exempt: Vec<String>,
 }
 
 impl Default for RateLimitSection {
@@ -1229,6 +1307,7 @@ impl Default for RateLimitSection {
             ipv4_prefix: defaults.ipv4_prefix,
             ipv6_prefix: defaults.ipv6_prefix,
             max_clients: defaults.max_clients,
+            exempt: Vec::new(),
         }
     }
 }
@@ -1256,6 +1335,14 @@ impl RateLimitSection {
                 "server.rate_limit.max_clients must be between 16 and {MAX_RATE_LIMITED_CLIENTS}"
             );
         }
+        if self.exempt.len() > MAX_RATE_LIMIT_EXEMPTIONS {
+            bail!("server.rate_limit.exempt lists more than {MAX_RATE_LIMIT_EXEMPTIONS} networks");
+        }
+        for network in &self.exempt {
+            network
+                .parse::<Cidr>()
+                .with_context(|| format!("server.rate_limit.exempt: {network:?}"))?;
+        }
         Ok(())
     }
 
@@ -1267,6 +1354,11 @@ impl RateLimitSection {
             ipv4_prefix: self.ipv4_prefix,
             ipv6_prefix: self.ipv6_prefix,
             max_clients: self.max_clients,
+            exempt: self
+                .exempt
+                .iter()
+                .filter_map(|network| network.parse().ok())
+                .collect(),
             ..RateLimitConfig::default()
         }
     }
@@ -1275,6 +1367,20 @@ impl RateLimitSection {
 impl Config {
     /// Reads and parses the configuration file at `path`.
     pub(crate) fn load(path: &Path) -> Result<Self> {
+        Self::load_for(path, true)
+    }
+
+    /// Loads the config file of a witness (`goethite witness`), which
+    /// resolves nothing and so needs no upstreams.
+    ///
+    /// # Errors
+    ///
+    /// As [`Config::load`].
+    pub(crate) fn load_witness(path: &Path) -> Result<Self> {
+        Self::load_for(path, false)
+    }
+
+    fn load_for(path: &Path, resolves: bool) -> Result<Self> {
         let file = File::open(path)
             .with_context(|| format!("cannot open config file {}", path.display()))?;
         let limit = u64::try_from(MAX_CONFIG_LEN)?.saturating_add(1);
@@ -1292,7 +1398,7 @@ impl Config {
         let config = Self::parse(&text)
             .with_context(|| format!("invalid config file {}", path.display()))?;
         match (config.upstream.is_empty(), config.recursion.enabled) {
-            (true, false) => bail!(
+            (true, false) if resolves => bail!(
                 "no upstream resolvers configured in {}: add at least one [[upstream]] table, \
                  for example\n\n[[upstream]]\naddress = \"9.9.9.9\"\n\nor resolve from the \
                  root servers yourself:\n\n[recursion]\nenabled = true",
@@ -1447,6 +1553,55 @@ mod tests {
             }
         );
         assert!(config.upstream.iter().all(|u| u.validate().is_ok()));
+    }
+
+    #[test]
+    fn cluster_members() {
+        let cluster = |text: &str| {
+            let config = Config::parse(&format!(
+                "[cluster]\nnode = \"dns1\"\nca = \"ca.crt\"\ncert = \"dns1.crt\"\nkey = \"dns1.key\"\n{text}"
+            ))
+            .unwrap();
+            config.cluster.unwrap()
+        };
+        let three = cluster(
+            "bootstrap = true\n[[cluster.member]]\nnode = \"dns2\"\naddress = \"192.0.2.12:8054\"\n\
+             [[cluster.member]]\nnode = \"witness\"\naddress = \"192.0.2.13:8054\"\n",
+        );
+        three.validate().unwrap();
+        assert_eq!(three.members().count(), 2);
+        assert!(three.bootstraps(None, None));
+
+        // goethite 0.4's tables still work: the primary starts the cluster.
+        let legacy = cluster(
+            "role = \"primary\"\n[cluster.peer]\nnode = \"dns2\"\naddress = \"192.0.2.12:8054\"\n",
+        );
+        legacy.validate().unwrap();
+        assert_eq!(legacy.members().next().unwrap().node.as_str(), "dns2");
+        assert!(legacy.bootstraps(None, None));
+        // Unless promote and demote changed the role since.
+        assert!(!legacy.bootstraps(Some(Role::Replica), Some(Role::Primary)));
+        let replica = cluster("role = \"replica\"\n");
+        assert!(!replica.bootstraps(None, None));
+        assert!(replica.bootstraps(Some(Role::Primary), Some(Role::Replica)));
+        // ...until the config file's role changes.
+        assert!(!replica.bootstraps(Some(Role::Primary), Some(Role::Primary)));
+
+        for (text, problem) in [
+            (
+                "[[cluster.member]]\nnode = \"dns1\"\naddress = \"192.0.2.11:8054\"\n",
+                "lists this node",
+            ),
+            (
+                "[[cluster.member]]\nnode = \"dns2\"\naddress = \"192.0.2.12:8054\"\n\
+                 [cluster.peer]\nnode = \"dns2\"\naddress = \"192.0.2.12:8054\"\n",
+                "twice",
+            ),
+            ("bootstrap = true\nrole = \"replica\"\n", "contradict"),
+        ] {
+            let err = cluster(text).validate().unwrap_err().to_string();
+            assert!(err.contains(problem), "{text}: {err}");
+        }
     }
 
     #[test]
@@ -1784,6 +1939,8 @@ mod tests {
             ("rate_limit.ipv4_prefix = 33", "ipv4_prefix"),
             ("rate_limit.ipv6_prefix = 8", "ipv6_prefix"),
             ("rate_limit.max_clients = 1", "max_clients"),
+            ("rate_limit.exempt = [\"192.168.1.5/24\"]", "exempt"),
+            ("rate_limit.exempt = [\"lan\"]", "exempt"),
             ("user = \"\"", "server.user"),
             ("user = \"a:b\"", "server.user"),
         ] {
@@ -1796,6 +1953,18 @@ mod tests {
         let server = off.server.to_server_config();
         assert_eq!(server.rate_limit.queries_per_second, 0);
         assert!(server.rate_limit.exempt_loopback);
+
+        let exempt =
+            Config::parse("[server.rate_limit]\nexempt = [\"192.168.0.0/16\", \"2001:db8::1\"]")
+                .unwrap();
+        assert!(exempt.server.validate().is_ok());
+        assert_eq!(
+            exempt.server.to_server_config().rate_limit.exempt,
+            vec![
+                "192.168.0.0/16".parse().unwrap(),
+                "2001:db8::1".parse().unwrap()
+            ]
+        );
     }
 
     #[test]

@@ -1,18 +1,21 @@
 //! Mutual TLS between the nodes of a cluster.
 //!
 //! Each node presents its certificate in both directions and accepts only
-//! certificates signed by the cluster's CA that name the expected peer: the
-//! replica checks it reached the primary, and the primary checks the replica
-//! is the configured one. Only TLS 1.3 is offered, since both ends are
-//! goethite.
+//! certificates signed by the cluster's CA that name a member it knows
+//! ([`Peers`]): a node checks it reached the member it meant to, and its
+//! listener accepts only the members in its configuration or in the
+//! cluster's membership. A certificate the CA issued to a node that has
+//! since been removed gets nowhere. Only TLS 1.3 is offered, since both
+//! ends are goethite.
 
-use std::sync::Arc;
+use std::collections::BTreeSet;
+use std::sync::{Arc, PoisonError, RwLock};
 
 use rustls::client::WebPkiServerVerifier;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerifier};
 use rustls::crypto::CryptoProvider;
 use rustls::pki_types::pem::PemObject;
-use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, UnixTime};
 use rustls::server::danger::{ClientCertVerified, ClientCertVerifier};
 use rustls::server::{ParsedCertificate, WebPkiClientVerifier};
 use rustls::{
@@ -140,33 +143,27 @@ impl Identity {
         verifier
             .verify_server_cert(end_entity, intermediates, &name, &[], UnixTime::now())
             .map_err(|err| not_valid(err.to_string()))?;
-        self.server_config(&self.node)
+        self.server_config(Peers::new([self.node.clone()]))
             .map_err(|err| not_valid(err.to_string()))?;
         Ok(())
     }
 
     /// The configuration for this node's cluster listener, accepting only
-    /// `peer`.
+    /// `peers`, as they are when a member connects.
     ///
     /// # Errors
     ///
     /// [`TlsError`] if rustls refuses it.
-    pub fn server_config(&self, peer: &NodeId) -> Result<Arc<ServerConfig>, TlsError> {
+    pub fn server_config(&self, peers: Peers) -> Result<Arc<ServerConfig>, TlsError> {
         let inner = WebPkiClientVerifier::builder_with_provider(
             Arc::clone(&self.roots),
             Arc::clone(&self.provider),
         )
         .build()
         .map_err(|err| rustls::Error::General(err.to_string()))?;
-        let peer_name = peer
-            .server_name()
-            .map_err(|err| rustls::Error::General(err.to_string()))?;
         let mut config = ServerConfig::builder_with_provider(Arc::clone(&self.provider))
             .with_protocol_versions(&[&rustls::version::TLS13])?
-            .with_client_cert_verifier(Arc::new(PeerVerifier {
-                inner,
-                peer: peer_name,
-            }))
+            .with_client_cert_verifier(Arc::new(PeerVerifier { inner, peers }))
             .with_single_cert(self.chain.clone(), self.key.clone_key())?;
         config.alpn_protocols = vec![ALPN.to_vec()];
         Ok(Arc::new(config))
@@ -195,12 +192,49 @@ fn pem_error(what: &'static str, err: &dyn std::fmt::Display) -> TlsError {
     }
 }
 
+/// The members a node's listener accepts: those in its configuration and
+/// those in the cluster's membership. It changes as the membership does.
+#[derive(Clone, Debug, Default)]
+pub struct Peers(Arc<RwLock<BTreeSet<NodeId>>>);
+
+impl Peers {
+    /// Accepting `nodes`.
+    pub fn new(nodes: impl IntoIterator<Item = NodeId>) -> Self {
+        let peers = Self::default();
+        peers.set(nodes);
+        peers
+    }
+
+    /// Accepts `nodes` from now on, and no others.
+    pub fn set(&self, nodes: impl IntoIterator<Item = NodeId>) {
+        *self.0.write().unwrap_or_else(PoisonError::into_inner) = nodes.into_iter().collect();
+    }
+
+    /// The members accepted.
+    pub fn nodes(&self) -> BTreeSet<NodeId> {
+        self.0
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// The accepted member that the certificate `der` names, if any.
+    pub fn name_of(&self, der: &[u8]) -> Option<NodeId> {
+        let cert = CertificateDer::from(der);
+        let parsed = ParsedCertificate::try_from(&cert).ok()?;
+        self.nodes().into_iter().find(|node| {
+            node.server_name()
+                .is_ok_and(|name| rustls::client::verify_server_name(&parsed, &name).is_ok())
+        })
+    }
+}
+
 /// Accepts a client certificate only if it is signed by the cluster CA and
-/// names the expected peer.
+/// names an accepted member.
 #[derive(Debug)]
 struct PeerVerifier {
     inner: Arc<dyn ClientCertVerifier>,
-    peer: ServerName<'static>,
+    peers: Peers,
 }
 
 impl ClientCertVerifier for PeerVerifier {
@@ -220,8 +254,11 @@ impl ClientCertVerifier for PeerVerifier {
     ) -> Result<ClientCertVerified, rustls::Error> {
         self.inner
             .verify_client_cert(end_entity, intermediates, now)?;
-        let parsed = ParsedCertificate::try_from(end_entity)?;
-        rustls::client::verify_server_name(&parsed, &self.peer)?;
+        if self.peers.name_of(end_entity.as_ref()).is_none() {
+            return Err(rustls::Error::InvalidCertificate(
+                rustls::CertificateError::NotValidForName,
+            ));
+        }
         Ok(ClientCertVerified::assertion())
     }
 

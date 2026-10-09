@@ -83,6 +83,7 @@ export function Shell() {
 				</Link>
 				<Link to="/lists">Lists</Link>
 				<Link to="/rules">Rules</Link>
+				<Link to="/records">Records</Link>
 				<Link to="/groups">Groups</Link>
 				<Link to="/clients">Clients</Link>
 				<Link to="/schedules">Schedules</Link>

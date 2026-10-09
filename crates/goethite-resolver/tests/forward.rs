@@ -582,6 +582,8 @@ fn grouped() -> Policy {
         blocked_ttl: 10,
         protection: true,
         services: Arc::new(ServiceFilter::empty()),
+        access: goethite_resolver::Access::default(),
+        records: goethite_resolver::LocalRecords::default(),
     })
     .unwrap()
 }
@@ -697,6 +699,8 @@ async fn groups_block_services_always_or_on_a_schedule() {
         blocked_ttl: 10,
         protection: true,
         services,
+        access: goethite_resolver::Access::default(),
+        records: goethite_resolver::LocalRecords::default(),
     })
     .unwrap();
     let state = Arc::new(PolicyState::new(policy));
@@ -911,4 +915,65 @@ async fn recursion_asks_over_udp_and_tcp() {
     assert_eq!(private.outcome, Outcome::Local);
     assert_eq!(private.response.rcode, ResponseCode::NX_DOMAIN);
     assert_eq!(server.seen.lock().unwrap().len(), before);
+}
+
+#[tokio::test]
+async fn local_records_answer_first_and_lead_to_upstream_answers() {
+    use goethite_resolver::{LocalData, LocalRecord, LocalRecords};
+
+    let upstream = fake(always(Ipv4Addr::new(192, 0, 2, 80)), silent()).await;
+    let name = |text: &str| text.parse::<Name>().unwrap();
+    let local = |text: &str, data| LocalRecord {
+        name: name(text),
+        wildcard: false,
+        data,
+        ttl: 300,
+    };
+    let policy = Policy::new(PolicyParts {
+        filter: Arc::new(filter("||ads.example^\n||nas.lan^\n")),
+        source_ids: vec!["ads".into()],
+        groups: vec![GroupPolicy::new("default", sources(&[0]))],
+        clients: Vec::new(),
+        block_response: BlockResponse::NxDomain,
+        blocked_ttl: 10,
+        protection: true,
+        services: Arc::new(ServiceFilter::empty()),
+        access: goethite_resolver::Access::default(),
+        records: LocalRecords::new([
+            local("nas.lan", LocalData::A(Ipv4Addr::new(192, 168, 1, 10))),
+            local("docs.lan", LocalData::Cname(name("docs.example"))),
+            local("tracker.lan", LocalData::Cname(name("ads.example"))),
+        ]),
+    })
+    .unwrap();
+    let resolver = Resolver::new(Vec::new())
+        .with_policy(Arc::new(PolicyState::new(policy)))
+        .with_forwarder(forwarder(vec![UpstreamConfig::udp(upstream.addr)]));
+
+    // Answered locally, before the filter that would block the name.
+    let nas = resolver.resolve(&query("nas.lan."), CLIENT).await;
+    assert_eq!(nas.outcome, Outcome::Local);
+    assert!(nas.response.authoritative);
+    assert_eq!(
+        ip(&nas.response),
+        Some(Ipv4Addr::new(192, 168, 1, 10).into())
+    );
+
+    // A CNAME out of the local records: the target's own answer follows.
+    let docs = resolver.resolve(&query("docs.lan."), CLIENT).await;
+    assert_eq!(docs.outcome, Outcome::Upstream(0));
+    assert_eq!(docs.response.answers.len(), 2);
+    assert_eq!(
+        docs.response.answers[0].cname_target(),
+        Some(name("docs.example"))
+    );
+    assert_eq!(
+        docs.response.answers[1].ip(),
+        Some(Ipv4Addr::new(192, 0, 2, 80).into())
+    );
+
+    // The target goes through the filter like any other name.
+    let tracker = resolver.resolve(&query("tracker.lan."), CLIENT).await;
+    assert_eq!(tracker.outcome, Outcome::Blocked);
+    assert_eq!(tracker.response.rcode, ResponseCode::NX_DOMAIN);
 }

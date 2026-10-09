@@ -1,5 +1,5 @@
-// What the editors show and send: forms for lists, rules, groups, clients
-// and schedules, and the specs goethite stores. Pure functions, so they
+// What the editors show and send: forms for lists, rules, local records,
+// groups, clients and schedules, and the specs goethite stores. Pure functions, so they
 // are tested without a browser (forms.test.ts).
 
 import type {
@@ -7,6 +7,8 @@ import type {
 	GroupSpec,
 	ListSpec,
 	ManagedBy,
+	RecordKind,
+	RecordSpec,
 	RuleSpec,
 	ScheduleSpec,
 	Weekday,
@@ -82,6 +84,59 @@ export function ruleSpec(form: RuleForm, managedBy?: ManagedBy): RuleSpec {
 		comment: form.comment.trim(),
 		managed_by: managed(managedBy),
 	}
+}
+
+// --- Local records -------------------------------------------------------
+
+export interface RecordForm {
+	name: string
+	kind: RecordKind
+	value: string
+	/** Seconds, as typed. */
+	ttl: string
+	enabled: boolean
+	comment: string
+}
+
+export function recordForm(spec?: RecordSpec): RecordForm {
+	return {
+		name: spec?.name ?? '',
+		kind: spec?.type ?? 'A',
+		value: spec?.value ?? '',
+		ttl: String(spec?.ttl ?? 300),
+		enabled: spec?.enabled ?? true,
+		comment: spec?.comment ?? '',
+	}
+}
+
+export function recordSpec(form: RecordForm, managedBy?: ManagedBy): RecordSpec {
+	return {
+		name: form.name.trim().toLowerCase(),
+		type: form.kind,
+		value: form.kind === 'CNAME' ? form.value.trim().toLowerCase() : form.value.trim(),
+		ttl: Number(form.ttl),
+		enabled: form.enabled,
+		comment: form.comment.trim(),
+		managed_by: managed(managedBy),
+	}
+}
+
+/** What a record's value must be, for the form's hint. */
+export function recordValueHint(kind: RecordKind): string {
+	switch (kind) {
+		case 'A':
+			return 'An IPv4 address, such as 192.168.1.10.'
+		case 'AAAA':
+			return 'An IPv6 address, such as fd00::10.'
+		case 'CNAME':
+			return 'Another name, which answers for this one; goethite resolves it like any other name.'
+	}
+}
+
+/** Whether a TTL, as typed, is a whole number of seconds up to a day. */
+export function isRecordTtl(ttl: string): boolean {
+	const seconds = Number(ttl)
+	return ttl.trim() !== '' && Number.isInteger(seconds) && seconds >= 0 && seconds <= 86_400
 }
 
 // --- Groups --------------------------------------------------------------
@@ -185,6 +240,24 @@ export function parseClientIds(text: string): string[] {
 /** 1 to 63 lowercase letters, digits and hyphens, not at either end. */
 export function isClientId(id: string): boolean {
 	return /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/.test(id)
+}
+
+/**
+ * Access list entries, typed like addresses: addresses, networks and client
+ * IDs, lowercase.
+ */
+export function parseAccessEntries(text: string): string[] {
+	return parseAddresses(text.toLowerCase())
+}
+
+/**
+ * Whether an access list entry looks like an address, a network or a client
+ * ID. A rough check, for the form's hint: goethite checks each one exactly
+ * when the settings are saved.
+ */
+export function isAccessEntry(entry: string): boolean {
+	const address = /^[0-9a-f.:]+(\/[0-9]{1,3})?$/.test(entry) && /[.:]/.test(entry)
+	return address || isClientId(entry)
 }
 
 export function clientSpec(form: ClientForm, managedBy?: ManagedBy): ClientSpec {

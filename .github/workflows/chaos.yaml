@@ -1,7 +1,8 @@
 name: Chaos
 
-# Two nodes and a client in network namespaces: upgrades, crashes, a
-# partition and a corrupt list while the client queries the floating IP.
+# Two nodes, a witness and a client in network namespaces: upgrades,
+# crashes, partitions, a lost leader and a corrupt list while the client
+# queries the floating IP.
 # See tests/chaos/README.md.
 on:
   schedule:

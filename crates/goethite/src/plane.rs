@@ -104,7 +104,7 @@ impl ControlPlane {
         let control = Control::new(
             Arc::clone(&store),
             Arc::clone(&data.state),
-            ListStore::new(config.lists_dir()),
+            ListStore::new(config.lists_dir(), config.local_lists_dir()),
             config.filter.services_from(),
         );
         // Filter from the first query on, with the lists already on disk.
@@ -129,23 +129,21 @@ impl ControlPlane {
             &mut tasks,
             stopped.clone(),
         )?;
-        let cluster = match (&config.cluster, &secrets.cluster) {
-            (Some(section), Some(pem)) => {
-                let listeners = sockets
-                    .cluster_listener()?
-                    .context("the cluster listener is missing")?;
-                let parts = cluster::Parts {
-                    control: &control,
-                    log: &log,
-                    started_at: data.started,
-                };
-                Some(cluster::start(
-                    section, pem, listeners, &parts, &mut tasks, &stopped,
-                )?)
-            }
-            (Some(_), None) => bail!("the cluster's certificates are missing"),
-            (None, _) => None,
+        let parts = cluster::Parts {
+            control: &control,
+            log: &log,
+            started_at: data.started,
         };
+        let cluster = start_cluster(
+            config,
+            secrets,
+            sockets,
+            &parts,
+            store_problem.is_some(),
+            &mut tasks,
+            &stopped,
+        )
+        .await?;
         let tls = tls_client_config(&TlsRoots::Bundled, &[b"h2", b"http/1.1"])?;
         let (filterlists, sizes) = lookups(config, data, &tls).unzip();
         let downloader =
@@ -170,8 +168,8 @@ impl ControlPlane {
             .as_ref()
             .map(|cert| cert.server_config(&[b"h2", b"http/1.1"]))
             .transpose()?;
-        // The API exists even when it is not served: the primary runs the
-        // replica's forwarded changes through it.
+        // The API exists even when it is not served: the leader runs the
+        // other members' forwarded changes through it.
         let api = crate::api(config, &control, &log, node, api_tls);
         if let Some(cluster) = &cluster {
             cluster.set_api(Arc::clone(&api));
@@ -207,6 +205,7 @@ impl ControlPlane {
         stop.send_replace(true);
         if let Some(cluster) = &cluster {
             cluster.release_api();
+            cluster.shutdown().await;
         }
         let joined = tokio::time::timeout(STOP_TIMEOUT, async {
             while tasks.join_next().await.is_some() {}
@@ -299,4 +298,41 @@ fn lookups(
             Arc::new(ListSizes::new(Arc::clone(&data.resolver), Arc::clone(tls))),
         )
     })
+}
+
+/// Starts this node's part in its cluster, if it is in one.
+///
+/// # Errors
+///
+/// If the certificates are missing or unusable, or Raft cannot start.
+async fn start_cluster(
+    config: &Config,
+    secrets: &Secrets,
+    sockets: &Sockets,
+    parts: &cluster::Parts<'_>,
+    in_memory: bool,
+    tasks: &mut JoinSet<()>,
+    stopped: &watch::Receiver<bool>,
+) -> Result<Option<Arc<Cluster>>> {
+    match (&config.cluster, &secrets.cluster) {
+        // A store in memory forgets the cluster's log when goethite stops:
+        // a voter that forgets could undo agreed changes.
+        (Some(_), Some(_)) if in_memory => {
+            error!(
+                "not joining the cluster: the store file cannot be used, and a store in memory \
+                 cannot keep the cluster's log"
+            );
+            Ok(None)
+        }
+        (Some(section), Some(pem)) => {
+            let listeners = sockets
+                .cluster_listener()?
+                .context("the cluster listener is missing")?;
+            Ok(Some(
+                cluster::start(section, pem, listeners, parts, tasks, stopped).await?,
+            ))
+        }
+        (Some(_), None) => bail!("the cluster's certificates are missing"),
+        (None, _) => Ok(None),
+    }
 }

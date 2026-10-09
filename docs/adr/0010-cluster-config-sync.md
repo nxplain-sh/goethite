@@ -1,6 +1,6 @@
 # ADR 0010: Two-node configuration sync
 
-- **Status:** Accepted
+- **Status:** Superseded by [ADR 0031](0031-raft-clustering.md)
 - **Date:** 2026-10-08
 
 ## Context

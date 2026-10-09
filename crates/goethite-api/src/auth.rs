@@ -114,8 +114,8 @@ pub(crate) async fn authenticate(
     mut request: Request,
     next: Next,
 ) -> Result<Response, ApiError> {
-    // A change forwarded by the cluster's replica, run by this node itself:
-    // the replica authenticated the caller.
+    // A change forwarded by another cluster member, run by this node
+    // itself: that member authenticated the caller.
     if let Some(TrustedActor(actor)) = request.extensions().get::<TrustedActor>().cloned() {
         request.extensions_mut().insert(actor);
         return Ok(next.run(request).await);

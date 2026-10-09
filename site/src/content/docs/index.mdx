@@ -21,13 +21,15 @@ hero:
 import { Card, CardGrid, Aside } from '@astrojs/starlight/components';
 
 <Aside type="caution" title="Pre-alpha">
-	goethite 0.4 filters and caches DNS, and either forwards it over DNS over TLS or HTTPS or
+	goethite 0.5 filters and caches DNS, and either forwards it over DNS over TLS or HTTPS or
 	resolves it from the root servers with DNSSEC validation. Clients reach it over DNS over TLS,
 	HTTPS, QUIC or Oblivious DoH, in per-client groups, managed from a web UI, a terminal UI, a
-	REST API or Terraform. Two nodes can share one configuration and one floating IP, and upgrades
-	drop no query: try it, but do not rely on it yet. Raft clustering, signed releases and
-	importers from Pi-hole and AdGuard Home are still ahead; the cards below are the goals. See the
-	[changelog](changelog/).
+	REST API or Terraform. Nodes agree on one configuration with Raft (two nodes and a witness
+	survive losing any one), share a floating IP, upgrade without dropping a query and confine
+	themselves with Landlock and seccomp. Releases are reproducible and signed, with packages and a
+	container image, and `goethite migrate` brings a Pi-hole or AdGuard Home over. Try it, but do
+	not rely on it yet: an external security review is still ahead, and the cards below are the
+	goals. See the [changelog](changelog/).
 </Aside>
 
 ## What goethite aims to be

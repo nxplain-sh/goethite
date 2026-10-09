@@ -8,12 +8,12 @@ use goethite_api::leak::LeakTests;
 use goethite_api::recommended::RecommendedSizes;
 use goethite_api::{
     ApiError, BoxFuture, BoxResult, CacheStatus, Change, ClusterRole, ClusterStatus,
-    EncryptedStatus, FilterStatus, Forwarded, ForwardedAnswer, ListStatus, QueryLogStatus,
-    RecursionStatus, Status, UpstreamStatus, Writes,
+    EncryptedStatus, FilterStatus, Forwarded, ForwardedAnswer, ListStatus, MemberStats,
+    QueryLogStatus, RecursionStatus, Status, UpstreamStatus, Writes,
 };
 use goethite_resolver::{Resolver, Transport};
 use goethite_server::ServerStats;
-use goethite_store::{Actor, QueryLog, StatsReport};
+use goethite_store::{Actor, QueryLog};
 use jiff::Timestamp;
 use tracing::warn;
 
@@ -220,6 +220,12 @@ impl goethite_api::Control for Node {
 
     fn apply(&self, change: Change) -> BoxFuture<'_> {
         Box::pin(async move {
+            // In a cluster, every change is put into effect as it is
+            // applied, wherever it was made: wait for that.
+            if let Some(cluster) = &self.cluster {
+                cluster.settled().await;
+                return;
+            }
             match change {
                 Change::Filter => {
                     self.control.rebuild_filter().await;
@@ -262,10 +268,19 @@ impl goethite_api::Control for Node {
         })
     }
 
-    fn peer_stats(&self, hours: u32) -> BoxResult<'_, StatsReport> {
+    fn member_stats(&self, hours: u32) -> BoxResult<'_, Vec<MemberStats>> {
         Box::pin(async move {
             match &self.cluster {
-                Some(cluster) => cluster.peer_stats(hours).await,
+                Some(cluster) => Ok(cluster.member_stats(hours).await),
+                None => Ok(Vec::new()),
+            }
+        })
+    }
+
+    fn remove_member(&self, node: String, actor: Actor) -> BoxResult<'_, ClusterStatus> {
+        Box::pin(async move {
+            match &self.cluster {
+                Some(cluster) => cluster.remove_member(node, actor).await,
                 None => Err(ApiError::not_found("this node is not in a cluster")),
             }
         })

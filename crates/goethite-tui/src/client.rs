@@ -1,4 +1,5 @@
-//! A small HTTP client for the goethite API.
+//! A small HTTP client for the goethite API, and for the other JSON APIs
+//! `goethite migrate` reads from.
 //!
 //! One HTTP/1.1 connection per request: the TUI makes a few requests a
 //! second at most, so simplicity wins over connection reuse. HTTPS uses the
@@ -10,7 +11,7 @@ use std::time::Duration;
 
 use http_body_util::{BodyExt, Full, Limited};
 use hyper::body::Bytes;
-use hyper::header::{AUTHORIZATION, CONTENT_TYPE, HOST, IF_MATCH};
+use hyper::header::{AUTHORIZATION, CONTENT_TYPE, HOST, HeaderName, HeaderValue, IF_MATCH};
 use hyper::{Method, Request, StatusCode, Uri};
 use hyper_util::rt::TokioIo;
 use rustls::pki_types::{CertificateDer, ServerName};
@@ -56,6 +57,9 @@ pub enum ClientError {
     /// The answer was not what was expected.
     #[error("unexpected answer from the API: {0}")]
     Decode(String),
+    /// A header name or value that HTTP does not allow.
+    #[error("invalid HTTP header {0:?}")]
+    Header(String),
 }
 
 /// Connects to one goethite node's API.
@@ -66,6 +70,7 @@ pub struct Client {
     authority: String,
     tls: Option<(TlsConnector, ServerName<'static>)>,
     token: Option<String>,
+    headers: Vec<(HeaderName, HeaderValue)>,
 }
 
 impl std::fmt::Debug for Client {
@@ -74,6 +79,14 @@ impl std::fmt::Debug for Client {
             .field("authority", &self.authority)
             .field("tls", &self.tls.is_some())
             .field("token", &self.token.as_ref().map(|_| "…"))
+            .field(
+                "headers",
+                &self
+                    .headers
+                    .iter()
+                    .map(|(name, _)| name.as_str())
+                    .collect::<Vec<_>>(),
+            )
             .finish_non_exhaustive()
     }
 }
@@ -137,7 +150,23 @@ impl Client {
             authority,
             tls,
             token,
+            headers: Vec::new(),
         })
+    }
+
+    /// Sends `name: value` with every request, such as a session ID. The
+    /// value is never printed.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::Header`] for a name or value HTTP does not allow.
+    pub fn with_header(mut self, name: &str, value: &str) -> Result<Self, ClientError> {
+        let name = HeaderName::try_from(name).map_err(|_| ClientError::Header(name.to_owned()))?;
+        let mut value =
+            HeaderValue::try_from(value).map_err(|_| ClientError::Header(name.to_string()))?;
+        value.set_sensitive(true);
+        self.headers.push((name, value));
+        Ok(self)
     }
 
     /// Where the client connects, for display.
@@ -227,6 +256,9 @@ impl Client {
         }
         if let Some(revision) = revision {
             request = request.header(IF_MATCH, format!("\"{revision}\""));
+        }
+        for (name, value) in &self.headers {
+            request = request.header(name, value);
         }
         let bytes = match body {
             Some(body) => {

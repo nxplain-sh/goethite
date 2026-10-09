@@ -1,63 +1,49 @@
-name: Fuzz
+name: Fuzz targets
+
+# Builds every fuzz target with the nightly pinned in fuzz/rust-toolchain.toml,
+# so the targets keep compiling as the parsers change. Fuzzing itself never
+# runs in this public repository: a crash it found would be public, in the
+# log and the artifacts, before its fix. Maintainers fuzz with
+# `cargo xtask fuzz` before every release (docs/adr/0028-fuzzing-off-public-ci.md).
 
 on:
-  schedule:
-    - cron: "23 3 * * 0"
+  push:
+    branches: [main, development]
+  pull_request:
+    paths:
+      - fuzz/**
+      - crates/**
+      - Cargo.lock
+      - .github/workflows/fuzz.yaml
   workflow_dispatch:
-    inputs:
-      seconds:
-        description: Seconds to run each target (1 to 3600)
-        required: false
-        default: "300"
 
 permissions:
   contents: read
+
+concurrency:
+  group: fuzz-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  fuzz:
-    name: fuzz ${{ matrix.target }}
+  build:
+    name: fuzz targets build
     runs-on: ubuntu-24.04
-    # Fuzzing is capped at 3600 s; this leaves room for building the tools.
-    timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      matrix:
-        # Every target in fuzz/fuzz_targets/ goes here.
-        target: [check-dnssec, classify-response, decode-query, decode-query-record, decode-response, parse-cidr, parse-doh, parse-doq, parse-filterlists, parse-leak-probe, parse-list, parse-name, parse-odoh, parse-services, parse-netlink, parse-vrrp, request-checks]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install nightly
-        run: rustup toolchain install nightly --profile minimal
+      - name: Install the pinned nightly
+        run: |
+          channel=$(sed -n 's/^channel = "\(.*\)"$/\1/p' fuzz/rust-toolchain.toml)
+          rustup toolchain install "${channel:?}" --profile minimal
+          echo "FUZZ_TOOLCHAIN=$channel" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: fuzz -> target
       - name: Install cargo-fuzz
         run: cargo install --locked cargo-fuzz@0.13.2
-      - name: Fuzz
-        env:
-          TARGET: ${{ matrix.target }}
-          SECONDS_PER_TARGET: ${{ inputs.seconds || '300' }}
-        run: |
-          # libFuzzer treats 0 as "no limit", so require 1 to 3600.
-          if ! [[ "$SECONDS_PER_TARGET" =~ ^[1-9][0-9]{0,3}$ ]] || (( SECONDS_PER_TARGET > 3600 )); then
-            echo "::error::seconds must be between 1 and 3600"
-            exit 1
-          fi
-          mkdir -p "fuzz/corpus/$TARGET"
-          cargo +nightly fuzz run "$TARGET" "fuzz/corpus/$TARGET" "fuzz/seeds/$TARGET" -- \
-            -max_total_time="$SECONDS_PER_TARGET"
-      - name: Upload crashes
-        if: failure()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: fuzz-artifacts-${{ matrix.target }}
-          path: fuzz/artifacts/${{ matrix.target }}
-          if-no-files-found: ignore
-          # The repository is public: keep crash inputs only as long as needed
-          # to reproduce them (see SECURITY.md).
-          retention-days: 7
+      - name: Build every target
+        run: cargo +"$FUZZ_TOOLCHAIN" fuzz build

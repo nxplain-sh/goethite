@@ -19,8 +19,8 @@ use std::time::SystemTime;
 use goethite_api::leak::{Arrival, LeakTests};
 use goethite_api::{
     Api, ApiConfig, ApiError, ApiListeners, BoxFuture, BoxResult, Change, ClusterRole,
-    ClusterStatus, Control, DOCS_SCALAR, FilterStatus, Forwarded, ForwardedAnswer, PeerStatus,
-    QueryLogStatus, Status, WebAssets, Writes, generate_token,
+    ClusterStatus, Control, DOCS_SCALAR, FilterStatus, Forwarded, ForwardedAnswer, MemberState,
+    MemberStats, PeerStatus, QueryLogStatus, Status, WebAssets, Writes, generate_token,
 };
 use goethite_proto::{Name, RecordType};
 use goethite_store::Protocol;
@@ -113,9 +113,20 @@ impl Control for FakeControl {
         self.cluster.lock().unwrap().clone()
     }
 
-    fn peer_stats(&self, _hours: u32) -> BoxResult<'_, StatsReport> {
+    fn member_stats(&self, _hours: u32) -> BoxResult<'_, Vec<MemberStats>> {
         let stats = self.peer_stats.lock().unwrap().clone();
-        Box::pin(async move { stats.ok_or_else(|| ApiError::unavailable("dns2 is unreachable")) })
+        Box::pin(async move {
+            Ok(vec![
+                MemberStats {
+                    node: "dns2".into(),
+                    stats: stats.ok_or_else(|| "unreachable".to_owned()),
+                },
+                MemberStats {
+                    node: "dns3".into(),
+                    stats: Err("unreachable".into()),
+                },
+            ])
+        })
     }
 
     fn writes(&self) -> Writes {
@@ -302,6 +313,78 @@ impl Server {
     async fn post(&self, path: &str, body: Value) -> Reply {
         self.send(Method::POST, path, Some(body), &[]).await
     }
+}
+
+#[tokio::test]
+async fn local_records_round_trip() {
+    let server = start(false);
+    let created = server
+        .post(
+            "/api/v1/records",
+            json!({"name": "nas.lan", "type": "A", "value": "192.168.1.10"}),
+        )
+        .await;
+    assert_eq!(created.status, StatusCode::CREATED, "{}", created.text);
+    let id = created.body["id"].as_str().unwrap().to_owned();
+    assert!(id.starts_with("rc_"), "{id}");
+    assert_eq!(created.body["spec"]["ttl"], 300);
+    assert_eq!(created.body["spec"]["enabled"], true);
+
+    let wildcard = server
+        .post(
+            "/api/v1/records",
+            json!({"name": "*.home.example", "type": "CNAME", "value": "nas.lan", "ttl": 60}),
+        )
+        .await;
+    assert_eq!(wildcard.status, StatusCode::CREATED, "{}", wildcard.text);
+    let wrong = server
+        .post(
+            "/api/v1/records",
+            json!({"name": "tv.lan", "type": "AAAA", "value": "192.168.1.11"}),
+        )
+        .await;
+    assert_eq!(
+        wrong.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{}",
+        wrong.text
+    );
+    let clash = server
+        .post(
+            "/api/v1/records",
+            json!({"name": "nas.lan", "type": "CNAME", "value": "tv.lan"}),
+        )
+        .await;
+    assert_eq!(clash.status, StatusCode::CONFLICT, "{}", clash.text);
+
+    let path = format!("/api/v1/records/{id}");
+    let moved = server
+        .send(
+            Method::PUT,
+            &path,
+            Some(json!({"name": "nas.lan", "type": "A", "value": "192.168.1.12"})),
+            &[("if-match", "\"1\"")],
+        )
+        .await;
+    assert_eq!(moved.status, StatusCode::OK, "{}", moved.text);
+    assert_eq!(moved.body["spec"]["value"], "192.168.1.12");
+    let listed = server.get("/api/v1/records").await;
+    assert_eq!(listed.body.as_array().unwrap().len(), 2);
+    let deleted = server.send(Method::DELETE, &path, None, &[]).await;
+    assert_eq!(deleted.status, StatusCode::NO_CONTENT, "{}", deleted.text);
+
+    // Records change only the policy.
+    assert_eq!(
+        *server.control.applied.lock().unwrap(),
+        [
+            Change::Policy,
+            Change::Policy,
+            Change::Policy,
+            Change::Policy
+        ]
+    );
+    let audit = server.get("/api/v1/audit?limit=1").await;
+    assert_eq!(audit.body[0]["kind"], "record");
 }
 
 #[tokio::test]
@@ -603,8 +686,33 @@ async fn pausing_refreshing_settings_and_observing() {
 
     let settings = server.get("/api/v1/settings").await;
     assert_eq!(settings.body["spec"]["protection"], true);
+    assert_eq!(
+        settings.body["spec"]["access"],
+        json!({"allowed": [], "blocked": []})
+    );
     let mut spec = settings.body["spec"].clone();
     spec["protection"] = json!(false);
+    spec["access"]["blocked"] = json!(["192.168.1.5/24"]);
+    let refused = server
+        .send(
+            Method::PUT,
+            "/api/v1/settings",
+            Some(spec.clone()),
+            &[("if-match", "\"1\"")],
+        )
+        .await;
+    assert_eq!(
+        refused.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{}",
+        refused.text
+    );
+    assert!(
+        refused.text.contains("settings.access.blocked[0]"),
+        "{}",
+        refused.text
+    );
+    spec["access"]["blocked"] = json!(["192.168.1.66", "guest"]);
     let changed = server
         .send(
             Method::PUT,
@@ -615,6 +723,10 @@ async fn pausing_refreshing_settings_and_observing() {
         .await;
     assert_eq!(changed.status, StatusCode::OK, "{}", changed.text);
     assert_eq!(changed.body["revision"], 2);
+    assert_eq!(
+        changed.body["spec"]["access"]["blocked"],
+        json!(["192.168.1.66", "guest"])
+    );
 
     let audit = server.get("/api/v1/audit").await;
     let actions: Vec<&str> = audit
@@ -967,8 +1079,13 @@ async fn cluster_statistics_add_up_every_node() {
     *server.control.cluster.lock().unwrap() = Some(ClusterStatus {
         node: "dns1".into(),
         role: ClusterRole::Primary,
+        state: MemberState::Leader,
+        cluster: Some("00000000000000ab".into()),
+        leader: Some("dns1".into()),
+        term: 1,
         config: server.api.store.version(),
         writable: true,
+        members: Vec::new(),
         peer: PeerStatus {
             node: "dns2".into(),
             address: "192.0.2.12:8054".into(),
@@ -994,6 +1111,7 @@ async fn cluster_statistics_add_up_every_node() {
     assert_eq!(both.body["totals"]["queries"], 40);
     assert_eq!(both.body["top_blocked"][0]["key"], "ads.example");
     assert_eq!(both.body["nodes"], json!(["dns1", "dns2"]));
+    assert_eq!(both.body["unreachable"], json!(["dns3"]));
     // The node's own statistics stay the node's.
     assert_eq!(
         server.get("/api/v1/stats").await.body["totals"]["queries"],
@@ -1004,7 +1122,7 @@ async fn cluster_statistics_add_up_every_node() {
     *server.control.peer_stats.lock().unwrap() = None;
     let partial = server.get("/api/v1/stats?scope=cluster").await;
     assert_eq!(partial.body["nodes"], json!(["dns1"]));
-    assert_eq!(partial.body["unreachable"], json!(["dns2"]));
+    assert_eq!(partial.body["unreachable"], json!(["dns2", "dns3"]));
     assert_eq!(
         server.get("/api/v1/stats?scope=everyone").await.status,
         StatusCode::BAD_REQUEST

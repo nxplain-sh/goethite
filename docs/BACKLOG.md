@@ -40,10 +40,8 @@ Phase 1's scope shipped in v0.1.0. These items came up along the way; they are c
 - **[P1] OPT in FORMERR/NOTIMP responses.** Header-only error responses omit the OPT record even
   when the query carried one (RFC 6891 §7). Only BADVERS includes it today.
 - **[P1] SOA in negative answers.** NODATA for local names carries no SOA in the authority
-  section, so clients cannot cache it negatively (RFC 2308). Needed once local rewrites are
-  configurable.
-- **[P1] Configurable local records and rewrites** replacing the hardcoded `goethite.test.` record
-  (the "local rewrites" pipeline stage).
+  section, so clients cannot cache it negatively (RFC 2308). Now that local records are
+  configurable (ADR 0029), NODATA for them lacks it too.
 - **[P1] Rate-limit per-packet debug logs** (dropped and rejected messages) so a flood with
   `RUST_LOG=debug` cannot drown the log.
 - **[P1] TCP per-connection memory.** Each connection can hold up to about 192 KiB of buffers
@@ -67,7 +65,6 @@ Phase 1's scope shipped in v0.1.0. These items came up along the way; they are c
   bound to `0.0.0.0` or `[::]` answers from the address the kernel picks, which may not be the one
   the query was sent to. Needs `IP_PKTINFO` / `IPV6_RECVPKTINFO`; until then, list specific
   addresses on multihomed hosts.
-- **[P2] Rate limiting exemptions for trusted networks** (beyond loopback).
 
 ## Phase 2: v0.2 control
 
@@ -76,8 +73,6 @@ releases.
 
 - **[P2] Scoped API tokens:** read-only tokens (for monitoring) and a Terraform token, beside the
   single admin token.
-- **[P5] Release builds include the web UI.** The release workflow must build `web/` before
-  `cargo build --release`, reproducibly (pinned Node, `npm ci`).
 - **[P3] Query log writer priority and cost.** The writer thread competes with the DNS workers
   for CPU when the node is saturated. Lower its priority (it needs `setpriority`, which the
   systemd unit's `~@resources` filter refuses), and cut its per-entry allocations (names, IDs and
@@ -156,9 +151,14 @@ Phase 3's scope shipped in v0.3.0. These items came up along the way.
   once 0.4.0 is out; its test nodes need `[filter] services = false` (or a `services_file`).
 - **[later] `$dnsrewrite=NXDOMAIN` rules,** which only block: the services catalog's iCloud
   Private Relay uses nothing else, so goethite leaves that service out today.
-- **[P5] Access control beyond client IDs:** allowed and blocked client networks for every
-  transport, and per-client query rate limits for DoT and DoH, which are not rate limited today
-  (only connection-limited).
+- **[P5] Local records in the Terraform provider and the TUI:** a `goethite_record` resource, and a
+  read-only Records tab (ADR 0029).
+- **[later] More local record types** (TXT, MX, SRV), automatic PTR answers for local `A` and
+  `AAAA` records, and local records per group.
+- **[P5] Access lists in the Terraform provider:** `access` (`allowed`, `blocked`) on
+  `goethite_settings`, once 0.5.0 is out.
+- **[later] Per-client rate limits for Oblivious DoH:** its peer is the proxy, so only the
+  connection limits bound it; a proxy could be given its own, higher limit.
 - **[P4] Differential fuzzing** of `HickoryCodec` against the fast-path decoder, once it exists.
 
 - **[P4] Scalar's AI SDK advisory.** `npm audit` reports a low-severity resource consumption
@@ -170,22 +170,41 @@ Phase 3's scope shipped in v0.3.0. These items came up along the way.
 - **[P4] dnsperf for v0.4.0 on a quiet machine.** The release run (bench/README.md) was on a busy
   host: no regression against v0.3.0, but the sub-millisecond p99 was not shown for v0.4.0.
 
-## Phase 5: 1.0
+## Phase 5: v0.5
 
-- **[P5] Private fuzzing before the first release.** The weekly fuzz job runs in the public
-  repository, so its findings are public. Move it to a private mirror or OSS-Fuzz (with private
-  bug reports) before goethite has users.
-- **[P5] SBOM and signed, reproducible releases.**
-- **[P5] Landlock and seccomp sandboxing.**
+- **[later] Landlock network rules for outgoing connections.** The sandbox stops new TCP
+  listeners only: upstreams, list hosts and cluster members can be on any port, some of them
+  added at run time. Restricting outgoing TCP to the ports in use would need the policy to follow
+  the configuration (ADR 0032).
+- **[later] Namespaces through `clone3`.** seccomp cannot see `clone3`'s flags, so the filter
+  refuses `unshare` and `setns` but not a `clone3` that creates namespaces. Returning `ENOSYS` for
+  `clone3` (so the C library falls back to `clone`, whose flags it can check) would close it.
+- **[later] The sandbox in the status API and the metrics**, not only the log.
+- **[later] Leadership transfer.** openraft 0.9 cannot hand leadership to another member, so
+  `promote` inside a healthy cluster is refused rather than moving the leader (for example
+  before maintenance). openraft 0.10 can; revisit when it is stable (ADR 0031).
+- **[later] Cluster metrics:** this node's Raft state, term, leader changes and how far each
+  member's log reaches, in Prometheus metrics.
+- **[later] Keep-alive connections between members.** Raft opens a TLS connection per message
+  (session resumption keeps it cheap), about two a second per follower.
+- **[later] Configurable Raft timeouts** for members across a WAN; they are constants tuned for
+  a LAN today.
+- **[later] Learners that never vote,** for read-only members in another site, kept as learners
+  even when they would make three voters.
 
 ## Unscheduled / tooling
 
-- **[later] Persist the fuzz corpus in CI** (cache or artifact) so weekly runs build on previous
-  coverage instead of starting from the seeds.
+- **[later] APT and DNF repositories** for `apt upgrade` and `dnf upgrade`: they need a
+  long-lived signing key and hosting (ADR 0027).
+- **[later] Static musl builds** that run on any Linux, including Alpine. musl's allocator is
+  much slower under goethite's multi-threaded load, so this needs another allocator (a new
+  dependency) and a bench against the glibc build first (see ADR 0026).
+
+- **[later] Continuous private fuzzing** (a private repository on a schedule, or OSS-Fuzz) once
+  goethite has users who would feel a regression between releases (ADR 0028).
 - **[later] CI canary job** on `beta` or the latest stable toolchain, to catch upcoming lint and
   compiler changes before an MSRV bump.
 - **[later] Site polish:** OG images, search tuning, a logo, and a richer landing page.
-- **[later] Pin the fuzzing nightly** to a dated toolchain so weekly fuzz runs are reproducible.
 - **[later] Lint workflows in CI** with actionlint and zizmor.
 - **[later] `multiple-versions = "deny"` in `deny.toml`** once the remaining duplicate
   (`syn`, through build-time dependencies) is gone.

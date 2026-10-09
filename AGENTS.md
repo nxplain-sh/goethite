@@ -33,18 +33,20 @@ crates/
   goethite-filter/    rule parsing (hosts, domain lists, AdGuard syntax) + FST/Bloom compiler
   goethite-resolver/  cache, forwarding, upstream pool, (later) recursion + DNSSEC
   goethite-server/    listeners: UDP/TCP 53, DoT, DoH, DoQ; SO_REUSEPORT, per-core sockets
-  goethite-cluster/   config sync, VRRP, (later) Raft via openraft
+  goethite-cluster/   Raft (openraft) for the config, the witness, VRRP
   goethite-api/       axum REST API, /api/v1, OpenAPI via utoipa
   goethite-store/     embedded storage (redb) for query log, stats, config
   goethite-tui/       ratatui client that talks to the API
+  goethite-migrate/   reads Pi-hole / AdGuard Home API answers and plans the same in goethite
   goethite/           the binary: CLI (clap), wiring, systemd integration
 xtask/                repository automation: `cargo xtask ci` runs what CI runs
 web/                  Vite + React + TanStack Router SPA (embedded into the binary)
 site/                 project website + docs (Astro Starlight), deployed to GitHub Pages
 fuzz/                 cargo-fuzz targets (own nightly workspace)
 bench/                dnsperf script + recorded results; criterion benches live in crates/*/benches/
-tests/chaos/          chaos lab: two nodes and a client in network namespaces
-deploy/               hardened systemd units
+tests/chaos/          chaos lab: two nodes, a witness and a client in network namespaces
+tests/packages/       installs the .deb and .rpm on each supported distribution
+deploy/               hardened systemd units, server config, package and container image definitions
 config/               example config
 docs/                 architecture, threat model, ADRs
 ```
@@ -65,7 +67,7 @@ The Terraform provider lives in a separate repo (`terraform-provider-goethite`, 
 - **Never panic on network input.** No `unwrap`/`expect`/indexing that can panic on data from the wire, config, or API. Enforce with clippy (`unwrap_used`, `expect_used`, `indexing_slicing`) in non-test code of the crates above.
 - Bound everything: message sizes, label counts, compression pointer loops, CNAME chain depth, cache size, connection counts, request timeouts.
 - Resolver defenses: random source ports, 0x20 case randomization, response matching on ID + question, DNS rebinding protection, response rate limiting.
-- Drop privileges after binding port 53; ship a hardened systemd unit (no new privileges, `CAP_NET_BIND_SERVICE` only, protected paths). Landlock/seccomp later.
+- Drop privileges after binding port 53; ship a hardened systemd unit (no new privileges, `CAP_NET_BIND_SERVICE` only, protected paths). Then confine the process with Landlock and seccomp ([ADR 0032](docs/adr/0032-sandbox.md)).
 - The API binds to loopback until an admin token is configured. All config changes are audit-logged.
 - Every parser gets a fuzz target. New dependencies must pass `cargo-deny` and be justified in the PR description — prefer fewer, well-maintained crates.
 
@@ -112,7 +114,8 @@ Shared by the web UI and (where possible) the TUI.
 - **Phase 3 — v0.3 HA:** two-node config sync over mTLS, VRRP floating IP, graceful reload via socket handoff, cluster-wide stats, fail-open, chaos tests.
 - **Phase 3.5 — Terraform provider** (separate repo).
 - **Phase 4 — v0.4:** full web UI, DoH/DoT/DoQ server, ODoH, recursion + DNSSEC.
-- **Phase 5 — 1.0:** Raft clustering, reproducible signed builds, SBOM, external security review, packaging, importers from Pi-hole and AdGuard Home.
+- **Phase 5 — v0.5:** Raft clustering (openraft, with a vote-only witness), reproducible signed builds, SBOM, packaging (.deb, .rpm, container image), fuzzing out of public CI (local runs before each release), Landlock + seccomp sandboxing, client access control, local DNS records, importers from Pi-hole and AdGuard Home, external security review.
+- **1.0:** not scheduled yet; it follows v0.5.
 
 ## How to work in this repo
 

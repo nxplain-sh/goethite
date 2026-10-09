@@ -1,0 +1,40 @@
+# goethite configuration for the container image (/etc/goethite/goethite.toml).
+#
+# Mount your own file here to change it; every setting is explained in the
+# configuration reference: https://nxplain-sh.github.io/goethite/configuration/
+
+[server]
+# DNS over UDP and TCP on port 53. Container networks often have no IPv6, so
+# only IPv4 by default; add "[::]:53" where the container has IPv6.
+listen = "0.0.0.0:53"
+# Once the sockets are bound, goethite switches to this unprivileged user
+# (65532) and keeps no capabilities.
+user = "nonroot"
+
+# Quad9 over DNS over TLS. Replace these with the resolvers you trust.
+[[upstream]]
+address = "9.9.9.9"
+protocol = "tls"
+tls_name = "dns.quad9.net"
+
+[[upstream]]
+address = "149.112.112.112"
+protocol = "tls"
+tls_name = "dns.quad9.net"
+
+[filter]
+# Downloaded lists, kept in the volume so goethite starts with them even when
+# offline.
+cache_dir = "/var/lib/goethite/lists"
+
+[store]
+# The filtering configuration, the audit log, the query log and statistics.
+path = "/var/lib/goethite/goethite.redb"
+
+# The REST API, the web UI and the metrics answer on loopback only, which is
+# inside the container, until an admin token is set. To reach them, run
+# `goethite token`, then set
+#   [api]
+#   listen = "0.0.0.0:8053"
+#   token_sha256 = "<the printed hash>"
+# and publish the port (-p 8053:8053), preferably behind HTTPS.

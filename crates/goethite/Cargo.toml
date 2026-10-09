@@ -24,6 +24,7 @@ tokio-rustls.workspace = true
 goethite-api.workspace = true
 goethite-cluster.workspace = true
 goethite-filter.workspace = true
+goethite-migrate.workspace = true
 goethite-proto.workspace = true
 goethite-resolver.workspace = true
 goethite-server.workspace = true
@@ -39,7 +40,9 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
+landlock.workspace = true
 rustix.workspace = true
+seccompiler.workspace = true
 
 [dev-dependencies]
 hickory-proto.workspace = true

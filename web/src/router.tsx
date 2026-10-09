@@ -100,12 +100,14 @@ const queryLogRoute = createRoute({
 // log stay small.
 const lists = () => import('./pages/Lists')
 const rules = () => import('./pages/Rules')
+const records = () => import('./pages/Records')
 const groups = () => import('./pages/Groups')
 const clients = () => import('./pages/Clients')
 const schedules = () => import('./pages/Schedules')
 const ListEditor = lazyRouteComponent(lists, 'ListEditor')
 const FindLists = lazyRouteComponent(() => import('./pages/FindLists'), 'FindLists')
 const RuleEditor = lazyRouteComponent(rules, 'RuleEditor')
+const RecordEditor = lazyRouteComponent(records, 'RecordEditor')
 const GroupEditor = lazyRouteComponent(groups, 'GroupEditor')
 const ClientEditor = lazyRouteComponent(clients, 'ClientEditor')
 const ScheduleEditor = lazyRouteComponent(schedules, 'ScheduleEditor')
@@ -156,6 +158,20 @@ const ruleEditorRoute = createRoute({
 	path: '/rules/$id',
 	component: function RuleEditorPage() {
 		return <RuleEditor id={ruleEditorRoute.useParams().id} />
+	},
+})
+
+const recordsRoute = createRoute({
+	getParentRoute: () => appRoute,
+	path: '/records',
+	component: lazyRouteComponent(records, 'Records'),
+})
+
+const recordEditorRoute = createRoute({
+	getParentRoute: () => appRoute,
+	path: '/records/$id',
+	component: function RecordEditorPage() {
+		return <RecordEditor id={recordEditorRoute.useParams().id} />
 	},
 })
 
@@ -229,6 +245,8 @@ const routeTree = rootRoute.addChildren([
 		listEditorRoute,
 		rulesRoute,
 		ruleEditorRoute,
+		recordsRoute,
+		recordEditorRoute,
 		groupsRoute,
 		groupEditorRoute,
 		clientsRoute,

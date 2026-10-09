@@ -191,3 +191,24 @@ Flat out (`-T 4`), v0.4.0 answered 144,274 q/s and v0.3.0 131,498 q/s. No query 
 The two versions overlap in every column, so v0.4.0 shows no regression. On this busy host
 neither kept the p99 under a millisecond, where v0.3.0 did the day before; the sub-millisecond
 target needs a rerun on a quiet machine before it can be claimed for v0.4.0.
+
+2026-10-09, v0.5.0 against v0.4.0 (commit `5f96b19`), release builds, same VM, image and command,
+each with its own example config (both start with the same recommended lists, 415,263 rules),
+interleaved in the same session, alternating which goes first, 20 s each. v0.5.0 checks every
+query against the access lists and the local records, counts TCP and encrypted queries against
+the rate limiter, and runs under its sandbox: seccomp checks every system call (Landlock costs
+nothing per query). The Mac was busy again (load average 7.7 to 11.6, the release fuzz run taking
+a core):
+
+| Offered load | Version | Answered | p50 | p90 | p99 | p99.9 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 50,000 q/s, 3 rounds | v0.4.0 | 49,508–49,926 q/s | 69–121 µs | 391–639 µs | 1.47–1.82 ms | 2.9–6.7 ms |
+| | v0.5.0 | 49,678–49,981 q/s | 51–89 µs | 215–575 µs | 1.06–1.63 ms | 2.4–3.2 ms |
+| 100,000 q/s, 2 rounds | v0.4.0 | 94,294–98,650 q/s | 231–343 µs | 799–990 µs | 1.66–1.86 ms | 3.0–3.3 ms |
+| | v0.5.0 | 89,991–96,368 q/s | 191–211 µs | 639–799 µs | 1.44–1.66 ms | 2.8 ms |
+
+Flat out (`-T 4`), v0.5.0 answered 173,734 q/s and v0.4.0 123,469 q/s. No query was lost.
+
+v0.5.0 is within v0.4.0's range or better in every column, so the sandbox and the new checks show
+no regression. As in v0.4.0's run, neither version kept the p99 under a millisecond on this busy
+host; the sub-millisecond target still needs a run on a quiet machine before it can be claimed.

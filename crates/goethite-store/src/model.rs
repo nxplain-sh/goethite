@@ -8,7 +8,13 @@
 use std::collections::HashSet;
 
 use goethite_filter::{LineKind, parse_line};
-use goethite_resolver::{Cidr, MAX_SCHEDULES, MAX_SERVICES, is_client_id, is_service_id};
+use std::net::{Ipv4Addr, Ipv6Addr};
+
+use goethite_proto::Name;
+use goethite_resolver::{
+    AccessList, Cidr, LocalData, LocalRecord, MAX_ACCESS_ENTRIES, MAX_LOCAL_RECORDS, MAX_SCHEDULES,
+    MAX_SERVICES, TEST_NAME, is_client_id, is_service_id,
+};
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use serde::{Deserialize, Serialize};
@@ -32,6 +38,10 @@ pub const MAX_CLIENT_ADDRESSES: usize = 64;
 pub const MAX_CLIENT_IDS: usize = 16;
 /// The most schedules.
 pub const MAX_SCHEDULE_COUNT: usize = MAX_SCHEDULES;
+/// The most local DNS records.
+pub const MAX_RECORDS: usize = MAX_LOCAL_RECORDS;
+/// The longest clients may cache a local record, in seconds: a day.
+pub const MAX_RECORD_TTL: u32 = 86_400;
 /// The most blocked services one group names, schedules included.
 pub const MAX_BLOCKED_SERVICES: usize = MAX_SERVICES;
 /// The most time windows in one schedule.
@@ -86,6 +96,9 @@ pub struct SettingsSpec {
     /// How often downloaded lists are refreshed, in hours, 1 to 168.
     #[serde(default = "default_update_hours")]
     pub list_update_hours: u32,
+    /// Which clients are answered at all; by default, everyone.
+    #[serde(default)]
+    pub access: AccessSpec,
 }
 
 impl Default for SettingsSpec {
@@ -95,7 +108,85 @@ impl Default for SettingsSpec {
             block_response: BlockResponseKind::default(),
             blocked_ttl: default_blocked_ttl(),
             list_update_hours: default_update_hours(),
+            access: AccessSpec::default(),
         }
+    }
+}
+
+/// Which clients are answered, over every transport. An entry is an IP
+/// address, a network in CIDR notation (`192.168.1.0/24`) or a client ID. A
+/// query is answered when its client is on `allowed`, or `allowed` is
+/// empty, and is not on `blocked`. Loopback addresses always pass, but a
+/// blocked client ID is refused even there. Refused UDP queries get no
+/// answer; refused connections are closed before their TLS handshake; a
+/// client ID refused after it is known gets `REFUSED`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AccessSpec {
+    /// When not empty, only these clients are answered. At most 10,000
+    /// entries.
+    #[serde(default)]
+    pub allowed: Vec<String>,
+    /// These clients are never answered. At most 10,000 entries.
+    #[serde(default)]
+    pub blocked: Vec<String>,
+}
+
+impl AccessSpec {
+    /// The networks and client IDs in `entries`, which must be valid, as
+    /// [`ConfigSnapshot::validate`] makes sure; anything else is skipped.
+    pub fn list(entries: &[String]) -> AccessList {
+        let mut list = AccessList::default();
+        for entry in entries {
+            match parse_access_entry(entry) {
+                Some(AccessEntry::Network(network)) => list.networks.push(network),
+                Some(AccessEntry::Id(id)) => list.ids.push(id.into()),
+                None => {}
+            }
+        }
+        list
+    }
+
+    fn validate(&self) -> Result<(), ValidationError> {
+        for (name, entries) in [("allowed", &self.allowed), ("blocked", &self.blocked)] {
+            let field = format!("settings.access.{name}");
+            if entries.len() > MAX_ACCESS_ENTRIES {
+                return Err(invalid(
+                    field,
+                    format!("has more than {MAX_ACCESS_ENTRIES} entries"),
+                ));
+            }
+            let mut seen = HashSet::new();
+            for (index, entry) in entries.iter().enumerate() {
+                let at = format!("{field}[{index}]");
+                let parsed = parse_access_entry(entry).ok_or_else(|| {
+                    invalid(
+                        &at,
+                        "needs an IP address, a network such as 192.168.1.0/24, or a client ID",
+                    )
+                })?;
+                if !seen.insert(parsed) {
+                    return Err(invalid(at, format!("{entry} is listed twice")));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// One entry of an access list.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum AccessEntry<'a> {
+    Network(Cidr),
+    Id(&'a str),
+}
+
+/// An address or network, or else a client ID; `None` for anything else,
+/// such as a network with host bits set.
+fn parse_access_entry(entry: &str) -> Option<AccessEntry<'_>> {
+    match entry.parse::<Cidr>() {
+        Ok(network) => Some(AccessEntry::Network(network)),
+        Err(_) => is_client_id(entry).then_some(AccessEntry::Id(entry)),
     }
 }
 
@@ -149,6 +240,135 @@ pub struct RuleSpec {
     /// Who manages the rule.
     #[serde(default)]
     pub managed_by: ManagedBy,
+}
+
+/// The type of a local DNS record.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
+pub enum RecordKind {
+    /// An IPv4 address.
+    #[serde(rename = "A")]
+    A,
+    /// An IPv6 address.
+    #[serde(rename = "AAAA")]
+    Aaaa,
+    /// Another name, which answers for this one.
+    #[serde(rename = "CNAME")]
+    Cname,
+}
+
+/// A DNS record goethite answers itself, for every client and before the
+/// filter: a device on the local network such as `nas.lan`, or every name
+/// below one (`*.home.example`). A name with records answers only from
+/// them; a CNAME's target is resolved like any other name.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RecordSpec {
+    /// The name, such as `nas.lan`, or `*.home.example` for every name below
+    /// `home.example` (not that name itself).
+    pub name: String,
+    /// What the record holds.
+    #[serde(rename = "type")]
+    pub kind: RecordKind,
+    /// An IPv4 address for `A`, an IPv6 address for `AAAA`, a name for
+    /// `CNAME`.
+    pub value: String,
+    /// How long clients may cache it, in seconds, at most 86,400.
+    #[serde(default = "default_record_ttl")]
+    pub ttl: u32,
+    /// Whether the record is answered.
+    #[serde(default = "yes")]
+    pub enabled: bool,
+    /// Free text.
+    #[serde(default)]
+    pub comment: String,
+    /// Who manages the record.
+    #[serde(default)]
+    pub managed_by: ManagedBy,
+}
+
+impl RecordSpec {
+    /// The record as the resolver answers it, or `None` if it is not valid
+    /// (which [`ConfigSnapshot::validate`] prevents).
+    pub fn local(&self) -> Option<LocalRecord> {
+        let (name, wildcard) = record_name(&self.name).ok()?;
+        let data = record_data(self.kind, &self.value).ok()?;
+        Some(LocalRecord {
+            name,
+            wildcard,
+            data,
+            ttl: self.ttl,
+        })
+    }
+
+    fn validate(&self, field: &str) -> Result<(), ValidationError> {
+        check_comment(&format!("{field}.comment"), &self.comment)?;
+        record_name(&self.name).map_err(|message| invalid(format!("{field}.name"), message))?;
+        record_data(self.kind, &self.value)
+            .map_err(|message| invalid(format!("{field}.value"), message))?;
+        if self.ttl > MAX_RECORD_TTL {
+            return Err(invalid(
+                format!("{field}.ttl"),
+                format!("must be at most {MAX_RECORD_TTL}"),
+            ));
+        }
+        Ok(())
+    }
+
+    /// What tells two records apart: the name, whether it is a wildcard,
+    /// the type and the value, ignoring case.
+    fn key(&self) -> (String, RecordKind, String) {
+        (
+            self.name.trim_end_matches('.').to_ascii_lowercase(),
+            self.kind,
+            self.value.trim_end_matches('.').to_ascii_lowercase(),
+        )
+    }
+}
+
+/// A record's name, and whether it is a wildcard (`*.` in front).
+fn record_name(text: &str) -> Result<(Name, bool), String> {
+    let (wildcard, rest) = match text.strip_prefix("*.") {
+        Some(rest) => (true, rest),
+        None => (false, text),
+    };
+    if rest.contains('*') {
+        return Err("may have a wildcard only as its first label, as in *.home.example".into());
+    }
+    let name: Name = rest.parse().map_err(|err| format!("{err}"))?;
+    if name.is_root() {
+        return Err("must not be the root".into());
+    }
+    let own: Name = TEST_NAME.parse().map_err(|err| format!("{err}"))?;
+    if name.is_within(&own) {
+        return Err(format!(
+            "is under {TEST_NAME}, which goethite answers itself"
+        ));
+    }
+    Ok((name, wildcard))
+}
+
+/// A record's value, for its type.
+fn record_data(kind: RecordKind, value: &str) -> Result<LocalData, String> {
+    match kind {
+        RecordKind::A => value
+            .parse::<Ipv4Addr>()
+            .map(LocalData::A)
+            .map_err(|_| "must be an IPv4 address".into()),
+        RecordKind::Aaaa => value
+            .parse::<Ipv6Addr>()
+            .map(LocalData::Aaaa)
+            .map_err(|_| "must be an IPv6 address".into()),
+        RecordKind::Cname => {
+            if value.contains('*') {
+                return Err("must be a name, without wildcards".into());
+            }
+            let target: Name = value.parse().map_err(|err| format!("{err}"))?;
+            if target.is_root() {
+                return Err("must not be the root".into());
+            }
+            Ok(LocalData::Cname(target))
+        }
+    }
 }
 
 /// A list a group uses, always or while a schedule is active.
@@ -371,6 +591,10 @@ fn default_update_hours() -> u32 {
     24
 }
 
+fn default_record_ttl() -> u32 {
+    300
+}
+
 macro_rules! resource {
     ($(#[$doc:meta])* $name:ident, $spec:ident, $kind:literal, $prefix:literal, $field:ident) => {
         $(#[$doc])*
@@ -415,6 +639,9 @@ macro_rules! resource {
             fn all_mut(config: &mut ConfigSnapshot) -> &mut Vec<Self> {
                 &mut config.$field
             }
+            fn into_resource(self) -> Resource {
+                Resource::$name(self)
+            }
         }
     };
 }
@@ -436,9 +663,32 @@ resource!(
     Client, ClientSpec, "client", "cl", clients
 );
 resource!(
+    /// A stored local DNS record.
+    Record, RecordSpec, "record", "rc", records
+);
+resource!(
     /// A stored schedule.
     Schedule, ScheduleSpec, "schedule", "sc", schedules
 );
+
+/// A stored resource of any kind, tagged with it: a row of a configuration
+/// change, as the cluster's log carries it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "resource", rename_all = "snake_case")]
+pub enum Resource {
+    /// A filter list.
+    List(List),
+    /// A custom rule.
+    Rule(Rule),
+    /// A group.
+    Group(Group),
+    /// A client.
+    Client(Client),
+    /// A local DNS record.
+    Record(Record),
+    /// A schedule.
+    Schedule(Schedule),
+}
 
 /// The whole configuration, as of one moment.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -455,6 +705,9 @@ pub struct ConfigSnapshot {
     pub clients: Vec<Client>,
     /// The schedules, oldest first.
     pub schedules: Vec<Schedule>,
+    /// The local DNS records, oldest first.
+    #[serde(default)]
+    pub records: Vec<Record>,
 }
 
 /// A configuration that breaks a rule.
@@ -623,6 +876,7 @@ impl ScheduleSpec {
 
 impl SettingsSpec {
     fn validate(&self) -> Result<(), ValidationError> {
+        self.access.validate()?;
         if self.blocked_ttl > 86_400 {
             return Err(invalid("settings.blocked_ttl", "must be at most 86400"));
         }
@@ -650,6 +904,7 @@ impl ConfigSnapshot {
             groups: vec![default_group_resource(now)],
             clients: Vec::new(),
             schedules: Vec::new(),
+            records: Vec::new(),
         }
     }
 
@@ -673,6 +928,7 @@ impl ConfigSnapshot {
         for rule in &self.rules {
             rule.spec.validate(&format!("rules[{}]", rule.id))?;
         }
+        self.validate_records()?;
         for schedule in &self.schedules {
             schedule
                 .spec
@@ -712,6 +968,43 @@ impl ConfigSnapshot {
                 "schedules",
                 format!("at most {MAX_SCHEDULE_COUNT} schedules are supported"),
             ));
+        }
+        if self.records.len() > MAX_RECORDS {
+            return Err(invalid(
+                "records",
+                format!("at most {MAX_RECORDS} records are supported"),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Each record on its own, then together: no record twice, and a name
+    /// with an enabled CNAME has no other enabled record, as in DNS.
+    fn validate_records(&self) -> Result<(), ValidationError> {
+        let mut seen = HashSet::new();
+        let mut names: std::collections::HashMap<String, (usize, bool)> =
+            std::collections::HashMap::new();
+        for record in &self.records {
+            let field = format!("records[{}]", record.id);
+            record.spec.validate(&field)?;
+            let key = record.spec.key();
+            if !seen.insert(key.clone()) {
+                return Err(invalid(field, "another record is the same"));
+            }
+            if record.spec.enabled {
+                let (count, cname) = names.entry(key.0).or_default();
+                *count = count.saturating_add(1);
+                *cname |= record.spec.kind == RecordKind::Cname;
+                if *cname && *count > 1 {
+                    return Err(conflict(
+                        format!("{field}.name"),
+                        format!(
+                            "{} has a CNAME, so it can have no other record",
+                            record.spec.name
+                        ),
+                    ));
+                }
+            }
         }
         Ok(())
     }

@@ -11,7 +11,7 @@ http://127.0.0.1:8053/
 ```
 
 It shows what goethite is doing and changes everything the [REST API](../api/) can: lists,
-rules, groups, clients, schedules and settings.
+rules, local records, groups, clients, schedules and settings.
 
 ## Signing in
 
@@ -36,9 +36,10 @@ the network; otherwise the token crosses it in clear text.
   name or client in a top list for that name or client, and a bar of the chart (hover or focus it
   for its counts) for its time window. A top blocked name can be allowed, and a top name blocked,
   in two clicks: that adds a custom rule. The range is part of the address. The header shows
-  whether filtering is on, and pauses it for 10 minutes or resumes it. In a [cluster](../ha/), the counts are both
-  nodes' together, the header shows this node's role and its peer, a Cluster panel says whether
-  changes are possible, and cluster problems appear at the top.
+  whether filtering is on, and pauses it for 10 minutes or resumes it. In a [cluster](../ha/), the counts are every
+  node's together, the header shows what this node does in the cluster and how many members are
+  up, a Cluster panel shows the leader, each member and whether changes are possible, and cluster
+  problems appear at the top.
 - **Query log**: the newest queries, following new ones live, with the client, the answer and
   what decided it (the rule, a CNAME, the upstream). Search by name and by answer, and page back
   through older entries. Filters set from the dashboard (a client, a time window) show as chips
@@ -51,6 +52,8 @@ the network; otherwise the token crosses it in clear text.
   **Find lists** searches the [FilterLists directory](../filtering/#finding-more-lists).
 - **Rules**: custom rules, added from the top of the page, filtered as you type, turned on and
   off in place. goethite explains a rule it cannot use.
+- **Records**: [local DNS records](../local-records/), added from the top of the page and turned
+  on and off in place.
 - **Groups**: which lists and [blocked services](../groups/#blocked-services) filter a group's
   clients, each always or during a schedule, and safe
   search.
@@ -62,7 +65,8 @@ the network; otherwise the token crosses it in clear text.
 - **Leak test**: whether this device's lookups reach goethite, over which protocol and as which
   client, or go to another resolver past its filtering; see [DNS leak test](../leak-test/).
 - **Settings**, in the header beside Pause and Sign out: filtering on or off, how blocked names
-  are answered, and how often lists are downloaded.
+  are answered, how often lists are downloaded, and who may use goethite: the allowed and blocked
+  clients (see [access control](../security/#access-control)).
 
 Changes are made with the revision you saw: if someone else changed the same thing meanwhile, the
 UI says so and offers their version instead of overwriting it. What [Terraform](../terraform/)

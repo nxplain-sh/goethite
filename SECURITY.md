@@ -31,17 +31,22 @@ goethite is a pre-alpha project maintained by volunteers. Best effort applies:
   available and credit you unless you prefer otherwise.
 - There is no bug bounty.
 
-## Fuzzing in public CI
+## Fuzzing
 
-The weekly fuzz job runs in this public repository, so a crash it finds is visible in the
-workflow logs and artifacts (kept for 7 days). While goethite is pre-alpha with no releases, we
-accept that trade-off. Before the first release, fuzzing moves to a private setup. Crashes you
-find yourself should still be reported privately as described above.
+Every parser has a fuzz target. Fuzzing runs on maintainers' machines before every release
+(`cargo xtask fuzz`), never in this public repository's CI, where a crash it found would be
+public before its fix; CI only checks that the targets build. If you fuzz goethite and find a
+crash, report it privately as described above, without posting the input publicly.
 
 ## Supported versions
 
-None yet. goethite is pre-alpha and has no releases. Fixes land on `main`. This section will list
-supported release lines once releases exist.
+| Version | Supported |
+| --- | --- |
+| 0.5.x | Yes: security fixes are released as 0.5.y |
+| Before 0.5 | No: upgrade to 0.5 |
+
+0.5.0 is the first release built and attested by the release workflow; earlier versions are tags
+only. While goethite is pre-alpha, only the newest minor version gets fixes.
 
 ## Scope
 
@@ -60,4 +65,5 @@ Out of scope:
 - denial of service by sheer traffic volume beyond the documented bounds
 
 See the [threat model](docs/THREAT_MODEL.md) for what goethite defends against in each phase and
-its explicit non-goals.
+its explicit non-goals, and [`docs/security-review.md`](docs/security-review.md) for the brief of
+the external security review of v0.5.0.

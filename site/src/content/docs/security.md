@@ -45,12 +45,45 @@ Add your own domains to `private_domains` if a public domain you own resolves to
 `private_domains` replaces the defaults, so list them again if you still want them. Answers
 goethite gives itself, such as blocked names answered with `0.0.0.0`, are never touched.
 
+## Access control
+
+goethite answers every client that reaches it unless you list who may use it. In the web UI's
+**Settings**, or through the API (`access` in `/api/v1/settings`), two lists take addresses,
+networks in CIDR notation and [client IDs](../encrypted-dns/#client-ids):
+
+- **Allowed clients:** when not empty, only these are answered.
+- **Blocked clients:** never answered, even when allowed.
+
+Both apply: with `192.168.1.0/24` allowed and `192.168.1.66` blocked, every device on the network
+but one is answered. The lists are part of the replicated configuration, so in a cluster they are
+the same on both nodes, and they take effect at once, without a restart.
+
+```json
+"access": {
+  "allowed": ["192.168.1.0/24", "fd00::/64", "anna-phone"],
+  "blocked": ["192.168.1.66", "guest"]
+}
+```
+
+A refused client learns little and costs little. Its UDP queries get no answer at all, so a forged
+source address gets nothing either. Its TCP, DNS over TLS, HTTPS and QUIC connections are closed
+on accept, before a TLS handshake. Over DNS over TLS, HTTPS and QUIC a client may still be allowed
+by its client ID, which arrives with the handshake; if the ID turns out not to be allowed, or to be
+blocked, each query gets `REFUSED` and shows in the query log as rejected. Oblivious DoH queries
+are checked by the address of the proxy that relays them.
+
+Loopback addresses always pass, so this machine's own tools and the floating IP's health check
+keep working whatever the lists say; only a blocked client ID is refused even there. The lists do
+not cover the [API](../api/) and the web UI, which have their own token. Each list holds at most
+10,000 entries. `goethite_access_refused_total{protocol=...}` counts what the lists refuse.
+
 ## Rate limiting
 
 A resolver that answers anyone can be abused to flood a third party: an attacker sends small
 queries with the victim's address as the source, and the resolver sends the larger answers to the
-victim. goethite limits how many UDP queries each client network may send, before resolving them,
-so a flood also never reaches the cache or the upstreams:
+victim. goethite limits how many queries each client network may send, before resolving them, so
+a flood also never reaches the cache or the upstreams. One limit counts a client's queries over
+UDP, TCP, DNS over TLS, HTTPS and QUIC together:
 
 ```toml
 [server.rate_limit]
@@ -60,17 +93,23 @@ slip = 2                   # see below
 ipv4_prefix = 32           # each IPv4 address is its own client network
 ipv6_prefix = 64           # each IPv6 /64 is one client network
 max_clients = 65536        # client networks tracked at once
+exempt = []                # networks never limited, such as ["192.168.0.0/16"]
 ```
 
-These are the defaults, generous enough for a busy network behind one router. Queries over the
-limit are dropped, except every `slip`-th one, which gets an empty answer with the truncated (TC)
-flag set. A real client then retries over TCP, which is not rate limited (a TCP client has proven
-its address with the handshake), while a spoofed victim gets nothing bigger than the query. `slip
-= 0` drops every limited query; `slip = 1` answers each one with TC.
+These are the defaults, generous enough for a busy network behind one router. UDP queries over
+the limit are dropped, except every `slip`-th one, which gets an empty answer with the truncated
+(TC) flag set: a real client retries over TCP, while a spoofed victim gets nothing bigger than
+the query. `slip = 0` drops every limited query; `slip = 1` answers each one with TC. Over TCP,
+DNS over TLS, HTTPS and QUIC, where the handshake has proven the client's address, a query over
+the limit gets `REFUSED` instead. Limited queries are not written to the query log, so a flood
+cannot fill it; `goethite_rate_limited_total{protocol=...}` counts them. Oblivious DoH is not
+rate limited, since its peer is a proxy relaying many clients; the connection limits bound it.
 
 Clients on loopback are never limited: their addresses cannot be spoofed from the network, and a
-local stub resolver (systemd-resolved, dnsmasq) may forward every query of the host. When more
-client networks are active than `max_clients`, the networks that are not tracked share one limit.
+local stub resolver (systemd-resolved, dnsmasq) may forward every query of the host. Networks in
+`exempt` (at most 256) are not limited either: list the ones you trust, such as a router that
+forwards every device's queries from one address. When more client networks are active than
+`max_clients`, the networks that are not tracked share one limit.
 
 Rate limiting is a safety net, not a firewall: do not expose goethite to the internet unless you
 mean to run a public resolver. To reach it from outside, serve
@@ -116,8 +155,9 @@ thread, then gives the privileges up:
   that it cannot become root again. Started as root without `user`, it logs a warning.
 
 Either way, goethite then empties its capability sets and sets `no_new_privs`, so it cannot gain
-privileges again, even by running a program. The filter lists and their `cache_dir` must be
-readable, and the `cache_dir` writable, by the user goethite runs as. Dropping privileges is
+privileges again, even by running a program, and confines itself ([the sandbox](#the-sandbox)).
+The filter lists and their `cache_dir` must be readable, and the `cache_dir` writable, by the user
+goethite runs as. Dropping privileges is
 supported on Linux; on other platforms, which are for development only, `server.user` is an error.
 
 A [floating IP](../ha/#a-floating-ip) needs privileges the DNS server never gets, so a separate
@@ -127,6 +167,47 @@ It starts with `CAP_NET_RAW` and `CAP_NET_ADMIN`, opens its raw sockets, then ke
 `CAP_NET_ADMIN` (to add and remove the address) and sets `no_new_privs`. Its sandbox matches the
 DNS server's, with netlink and packet sockets allowed and nothing writable;
 `systemd-analyze security goethite-vrrp` rates it 1.9, "OK".
+
+## The sandbox
+
+Once its privileges are gone, and before it handles any query, goethite confines itself on Linux,
+wherever it runs: under systemd, in a container or started by hand. A bug in a parser, or in a
+library goethite uses, then cannot reach much beyond what goethite already needs.
+
+- **Files**, with [Landlock](https://landlock.io). `goethite run` may read only the system
+  directories (`/usr` and the like, for its libraries and time zones), `/proc`, the config file's
+  directory, the directories of the certificates, keys and services file the config names, and
+  the local lists directory (`[filter] local_lists_dir`). It may change only the store's
+  directory, the downloaded lists (`cache_dir`) and its runtime directory, and it opens no new
+  TCP listeners. `goethite witness` may change only its store's directory and read nothing else;
+  `goethite vrrp` may open no file at all.
+- **System calls**, with seccomp. Mounting, loading modules, rebooting, debugging other processes
+  (`ptrace`), BPF, `io_uring`, `userfaultfd`, new namespaces, keyrings and setting the clock are
+  refused with `EPERM`, as are sockets other than IPv4, IPv6 and Unix ones (`goethite vrrp` also
+  keeps netlink and packet sockets). The witness and `goethite vrrp` may not start programs;
+  `goethite run` may, but only the new goethite of an upgrade, which runs inside the old one's
+  sandbox.
+
+The log says what is in force:
+
+```
+INFO goethite::sandbox::linux: sandboxed: Landlock limits files, seccomp system calls process="goethite run" landlock_abi=6 system_calls_denied=47
+```
+
+Landlock needs Linux 5.13 or newer with Landlock enabled (it is on in Debian, Ubuntu, Fedora and
+RHEL kernels); older ABIs lack some of its rights, and the log then says the files are limited
+"as far as this kernel supports". Without Landlock, goethite warns and seccomp still applies.
+A sandbox around goethite can refuse the system calls that set either up: an older systemd's
+`SystemCallFilter=@system-service` (the shipped units allow them), or a container runtime's
+filter. goethite then warns that it runs without that part of its own sandbox, and the outer one
+still confines it.
+
+An upgrade starts the new goethite inside the running one's sandbox, so the new one can reach
+only what the old one could. If you moved the store, the certificates or the lists elsewhere in
+the config file, restart goethite instead (`systemctl restart goethite`).
+
+`[security] sandbox = false` turns the sandbox off, for diagnosing a problem you suspect it causes;
+the log then warns. The systemd units sandbox goethite from the outside too.
 
 ## The API, the web UI and the logs
 
@@ -165,7 +246,7 @@ goethite opens connections only to:
 - **`api.filterlists.com`**, over HTTPS, only when someone opens Find lists in the web UI, at
   most once a day ([FilterLists directory](../filtering/#finding-more-lists); `[filter]
   directory = false` turns it off);
-- its **cluster peer**, if it has one.
+- the other **members of its cluster**, if it is in one.
 
 Names are resolved through goethite's own upstreams. The web UI's pages talk to goethite only;
 links to list home pages open in a new tab.

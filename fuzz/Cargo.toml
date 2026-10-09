@@ -13,16 +13,25 @@ cargo-fuzz = true
 goethite-api = { path = "../crates/goethite-api" }
 goethite-cluster = { path = "../crates/goethite-cluster" }
 goethite-filter = { path = "../crates/goethite-filter" }
+goethite-migrate = { path = "../crates/goethite-migrate" }
 goethite-proto = { path = "../crates/goethite-proto" }
 goethite-resolver = { path = "../crates/goethite-resolver" }
 goethite-server = { path = "../crates/goethite-server" }
 goethite-store = { path = "../crates/goethite-store" }
 libfuzzer-sys = "0.4.13"
+serde_json = "1.0.151"
 
 # Fuzz targets need nightly and libFuzzer, so they are their own workspace
 # (the root workspace excludes this directory).
 [workspace]
 members = ["."]
+
+[[bin]]
+name = "apply-commands"
+path = "fuzz_targets/apply-commands.rs"
+test = false
+doc = false
+bench = false
 
 [[bin]]
 name = "classify-response"
@@ -132,6 +141,13 @@ bench = false
 [[bin]]
 name = "parse-vrrp"
 path = "fuzz_targets/parse-vrrp.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "plan-migration"
+path = "fuzz_targets/plan-migration.rs"
 test = false
 doc = false
 bench = false

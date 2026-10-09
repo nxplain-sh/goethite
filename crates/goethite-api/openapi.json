@@ -10,7 +10,7 @@
       "name": "MIT OR Apache-2.0",
       "identifier": "MIT OR Apache-2.0"
     },
-    "version": "0.4.0"
+    "version": "0.5.0"
   },
   "paths": {
     "/api/v1/audit": {
@@ -377,7 +377,7 @@
         "tags": [
           "cluster"
         ],
-        "summary": "This node's cluster: its role, the other node, and how following the\nprimary goes.",
+        "summary": "This node's cluster: what this node does in it, its leader and members,\nand how following the leader goes.",
         "operationId": "get_cluster",
         "responses": {
           "200": {
@@ -413,7 +413,7 @@
         "tags": [
           "cluster"
         ],
-        "summary": "Makes this node a replica: it copies the other node's configuration\nfrom then on, replacing its own. Refused unless the other node is\nreachable and primary, unless forced.",
+        "summary": "Leaves this node's cluster to join another: after a takeover, on a\nnode of the old cluster. It keeps its configuration until the other\ncluster's leader adds it, which then replaces it. Refused unless the\nleader of another cluster is reachable, unless forced.",
         "operationId": "demote",
         "requestBody": {
           "content": {
@@ -427,7 +427,7 @@
         },
         "responses": {
           "200": {
-            "description": "This node is a replica",
+            "description": "This node left its cluster",
             "content": {
               "application/json": {
                 "schema": {
@@ -447,7 +447,74 @@
             }
           },
           "409": {
-            "description": "The other node is not a reachable primary",
+            "description": "No other cluster's leader is reachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/cluster/members/{node}": {
+      "delete": {
+        "tags": [
+          "cluster"
+        ],
+        "summary": "Removes a member from the cluster for good, such as a node taken out of\nservice. Remove it from the leader's config file first, or it is added\nagain. Made by the leader, like configuration changes.",
+        "operationId": "remove_member",
+        "parameters": [
+          {
+            "name": "node",
+            "in": "path",
+            "description": "The member's name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The member is gone",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterStatus"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such member",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "It is the leader, or still in the leader's config file",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The cluster has no leader",
             "content": {
               "application/json": {
                 "schema": {
@@ -469,7 +536,7 @@
         "tags": [
           "cluster"
         ],
-        "summary": "Makes this node the primary. Its configuration becomes the cluster's,\nin a new epoch. Refused while the current primary is reachable, unless\nforced: demote that one first.",
+        "summary": "Takes the cluster over: this node starts a new cluster, as its only\nvoter, with its configuration. For a cluster that has lost most of its\nvoters for good, such as two nodes without a witness that lost the\nleader. Refused while a leader is reachable, unless forced. The other\nmembers join the new cluster once demoted.",
         "operationId": "promote",
         "requestBody": {
           "content": {
@@ -483,7 +550,7 @@
         },
         "responses": {
           "200": {
-            "description": "This node is the primary",
+            "description": "This node leads a cluster of its own",
             "content": {
               "application/json": {
                 "schema": {
@@ -503,7 +570,7 @@
             }
           },
           "409": {
-            "description": "The other node is reachable and primary",
+            "description": "The cluster has a reachable leader",
             "content": {
               "application/json": {
                 "schema": {
@@ -1660,6 +1727,313 @@
         ]
       }
     },
+    "/api/v1/records": {
+      "get": {
+        "tags": [
+          "records"
+        ],
+        "summary": "Lists all local DNS records, oldest first.",
+        "operationId": "list_records",
+        "responses": {
+          "200": {
+            "description": "All of them, oldest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Record"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid admin token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "records"
+        ],
+        "summary": "Creates a local DNS record.",
+        "operationId": "create_record",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordSpec"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Record"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "It refers to something that does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "It is not valid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/records/{id}": {
+      "get": {
+        "tags": [
+          "records"
+        ],
+        "summary": "Gets one local DNS record.",
+        "operationId": "get_record",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "It, with its revision as the ETag",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Record"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such ID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "records"
+        ],
+        "summary": "Replaces a local DNS record's spec.",
+        "operationId": "update_record",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "The revision the change is based on",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordSpec"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Record"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such ID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "It refers to something that does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "It changed since that revision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "It is not valid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "records"
+        ],
+        "summary": "Deletes a local DNS record.",
+        "operationId": "delete_record",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "The revision the deletion is based on",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "404": {
+            "description": "No such ID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Something still refers to it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "It changed since that revision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      }
+    },
     "/api/v1/rules": {
       "get": {
         "tags": [
@@ -2508,6 +2882,27 @@
   },
   "components": {
     "schemas": {
+      "AccessSpec": {
+        "type": "object",
+        "description": "Which clients are answered, over every transport. An entry is an IP\naddress, a network in CIDR notation (`192.168.1.0/24`) or a client ID. A\nquery is answered when its client is on `allowed`, or `allowed` is\nempty, and is not on `blocked`. Loopback addresses always pass, but a\nblocked client ID is refused even there. Refused UDP queries get no\nanswer; refused connections are closed before their TLS handshake; a\nclient ID refused after it is known gets `REFUSED`.",
+        "properties": {
+          "allowed": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "When not empty, only these clients are answered. At most 10,000\nentries."
+          },
+          "blocked": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "These clients are never answered. At most 10,000 entries."
+          }
+        },
+        "additionalProperties": false
+      },
       "Actor": {
         "type": "object",
         "description": "Who made a change, and from where.",
@@ -2537,7 +2932,7 @@
       },
       "ActorKind": {
         "type": "string",
-        "description": "Who made a change: `token` (an API client with the admin token), `unauthenticated` (an API client on loopback while no admin token is configured), `cli` (the goethite command line), `system` (goethite itself) or `replication` (copied from the cluster's primary). More may be added: show unknown values as they are.",
+        "description": "Who made a change: `token` (an API client with the admin token), `unauthenticated` (an API client on loopback while no admin token is configured), `cli` (the goethite command line), `system` (goethite itself) or `replication` (a whole configuration taken from another cluster member). More may be added: show unknown values as they are.",
         "x-extensible-enum": [
           "token",
           "unauthenticated",
@@ -2548,7 +2943,7 @@
       },
       "AuditAction": {
         "type": "string",
-        "description": "What an audit entry records: `create`, `update` or `delete` (a resource or the settings), `import` (the config file's `[filter]` table), `pause` or `resume` (filtering), `refresh` (a list download), `replicate` (a copy of the cluster primary's configuration), `promote` or `demote` (this node became the cluster's primary or a replica). More may be added: show unknown values as they are.",
+        "description": "What an audit entry records: `create`, `update` or `delete` (a resource or the settings), `import` (the config file's `[filter]` table), `pause` or `resume` (filtering), `refresh` (a list download), `replicate` (the cluster's whole configuration, taken from another member), `promote` (this node took the cluster over) or `demote` (this node left its cluster to join another). More may be added: show unknown values as they are.",
         "x-extensible-enum": [
           "create",
           "update",
@@ -2777,7 +3172,7 @@
       },
       "ClusterRole": {
         "type": "string",
-        "description": "A node's role in its cluster.",
+        "description": "A node's role in its cluster, as goethite 0.4 named it.",
         "enum": [
           "primary",
           "replica"
@@ -2795,9 +3190,30 @@
           "problems"
         ],
         "properties": {
+          "cluster": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The cluster's ID, if this node is in one: chosen when the cluster\nstarted, or was taken over."
+          },
           "config": {
             "$ref": "#/components/schemas/ConfigVersion",
             "description": "Its configuration's version."
+          },
+          "leader": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The leader, if there is one."
+          },
+          "members": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MemberStatus"
+            },
+            "description": "Every member: this node, the cluster's other members, and those in\nthis node's config file; empty from goethite 0.4."
           },
           "node": {
             "type": "string",
@@ -2805,39 +3221,49 @@
           },
           "peer": {
             "$ref": "#/components/schemas/PeerStatus",
-            "description": "The other node, as last seen."
+            "description": "One other member, for clients of goethite 0.4: the leader, or on\nthe leader another member. Use `members`."
           },
           "problems": {
             "type": "array",
             "items": {
               "type": "string"
             },
-            "description": "Things someone should look at, in words, such as both nodes being\nprimary."
+            "description": "Things someone should look at, in words, such as a member in\nanother cluster."
           },
           "role": {
             "$ref": "#/components/schemas/ClusterRole",
-            "description": "Its role."
+            "description": "Its role: `primary` while it leads."
+          },
+          "state": {
+            "$ref": "#/components/schemas/MemberState",
+            "description": "What it does in the cluster; `unknown` from goethite 0.4."
           },
           "sync": {
             "oneOf": [
               {
                 "$ref": "#/components/schemas/SyncStatus",
-                "description": "On a replica, how following the primary goes."
+                "description": "Off the leader, how following it goes."
               },
               {
                 "type": "null"
               }
             ]
           },
+          "term": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The Raft term: it counts elections.",
+            "minimum": 0
+          },
           "writable": {
             "type": "boolean",
-            "description": "Whether configuration changes can be made through this node now:\non the primary, or on a replica that reaches the primary."
+            "description": "Whether configuration changes can be made through this node now:\non the leader, or on a member that reaches the leader."
           }
         }
       },
       "ConfigVersion": {
         "type": "object",
-        "description": "Which configuration a store holds.\n\n`epoch` names a line of history: it is chosen at random when a store is\ncreated and again when a node becomes the cluster's primary. `version`\ncounts the changes along it. A replica takes a configuration whose epoch\ndiffers from its own, or whose version is newer.",
+        "description": "Which configuration a store holds.\n\n`epoch` names a line of history: it is chosen at random when a store is\ncreated, and again when a node's whole configuration becomes a\ncluster's ([`Store::seed`]). `version` counts the changes along it.\nEvery member of a cluster goes through the same versions, so a member\nthat forwarded a change waits until it holds the version the leader\nreported.",
         "required": [
           "epoch",
           "version"
@@ -3571,6 +3997,118 @@
           "config_file"
         ]
       },
+      "MemberState": {
+        "type": "string",
+        "description": "What a member does in the cluster right now.",
+        "enum": [
+          "leader",
+          "follower",
+          "candidate",
+          "learner",
+          "stopped",
+          "unknown"
+        ]
+      },
+      "MemberStatus": {
+        "type": "object",
+        "description": "A member of the cluster, as last seen.",
+        "required": [
+          "node",
+          "address",
+          "this_node",
+          "membership",
+          "witness",
+          "reachable"
+        ],
+        "properties": {
+          "address": {
+            "type": "string",
+            "description": "Its cluster address."
+          },
+          "checked_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was last checked."
+          },
+          "config": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ConfigVersion",
+                "description": "Its configuration's version, when last reached."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the last check failed, if it did."
+          },
+          "matched": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "On the leader: the last log entry it is known to hold.",
+            "minimum": 0
+          },
+          "membership": {
+            "$ref": "#/components/schemas/Membership",
+            "description": "How it belongs to the cluster."
+          },
+          "node": {
+            "type": "string",
+            "description": "Its name."
+          },
+          "reachable": {
+            "type": "boolean",
+            "description": "Whether it answered the last check."
+          },
+          "state": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MemberState",
+                "description": "What it does, when last reached."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "this_node": {
+            "type": "boolean",
+            "description": "Whether it is this node."
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its goethite version, when last reached."
+          },
+          "witness": {
+            "type": "boolean",
+            "description": "Whether it is a witness: it votes, never leads and answers no DNS."
+          }
+        }
+      },
+      "Membership": {
+        "type": "string",
+        "description": "How a member belongs to the cluster.",
+        "enum": [
+          "voter",
+          "learner",
+          "configured"
+        ]
+      },
       "Pause": {
         "type": "object",
         "description": "Whether filtering is paused.",
@@ -3603,7 +4141,7 @@
       },
       "PeerStatus": {
         "type": "object",
-        "description": "The other node, as last seen.",
+        "description": "Another member, as last seen, in goethite 0.4's terms.",
         "required": [
           "node",
           "address",
@@ -3642,7 +4180,7 @@
           },
           "node": {
             "type": "string",
-            "description": "Its name."
+            "description": "Its name; empty when the cluster has no other member."
           },
           "reachable": {
             "type": "boolean",
@@ -4014,6 +4552,94 @@
           }
         }
       },
+      "Record": {
+        "type": "object",
+        "description": "A stored local DNS record.",
+        "required": [
+          "id",
+          "revision",
+          "created_at",
+          "updated_at",
+          "spec"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it was created."
+          },
+          "id": {
+            "type": "string",
+            "description": "The ID, chosen by goethite."
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Counts updates, starting at 1.",
+            "minimum": 0
+          },
+          "spec": {
+            "$ref": "#/components/schemas/RecordSpec",
+            "description": "What it is."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it last changed."
+          }
+        }
+      },
+      "RecordKind": {
+        "type": "string",
+        "description": "The type of a local DNS record.",
+        "enum": [
+          "A",
+          "AAAA",
+          "CNAME"
+        ]
+      },
+      "RecordSpec": {
+        "type": "object",
+        "description": "A DNS record goethite answers itself, for every client and before the\nfilter: a device on the local network such as `nas.lan`, or every name\nbelow one (`*.home.example`). A name with records answers only from\nthem; a CNAME's target is resolved like any other name.",
+        "required": [
+          "name",
+          "type",
+          "value"
+        ],
+        "properties": {
+          "comment": {
+            "type": "string",
+            "description": "Free text."
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether the record is answered."
+          },
+          "managed_by": {
+            "$ref": "#/components/schemas/ManagedBy",
+            "description": "Who manages the record."
+          },
+          "name": {
+            "type": "string",
+            "description": "The name, such as `nas.lan`, or `*.home.example` for every name below\n`home.example` (not that name itself)."
+          },
+          "ttl": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How long clients may cache it, in seconds, at most 86,400.",
+            "minimum": 0
+          },
+          "type": {
+            "$ref": "#/components/schemas/RecordKind",
+            "description": "What the record holds."
+          },
+          "value": {
+            "type": "string",
+            "description": "An IPv4 address for `A`, an IPv6 address for `AAAA`, a name for\n`CNAME`."
+          }
+        },
+        "additionalProperties": false
+      },
       "RecursionStatus": {
         "type": "object",
         "description": "Recursive resolution: from the root servers down, instead of asking\nupstream resolvers.",
@@ -4102,7 +4728,7 @@
         "properties": {
           "force": {
             "type": "boolean",
-            "description": "Change it even though the other node is reachable and would\ndisagree, leaving two primaries (or two replicas) until one changes."
+            "description": "Change it even though the cluster seems to disagree: take a cluster\nover while its leader is reachable, or leave one without another to\njoin. Two clusters can result, until one node is demoted."
           }
         },
         "additionalProperties": false
@@ -4343,6 +4969,10 @@
         "type": "object",
         "description": "Node-wide filtering settings.",
         "properties": {
+          "access": {
+            "$ref": "#/components/schemas/AccessSpec",
+            "description": "Which clients are answered at all; by default, everyone."
+          },
           "block_response": {
             "$ref": "#/components/schemas/BlockResponseKind",
             "description": "How blocked names are answered."
@@ -4572,14 +5202,14 @@
       },
       "SyncStatus": {
         "type": "object",
-        "description": "How a replica follows the primary.",
+        "description": "How a member follows the leader.",
         "properties": {
           "error": {
             "type": [
               "string",
               "null"
             ],
-            "description": "Why the last attempt failed, if it did."
+            "description": "Why it cannot follow, if it cannot."
           },
           "last_contact": {
             "type": [
@@ -4587,7 +5217,7 @@
               "null"
             ],
             "format": "date-time",
-            "description": "When the primary last answered."
+            "description": "When the leader last sent changes or a heartbeat."
           },
           "last_copy": {
             "type": [
@@ -4595,7 +5225,7 @@
               "null"
             ],
             "format": "date-time",
-            "description": "When its configuration was last copied."
+            "description": "When this node's configuration last changed."
           }
         }
       },
@@ -4716,6 +5346,10 @@
       "description": "Custom filtering rules"
     },
     {
+      "name": "records",
+      "description": "Local DNS records, answered before the filter"
+    },
+    {
       "name": "groups",
       "description": "Groups of clients with the same filtering"
     },
@@ -4737,7 +5371,7 @@
     },
     {
       "name": "cluster",
-      "description": "This node's cluster: roles, the other node, following the primary"
+      "description": "This node's cluster: its leader and members, taking over and joining"
     }
   ]
 }

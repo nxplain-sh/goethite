@@ -1,14 +1,19 @@
 //! The API in a cluster: which node this is, where configuration changes
-//! go, and handing them to the primary.
+//! go, and handing them to the leader.
 //!
-//! On a replica, a configuration change (a `POST`, `PUT` or `DELETE` of a
-//! list, rule, group, client, schedule or the settings) is forwarded to the
-//! primary with the caller's identity, and answered with the primary's
-//! answer once this node has copied the change, so the caller reads its own
-//! write. While the primary is unreachable such changes are refused; reads,
-//! pausing and list downloads stay local. The binary does the forwarding
-//! ([`Control::forward`]); the primary runs forwarded changes through the
+//! The members of a cluster agree on configuration changes with Raft, and
+//! one of them leads. On any other member, a configuration change (a
+//! `POST`, `PUT` or `DELETE` of a list, rule, local record, group, client,
+//! schedule or the settings, or removing a member) is forwarded to the
+//! leader with the caller's identity, and answered with the leader's answer
+//! once this node has applied the change, so the caller reads its own
+//! write. While there is no leader such changes are refused; reads, pausing
+//! and list downloads stay local. The binary does the forwarding
+//! ([`Control::forward`]); the leader runs forwarded changes through the
 //! same routes ([`execute`]).
+//!
+//! For clients of goethite 0.4, the leader is the `primary` and every other
+//! member a `replica`.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -30,18 +35,52 @@ use utoipa::ToSchema;
 use crate::error::{ApiError, ErrorBody};
 use crate::{Api, MAX_BODY, router};
 
-/// How long a replica waits to copy a change it forwarded, so the caller
+/// How long a member waits to apply a change it forwarded, so the caller
 /// reads its own write.
 const READ_YOUR_WRITE: Duration = Duration::from_secs(3);
 
-/// A node's role in its cluster.
+/// A node's role in its cluster, as goethite 0.4 named it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ClusterRole {
-    /// Owns the configuration.
+    /// Leads the cluster: configuration changes are made through it.
     Primary,
-    /// Copies the primary's configuration and forwards changes to it.
+    /// Any other member: it applies the leader's changes and forwards its
+    /// own to it.
     Replica,
+}
+
+/// What a member does in the cluster right now.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MemberState {
+    /// It leads: configuration changes are made through it.
+    Leader,
+    /// It follows the leader and votes.
+    Follower,
+    /// It is standing for election.
+    Candidate,
+    /// It follows the leader without voting, or waits to be added to a
+    /// cluster.
+    Learner,
+    /// Raft stopped on it.
+    Stopped,
+    /// It answered with a state this node does not know, or is a node of
+    /// goethite 0.4.
+    #[default]
+    Unknown,
+}
+
+/// How a member belongs to the cluster.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Membership {
+    /// It votes: a majority of voters must agree on every change.
+    Voter,
+    /// It receives every change, but does not vote.
+    Learner,
+    /// It is in this node's config file, but not in the cluster (yet).
+    Configured,
 }
 
 /// This node's cluster.
@@ -49,27 +88,80 @@ pub enum ClusterRole {
 pub struct ClusterStatus {
     /// This node's name.
     pub node: String,
-    /// Its role.
+    /// Its role: `primary` while it leads.
     pub role: ClusterRole,
+    /// What it does in the cluster; `unknown` from goethite 0.4.
+    #[serde(default)]
+    pub state: MemberState,
+    /// The cluster's ID, if this node is in one: chosen when the cluster
+    /// started, or was taken over.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cluster: Option<String>,
+    /// The leader, if there is one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leader: Option<String>,
+    /// The Raft term: it counts elections.
+    #[serde(default)]
+    pub term: u64,
     /// Its configuration's version.
     pub config: ConfigVersion,
     /// Whether configuration changes can be made through this node now:
-    /// on the primary, or on a replica that reaches the primary.
+    /// on the leader, or on a member that reaches the leader.
     pub writable: bool,
-    /// The other node, as last seen.
+    /// Every member: this node, the cluster's other members, and those in
+    /// this node's config file; empty from goethite 0.4.
+    #[serde(default)]
+    pub members: Vec<MemberStatus>,
+    /// One other member, for clients of goethite 0.4: the leader, or on
+    /// the leader another member. Use `members`.
     pub peer: PeerStatus,
-    /// On a replica, how following the primary goes.
+    /// Off the leader, how following it goes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sync: Option<SyncStatus>,
-    /// Things someone should look at, in words, such as both nodes being
-    /// primary.
+    /// Things someone should look at, in words, such as a member in
+    /// another cluster.
     pub problems: Vec<String>,
 }
 
-/// The other node, as last seen.
+/// A member of the cluster, as last seen.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct MemberStatus {
+    /// Its name.
+    pub node: String,
+    /// Its cluster address.
+    pub address: String,
+    /// Whether it is this node.
+    pub this_node: bool,
+    /// How it belongs to the cluster.
+    pub membership: Membership,
+    /// Whether it is a witness: it votes, never leads and answers no DNS.
+    pub witness: bool,
+    /// Whether it answered the last check.
+    pub reachable: bool,
+    /// When it was last checked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checked_at: Option<Timestamp>,
+    /// What it does, when last reached.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<MemberState>,
+    /// Its goethite version, when last reached.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// Its configuration's version, when last reached.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config: Option<ConfigVersion>,
+    /// On the leader: the last log entry it is known to hold.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matched: Option<u64>,
+    /// Why the last check failed, if it did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Another member, as last seen, in goethite 0.4's terms.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct PeerStatus {
-    /// Its name.
+    /// Its name; empty when the cluster has no other member.
     pub node: String,
     /// Its cluster address.
     pub address: String,
@@ -92,16 +184,16 @@ pub struct PeerStatus {
     pub error: Option<String>,
 }
 
-/// How a replica follows the primary.
+/// How a member follows the leader.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct SyncStatus {
-    /// When the primary last answered.
+    /// When the leader last sent changes or a heartbeat.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_contact: Option<Timestamp>,
-    /// When its configuration was last copied.
+    /// When this node's configuration last changed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_copy: Option<Timestamp>,
-    /// Why the last attempt failed, if it did.
+    /// Why it cannot follow, if it cannot.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -109,15 +201,15 @@ pub struct SyncStatus {
 /// Where configuration changes made through this node go.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Writes {
-    /// Into this node's store: a node on its own, or the primary.
+    /// Into this node's store: a node on its own, or the leader.
     Local,
-    /// To the primary, through [`Control::forward`](crate::Control::forward).
+    /// To the leader, through [`Control::forward`](crate::Control::forward).
     Forward,
-    /// Nowhere, for this reason: a replica that cannot reach the primary.
+    /// Nowhere, for this reason, such as a cluster without a leader.
     ReadOnly(String),
 }
 
-/// A configuration change, forwarded from a replica to the primary.
+/// A configuration change, forwarded from a member to the leader.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Forwarded {
     /// The HTTP method.
@@ -127,15 +219,15 @@ pub struct Forwarded {
     /// The `If-Match` header, if the caller sent one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub if_match: Option<String>,
-    /// The body as sent, if there was one; the primary checks it as it
+    /// The body as sent, if there was one; the leader checks it as it
     /// checks any request.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body: Option<String>,
-    /// Who made the change, as the replica authenticated them.
+    /// Who made the change, as the forwarding member authenticated them.
     pub actor: Actor,
 }
 
-/// The primary's answer to a forwarded change.
+/// The leader's answer to a forwarded change.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ForwardedAnswer {
     /// The HTTP status.
@@ -146,10 +238,10 @@ pub struct ForwardedAnswer {
     /// The `Location` header, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub location: Option<String>,
-    /// The body as the primary sent it, if any: JSON.
+    /// The body as the leader sent it, if any: JSON.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body: Option<String>,
-    /// The primary's configuration version after the change.
+    /// The leader's configuration version after the change.
     pub version: ConfigVersion,
 }
 
@@ -158,7 +250,8 @@ pub struct ForwardedAnswer {
 #[derive(Clone, Debug)]
 pub(crate) struct TrustedActor(pub(crate) Actor);
 
-/// Whether `method` on `path` changes the configuration store.
+/// Whether `method` on `path` changes the cluster's configuration, so the
+/// leader must make it.
 fn is_config_write(method: &Method, path: &str) -> bool {
     if !matches!(*method, Method::POST | Method::PUT | Method::DELETE) {
         return false;
@@ -166,14 +259,17 @@ fn is_config_write(method: &Method, path: &str) -> bool {
     let Some(rest) = path.strip_prefix("/api/v1/") else {
         return false;
     };
+    if *method == Method::DELETE && rest.starts_with("cluster/members/") {
+        return true;
+    }
     let resource = rest.split('/').next().unwrap_or_default();
     matches!(
         resource,
-        "lists" | "rules" | "groups" | "clients" | "schedules" | "settings"
+        "lists" | "rules" | "records" | "groups" | "clients" | "schedules" | "settings"
     ) && rest != "lists/refresh"
 }
 
-/// Sends configuration changes made through a replica to the primary.
+/// Sends configuration changes made through a member to the leader.
 /// Runs after authentication, which put the caller's [`Actor`] in place.
 pub(crate) async fn forward_writes(
     State(api): State<Arc<Api>>,
@@ -237,7 +333,7 @@ async fn forward(api: &Arc<Api>, request: Request) -> Result<Response, ApiError>
     Ok(answer_response(answer))
 }
 
-/// The primary's answer as this node's response.
+/// The leader's answer as this node's response.
 fn answer_response(answer: ForwardedAnswer) -> Response {
     let status = StatusCode::from_u16(answer.status).unwrap_or(StatusCode::BAD_GATEWAY);
     let mut response = match answer.body {
@@ -258,7 +354,7 @@ fn answer_response(answer: ForwardedAnswer) -> Response {
     response
 }
 
-/// Runs a change forwarded by the replica `node` through this node's
+/// Runs a change forwarded by the member `node` through this node's
 /// routes, as its original caller.
 ///
 /// # Errors
@@ -336,8 +432,8 @@ fn header(response: &Response, name: &axum::http::HeaderName) -> Option<String> 
         .map(str::to_owned)
 }
 
-/// This node's cluster: its role, the other node, and how following the
-/// primary goes.
+/// This node's cluster: what this node does in it, its leader and members,
+/// and how following the leader goes.
 #[utoipa::path(get, path = "/api/v1/cluster", tag = "cluster",
     responses(
         (status = 200, description = "The cluster", body = ClusterStatus),
@@ -357,21 +453,24 @@ pub(crate) async fn get_cluster(
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RoleChange {
-    /// Change it even though the other node is reachable and would
-    /// disagree, leaving two primaries (or two replicas) until one changes.
+    /// Change it even though the cluster seems to disagree: take a cluster
+    /// over while its leader is reachable, or leave one without another to
+    /// join. Two clusters can result, until one node is demoted.
     #[serde(default)]
     pub force: bool,
 }
 
-/// Makes this node the primary. Its configuration becomes the cluster's,
-/// in a new epoch. Refused while the current primary is reachable, unless
-/// forced: demote that one first.
+/// Takes the cluster over: this node starts a new cluster, as its only
+/// voter, with its configuration. For a cluster that has lost most of its
+/// voters for good, such as two nodes without a witness that lost the
+/// leader. Refused while a leader is reachable, unless forced. The other
+/// members join the new cluster once demoted.
 #[utoipa::path(post, path = "/api/v1/cluster/promote", tag = "cluster",
     request_body = RoleChange,
     responses(
-        (status = 200, description = "This node is the primary", body = ClusterStatus),
+        (status = 200, description = "This node leads a cluster of its own", body = ClusterStatus),
         (status = 404, description = "This node is not in a cluster", body = ErrorBody),
-        (status = 409, description = "The other node is reachable and primary", body = ErrorBody),
+        (status = 409, description = "The cluster has a reachable leader", body = ErrorBody),
     ),
     security(("token" = [])))]
 pub(crate) async fn promote(
@@ -386,15 +485,16 @@ pub(crate) async fn promote(
         .map(Json)
 }
 
-/// Makes this node a replica: it copies the other node's configuration
-/// from then on, replacing its own. Refused unless the other node is
-/// reachable and primary, unless forced.
+/// Leaves this node's cluster to join another: after a takeover, on a
+/// node of the old cluster. It keeps its configuration until the other
+/// cluster's leader adds it, which then replaces it. Refused unless the
+/// leader of another cluster is reachable, unless forced.
 #[utoipa::path(post, path = "/api/v1/cluster/demote", tag = "cluster",
     request_body = RoleChange,
     responses(
-        (status = 200, description = "This node is a replica", body = ClusterStatus),
+        (status = 200, description = "This node left its cluster", body = ClusterStatus),
         (status = 404, description = "This node is not in a cluster", body = ErrorBody),
-        (status = 409, description = "The other node is not a reachable primary", body = ErrorBody),
+        (status = 409, description = "No other cluster's leader is reachable", body = ErrorBody),
     ),
     security(("token" = [])))]
 pub(crate) async fn demote(
@@ -407,6 +507,26 @@ pub(crate) async fn demote(
         .set_role(ClusterRole::Replica, change.force, actor)
         .await
         .map(Json)
+}
+
+/// Removes a member from the cluster for good, such as a node taken out of
+/// service. Remove it from the leader's config file first, or it is added
+/// again. Made by the leader, like configuration changes.
+#[utoipa::path(delete, path = "/api/v1/cluster/members/{node}", tag = "cluster",
+    params(("node" = String, Path, description = "The member's name")),
+    responses(
+        (status = 200, description = "The member is gone", body = ClusterStatus),
+        (status = 404, description = "No such member", body = ErrorBody),
+        (status = 409, description = "It is the leader, or still in the leader's config file", body = ErrorBody),
+        (status = 503, description = "The cluster has no leader", body = ErrorBody),
+    ),
+    security(("token" = [])))]
+pub(crate) async fn remove_member(
+    State(api): State<Arc<Api>>,
+    axum::Extension(actor): axum::Extension<Actor>,
+    axum::extract::Path(node): axum::extract::Path<String>,
+) -> Result<Json<ClusterStatus>, ApiError> {
+    api.control.remove_member(node, actor).await.map(Json)
 }
 
 /// A role change from a body that may be empty.
@@ -429,6 +549,8 @@ mod tests {
             (Method::DELETE, "/api/v1/rules/ru_1"),
             (Method::PUT, "/api/v1/settings"),
             (Method::POST, "/api/v1/clients"),
+            (Method::DELETE, "/api/v1/records/rc_1"),
+            (Method::DELETE, "/api/v1/cluster/members/dns3"),
         ] {
             assert!(is_config_write(&method, path), "{method} {path}");
         }
@@ -438,6 +560,8 @@ mod tests {
             (Method::POST, "/api/v1/leak-tests"),
             (Method::PUT, "/api/v1/pause"),
             (Method::POST, "/api/v1/cluster/promote"),
+            (Method::POST, "/api/v1/cluster/demote"),
+            (Method::POST, "/api/v1/cluster/members/dns3"),
             (Method::POST, "/api/v2/lists"),
             (Method::PATCH, "/api/v1/lists/li_1"),
         ] {
