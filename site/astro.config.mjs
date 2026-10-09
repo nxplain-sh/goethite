@@ -23,6 +23,7 @@ export default defineConfig({
 				{ label: 'Quick start', slug: 'quick-start' },
 				{ label: 'Install on Linux', slug: 'install' },
 				{ label: 'Verifying releases', slug: 'verify' },
+				{ label: 'Moving from Pi-hole or AdGuard Home', slug: 'migrate' },
 				{ label: 'Configuration', slug: 'configuration' },
 				{ label: 'Filtering', slug: 'filtering' },
 				{ label: 'Clients and groups', slug: 'groups' },

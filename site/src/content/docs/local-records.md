@@ -44,4 +44,5 @@ log as `local`.
 ## Coming from Pi-hole or AdGuard Home
 
 Pi-hole's *Local DNS records* and *CNAME records* and AdGuard Home's *DNS rewrites* are local
-records in goethite. `goethite migrate` brings them over with the rest of the configuration.
+records in goethite. [`goethite migrate`](../migrate/) brings them over with the rest of the
+configuration.

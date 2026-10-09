@@ -29,6 +29,12 @@ configuration format.
 - **Third-party licence notices.** Releases include `THIRD-PARTY-LICENSES.txt` with the notices
   of every crate and npm package built into the binary; the packages install it in
   `/usr/share/doc/goethite`.
+- **`goethite migrate pihole|adguard-home`** reads a running Pi-hole v6 or AdGuard Home through
+  its web API and brings lists, rules, groups, clients, local records and settings over through
+  goethite's API, showing first what comes over, what behaves differently and what is left out.
+  Applying only adds what goethite lacks, so it can run again. See
+  [Moving from Pi-hole or AdGuard Home](https://nxplain-sh.github.io/goethite/migrate/) and
+  [ADR 0030](docs/adr/0030-migrating-from-pihole-and-adguard-home.md).
 - **Local DNS records.** goethite answers names of your own, `A`, `AAAA` and `CNAME`, exact or a
   wildcard (`*.home.example`), for every client and before the filter: in the web UI's Records
   page or `/api/v1/records`. A `CNAME` is followed, and its target resolved like any other name.
