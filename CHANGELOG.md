@@ -7,6 +7,14 @@ configuration format.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-09
+
+Phase 5, v0.5: Raft clustering with a witness, a Landlock and seccomp sandbox, reproducible and
+signed releases with packages and a container image, access control and rate limits on every
+transport, local DNS records, and moving from Pi-hole or AdGuard Home. Fuzzing moved out of
+public CI. This version is the one the external security review looks at
+([docs/security-review.md](docs/security-review.md)).
+
 ### Added
 
 - **A sandbox on Linux.** Once its privileges are gone, goethite confines itself: Landlock lets
@@ -23,9 +31,9 @@ configuration format.
   change with Raft (openraft) and apply it in the same order; one leads, and the others forward
   changes to it. With two nodes and a witness (`goethite witness`, which votes, never leads and
   serves no DNS; `goethite-witness.service`), or three nodes, losing any one elects a new leader
-  within about three seconds and changes go on. Members are listed in `[[cluster.member]]`, one
-  node starts the cluster with `bootstrap = true`, and the leader adds the others as they answer,
-  making them voters once that makes three or more. `GET /api/v1/cluster` adds the members, the
+  within seconds (5 to 12 in the chaos lab) and changes go on. Members are listed in
+  `[[cluster.member]]`, one node starts the cluster with `bootstrap = true`, and the leader adds
+  the others as they answer, making them voters once that makes three or more. `GET /api/v1/cluster` adds the members, the
   leader, the term and this node's state; `DELETE /api/v1/cluster/members/{node}` removes a
   member. Every member's audit log holds the cluster's changes, by their real actors. See
   [High availability](https://nxplain-sh.github.io/goethite/ha/) and
@@ -391,7 +399,8 @@ production on Linux. It is pre-alpha software: try it, but do not rely on it yet
   criterion benchmarks, a dnsperf script, and CI with clippy, tests on amd64 and arm64,
   cargo-deny and cargo-audit.
 
-[Unreleased]: https://github.com/nxplain-sh/goethite/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/nxplain-sh/goethite/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/nxplain-sh/goethite/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/nxplain-sh/goethite/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/nxplain-sh/goethite/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/nxplain-sh/goethite/compare/v0.1.0...v0.2.0

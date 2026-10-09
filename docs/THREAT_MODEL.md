@@ -1,8 +1,9 @@
 # goethite threat model
 
-> **Status:** first draft, 2026-10-06, written during Phase 0. This draft is incomplete. Revisit
-> it at the start of every phase and whenever a new trust boundary appears (new listener, new
-> protocol, new storage, new admin interface).
+> **Status:** revised for v0.5.0, 2026-10-09, ahead of the external security review (first draft
+> 2026-10-06, Phase 0). Revisit it at the start of every phase and whenever a new trust boundary
+> appears (new listener, new protocol, new storage, new admin interface). The review's scope is in
+> [`security-review.md`](security-review.md).
 
 ## 1. System overview
 
@@ -15,11 +16,14 @@ Resolution pipeline: client identification → policy/group lookup → local rew
 (including CNAME uncloaking) → cache → upstream (forward or recursive) → DNSSEC validation →
 response.
 
-Today (Phase 4 in progress) goethite has UDP and TCP listeners with per-client rate and
-connection limits, DNS over TLS, HTTPS and QUIC listeners with client IDs, forwarding over plain DNS,
-DoT or DoH with failover, DNS rebinding protection, a cache, filtering per client group from local
-and downloaded lists, a query log, a REST API with a web UI and a TUI, a two-node cluster with
-replicated configuration and a floating IP, and zero-downtime upgrades.
+As of v0.5.0 goethite has UDP, TCP, DNS over TLS, HTTPS and QUIC listeners and an Oblivious DoH
+target, with client IDs, access control and per-client rate and connection limits; forwarding over
+plain DNS, DoT or DoH with failover, or recursion with DNSSEC validation; DNS rebinding protection,
+a cache, local DNS records, and filtering per client group from local and downloaded lists; a
+query log, a REST API with a web UI and a TUI; clusters whose members agree on the configuration
+with Raft, with a vote-only witness, and a floating IP; zero-downtime upgrades; a Landlock and
+seccomp sandbox; an importer from Pi-hole and AdGuard Home; and reproducible, attested releases,
+packages and a container image.
 
 ### Trust boundaries
 
@@ -32,6 +36,7 @@ replicated configuration and a floating IP, and zero-downtime upgrades.
 | B5 | Cluster member ↔ cluster member               | peer ↔ peer        | Raft's log of config changes (Phase 5; replication in Phase 3), and VRRP |
 | B6 | Local OS: config files, storage, other local users | host ↔ process | goethite runs unprivileged after binding (Phase 1)          |
 | B7 | Build and supply chain: crates, npm packages, CI actions, release artifacts | upstream → users | Affects every installation                                  |
+| B8 | A Pi-hole or AdGuard Home being migrated → `goethite migrate` | semi-trusted → admin tool | Another server's answers, planned into changes made through goethite's API (Phase 5) |
 
 ## 2. Assets
 
@@ -60,8 +65,8 @@ replicated configuration and a floating IP, and zero-downtime upgrades.
 
 ## 4. Defenses by phase
 
-Status legend: **done** means implemented as of the end of Phase 0. **planned** means scheduled
-for that phase and not implemented yet. Phases follow the roadmap in
+Status legend: **done** means implemented as of v0.5.0. **partial** means implemented with a known
+gap, named in the row. **planned** means scheduled and not implemented yet. Phases follow the roadmap in
 [`AGENTS.md`](../AGENTS.md#roadmap-respect-the-order).
 
 | Threat                                      | Controls                                                                                          | Phase | Status  |
@@ -71,7 +76,7 @@ for that phase and not implemented yet. Phases follow the roadmap in
 | Log injection via crafted names (B1)        | Names are written in escaped ASCII presentation format (`\DDD`), and parser error text is escaped to printable ASCII, so control characters, newlines and terminal escapes from the wire never reach log lines verbatim | 0 | done |
 | Log flooding / amplification (B1)           | hickory-proto's own warnings (which quote packet bytes at several times the packet size) are off by default; goethite logs rejected messages at debug only | 0 | done |
 | Memory-safety bugs                          | `unsafe_code` denied workspace-wide, and `#![forbid(unsafe_code)]` in every crate root except the binary and goethite-cluster, whose one `unsafe` item each is listed below ([ADR 0025](adr/0025-standard-rust-project-layout.md)) | 0     | done    |
-| Parser bugs found too late                  | cargo-fuzz targets `decode-query` (round-trip property) and `parse-name` (display/parse property), fuzzed before every release (`cargo xtask fuzz`), proptest round-trip and garbage-input tests | 0 | done |
+| Parser bugs found too late                  | A cargo-fuzz target for every parser (19 in `fuzz/`, from `decode-query` and `parse-name` in Phase 0 to `apply-commands` in Phase 5), each fuzzed before every release (`cargo xtask fuzz`); proptest round-trip and garbage-input tests | 0 | done |
 | Malformed or abusive EDNS data (B1)         | EDNS options are checked before parsing: options running past the OPT record, COOKIE options of the wrong length and inconsistent client-subnet options get FORMERR. Zone transfers are refused and meta query types get FORMERR | 0 | done |
 | Reflection / response loops (B1)            | Messages with QR=1 (responses) are dropped, never answered                                         | 0     | done    |
 | Oversized UDP responses / amplification     | UDP responses fit the client's limit (512 without EDNS, at most the advertised EDNS size). goethite advertises 1232 and sets TC when truncating. | 0 | done |
@@ -127,8 +132,9 @@ for that phase and not implemented yet. Phases follow the roadmap in
 | Hostile ODoH messages (B1)                  | ODoH bodies of at most 65,572 bytes, read within the idle time; bounded parsers that refuse trailing bytes and non-zero padding, an HPKE decryption per message (X25519, the cost of a TLS handshake's key exchange or less), 401 for unknown keys and 400 for the rest. Parsers and decryption are fuzzed (`parse-odoh`) and checked against Cloudflare's test vectors. A proxy's queries share one per-client connection limit | 4 | done |
 | Upstream learning client identity           | Upstreams see goethite's address, not its clients'. Sending goethite's own upstream queries over ODoH is backlog | 4 | partial |
 | Tampered releases (B7)                      | Releases are built in a pinned image (Rust, GCC, Node.js and tools by digest or version), twice per architecture on separate runners, and drafted only if the bytes match; anyone can rebuild one with `cargo xtask dist`. Build provenance (SLSA v1) and CycloneDX SBOMs are attested with keyless Sigstore signatures from the release workflow, so there is no key to steal; the binary embeds its dependency list (cargo-auditable). No build cache, and a release tag must be on `main` and match the version ([ADR 0026](adr/0026-release-builds.md)). The .deb, .rpm and container image hold the same binary and are attested too; the image is built from the published tarballs after checking their attestations ([ADR 0027](adr/0027-packages-and-container-image.md)) | 5 | done |
-| Residual design and implementation flaws    | External security review                                                                           | 5     | planned |
-| Exploited process escaping its role (B6)    | Landlock and seccomp sandboxing                                                                    | 5     | planned |
+| Hostile migration source (B8)               | `goethite migrate` reads the old server's API with the admin's credentials, 16 MiB and 10 s per answer; planning is pure, bounded by goethite's own limits and fuzzed (`plan-migration`); it changes nothing without `--apply`, and then only through goethite's API, with its validation, its audit log and the admin token. Lists come over only as `https://` URLs, never as local paths ([ADR 0030](adr/0030-migrating-from-pihole-and-adguard-home.md)) | 5 | done |
+| Local records redirecting names (B4)        | Local records answer before the filter for every client, so whoever holds the admin token can point any name anywhere, as with any DNS server's local data: changes are audit-logged. Names and values are validated, goethite's own names refused, CNAME chains followed for at most 16 links with loops answered SERVFAIL, at most 10,000 records ([ADR 0029](adr/0029-local-dns-records.md)) | 5 | done |
+| Residual design and implementation flaws    | External security review of v0.5.0 ([scope](security-review.md))                                   | 5     | planned |
 
 ## 5. Non-goals
 
@@ -147,16 +153,27 @@ goethite does **not** try to defend against:
 - **Perfect filtering.** Filter lists are third-party data. A list that misses a tracker is not a
   security vulnerability.
 
-## 6. Open questions
+## 6. Questions
 
-- Query log defaults: should logging be off, anonymized or full by default? What is the default
-  retention?
+Decided since the first draft:
+
+- **Query log defaults:** on, 7 days and 1,000,000 entries at most, with client anonymization and
+  turning it off as options (Phase 2).
+- **Fail-open versus fail-closed:** open by default, reported in status, the UIs and metrics;
+  `[filter] on_failure = "closed"` for networks that prefer no answer to an unfiltered one
+  ([ADR 0011](adr/0011-fail-open.md)).
+- **The API without TLS beyond loopback:** allowed only with an admin token, with a warning;
+  without a token the API answers loopback only.
+- **Secrets:** the admin token is stored as a SHA-256 hash; TLS and cluster keys are files the
+  operator places, read before privileges are dropped (or handed over on upgrades), and the store
+  is mode 0600. Rotating is replacing the files and reloading or restarting.
+
+Still open:
+
 - How should filter list sources be authenticated beyond HTTPS? Pinned hashes, signatures, or
-  neither?
+  neither? (Backlog: signed or hash-pinned lists.)
 - Cluster network assumptions: VRRP is as safe as its network segment (ADR 0013). Should goethite
   offer an authenticated election for shared networks, at the cost of interoperating with
   standard VRRP?
-- Secrets storage: where do the admin token, mTLS keys and upstream credentials live, with what
-  file permissions and rotation story?
-- Fail-open versus fail-closed defaults: which one, and how is the choice surfaced to admins?
-- Should the API ever be reachable without TLS on non-loopback addresses?
+- A cluster member's certificate cannot be revoked: removing a member for good means a new CA.
+  Is a revocation list worth its parser?

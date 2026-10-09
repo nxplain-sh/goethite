@@ -44,7 +44,7 @@ web/                  Vite + React + TanStack Router SPA (embedded into the bina
 site/                 project website + docs (Astro Starlight), deployed to GitHub Pages
 fuzz/                 cargo-fuzz targets (own nightly workspace)
 bench/                dnsperf script + recorded results; criterion benches live in crates/*/benches/
-tests/chaos/          chaos lab: two nodes and a client in network namespaces
+tests/chaos/          chaos lab: two nodes, a witness and a client in network namespaces
 tests/packages/       installs the .deb and .rpm on each supported distribution
 deploy/               hardened systemd units, server config, package and container image definitions
 config/               example config

@@ -10,8 +10,10 @@ schedules and settings.
 The members agree on every change with [Raft](https://raft.github.io/). One member **leads**:
 changes are made through it, and every member applies them in the same order. You can make
 changes through any member: the others hand them to the leader (see below). If the leader is
-lost, the others elect a new one within about three seconds, as long as most of the voters can
-still reach each other.
+lost, the others elect a new one within seconds, as long as most of the voters can
+still reach each other: in the [chaos lab](https://github.com/nxplain-sh/goethite/tree/main/tests/chaos),
+about 5 seconds after the leader crashed, and about 12 when it was cut off but still running
+(the others first wait until it can no longer claim to lead). DNS does not wait for any of this.
 
 - **Two nodes and a witness** is the setup to aim for. A witness (`goethite witness`) votes but
   never leads, and serves no DNS and no API, so it runs on anything small: a router, a NAS, a
@@ -343,7 +345,7 @@ restart it when that does not matter, or on the node that does not hold the addr
 
 | What happens | What goethite does |
 | --- | --- |
-| The leader goes down | With a witness (or three nodes), the others elect a new leader within about 3 seconds, and changes go on. With two nodes alone, the other keeps answering with its configuration, refuses changes and says so; it follows again when the leader is back. Take the cluster over to change the configuration meanwhile. |
+| The leader goes down | With a witness (or three nodes), the others elect a new leader within seconds (about 5 in the chaos lab), and changes go on. With two nodes alone, the other keeps answering with its configuration, refuses changes and says so; it follows again when the leader is back. Take the cluster over to change the configuration meanwhile. |
 | A follower or the witness goes down | Nothing changes for the rest, as long as most voters remain. A member catches up when it is back. |
 | The network splits | Every member keeps answering. The side with most of the voters keeps a leader and takes changes; the other side refuses them, and catches up when the network is back. If the nodes cannot hear each other's VRRP announcements, both take the floating IP until the network is back. |
 | The node holding the floating IP fails | The other node takes the address within 3.6 seconds, and clients keep using it. |
