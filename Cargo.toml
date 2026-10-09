@@ -11,7 +11,12 @@ members = [
     "crates/goethite-server",
     "crates/goethite-store",
     "crates/goethite-tui",
+    "xtask",
 ]
+# What `cargo run`, `cargo build` and `cargo test` mean without -p or
+# --workspace: goethite, not the automation. With xtask as a second binary,
+# a bare `cargo run` would otherwise not know which one to start.
+default-members = ["crates/*"]
 # cargo-fuzz targets need nightly and libFuzzer; they live in their own workspace.
 exclude = ["fuzz"]
 

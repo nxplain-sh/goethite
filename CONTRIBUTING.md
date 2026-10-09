@@ -12,16 +12,29 @@ agents alike.
 - Supply-chain tools: `cargo install --locked cargo-deny cargo-audit`
 - Fuzzing: `cargo install --locked cargo-fuzz`
 - `dig` (from bind-utils / dnsutils) for manual checks
+- Optional: [shellcheck](https://www.shellcheck.net) for the shell scripts (CI runs it)
 - Node.js 22.19 or newer, only if you work on the web UI in `web/` or the website in `site/`
   (CI uses Node 24)
 
 ## Build, test, lint
+
+One command runs every check CI runs, cheapest first, from anywhere in the repository:
+
+```sh
+cargo xtask ci       # `cargo xtask help` lists the single tasks; `cargo xtask fmt` formats
+```
+
+That is `cargo fmt --check`, the toolchain pin, shellcheck, clippy and rustdoc with `-D warnings`,
+the tests (doctests included) and the supply-chain checks below. shellcheck, cargo-deny and
+cargo-audit are skipped with a note when they are not installed; CI always runs them. The tasks
+live in [`xtask/`](xtask/README.md), plain Rust with no dependencies. The same checks one by one:
 
 ```sh
 cargo build --workspace
 cargo test --workspace --all-features
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features
 ```
 
 Supply chain (licenses, advisories, banned crates, sources), for the main workspace and the
@@ -228,10 +241,8 @@ Two one-time settings on `nxplain-sh/goethite` that the repository cannot set it
 
 ## Pull request checklist
 
-- [ ] `cargo fmt --all --check` passes
-- [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings` passes
-- [ ] `cargo test --workspace --all-features` passes
-- [ ] `cargo deny check` passes. Any new dependency is justified in the PR description.
+- [ ] `cargo xtask ci` passes, with shellcheck, cargo-deny and cargo-audit installed
+- [ ] Any new dependency is justified in the PR description
 - [ ] Web UI changes: `npm run build` in `web/` passes (type-check, build, size budget)
 - [ ] Parser changes: the fuzz target was run for at least 60 seconds without findings
 - [ ] No new `unwrap`/`expect`/panicking indexing on untrusted data
