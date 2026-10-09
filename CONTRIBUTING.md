@@ -156,6 +156,13 @@ changes to `/api/v1`, such as a removed endpoint or field, or a new required fie
 change is intended (before 1.0 that is possible, and it goes in the changelog), add the
 `api-breaking` label to the pull request.
 
+## Branches
+
+Work lands on `development`: push to it, or open a pull request against it from a topic branch.
+`main` only moves through a pull request from `development`, merged with a merge commit once CI
+passes. Nobody pushes to `main` directly, maintainers included. Renovate opens its pull requests
+against `development` too.
+
 ## Commit conventions
 
 We use [Conventional Commits](https://www.conventionalcommits.org/):
@@ -240,8 +247,15 @@ npm run dev
 
 ## Repository settings (maintainers)
 
-Two one-time settings on `nxplain-sh/goethite` that the repository cannot set itself:
+One-time settings on `nxplain-sh/goethite` that the repository cannot set itself:
 
+- **Rulesets** (Settings → Rules → Rulesets), with no bypass list:
+  - `main`: no deletion or force-push; changes only through a pull request (no approval
+    required, merge commits only); every CI job must pass, `source branch` included, which
+    fails pull requests into `main` that do not come from `development`.
+  - `development`: no deletion or force-push.
+- **`api-breaking` label:** marks an intended breaking API change (see
+  [Changing the API](#changing-the-api)).
 - **GitHub Pages:** Settings → Pages → Build and deployment → Source: **GitHub Actions**
   (or `gh api -X POST repos/nxplain-sh/goethite/pages -f build_type=workflow`). Without it the
   deploy job in `pages.yaml` fails.
@@ -251,6 +265,7 @@ Two one-time settings on `nxplain-sh/goethite` that the repository cannot set it
 
 ## Pull request checklist
 
+- [ ] The pull request targets `development` (only `development` targets `main`)
 - [ ] `cargo xtask ci` passes, with shellcheck, cargo-deny and cargo-audit installed
 - [ ] Any new dependency is justified in the PR description
 - [ ] Web UI changes: `npm run build` in `web/` passes (type-check, build, size budget)

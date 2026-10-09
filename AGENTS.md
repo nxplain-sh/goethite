@@ -117,6 +117,7 @@ Shared by the web UI and (where possible) the TUI.
 ## How to work in this repo
 
 - Plan before coding: for any non-trivial task, outline the approach and files to touch first.
+- Branch from and target `development`; `main` takes pull requests from `development` only ([Branches](CONTRIBUTING.md#branches)).
 - Stay inside the current phase. If something belongs to a later phase, note it in [`docs/BACKLOG.md`](docs/BACKLOG.md) instead of building it.
 - Ask before adding a dependency, changing the public API, or changing anything in the security rules above.
 - Before saying a task is done: `cargo xtask ci` and (for parser changes) a short fuzz run pass. Summarize what changed and what is left.
