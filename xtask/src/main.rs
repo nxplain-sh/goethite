@@ -62,7 +62,8 @@ const DIST_SOURCE: &str = "/goethite";
 const DIST_GLIBC: (u32, u32) = (2, 34);
 
 /// What a release tarball holds, from the repository root to its place in
-/// the tarball's top directory. The binary comes from the target directory.
+/// the tarball's top directory. The binary and THIRD-PARTY-LICENSES.txt
+/// come from the target directory.
 const DIST_FILES: [(&str, &str); 8] = [
     ("LICENSE-APACHE", "LICENSE-APACHE"),
     ("LICENSE-MIT", "LICENSE-MIT"),
@@ -345,6 +346,7 @@ fn dist_inside(out: &Path) -> Result {
     dist_web(&root)?;
     dist_binary(&root)?;
     dist_glibc(&root)?;
+    dist_notices(&root, &host)?;
     dist_sboms(&root, &out, &host, &version, &name)?;
     dist_tarball(&root, &out, &name, &epoch)?;
     dist_packages(&root, &out, &host, &version)?;
@@ -430,6 +432,56 @@ fn dist_binary(root: &Path) -> Result {
     )
 }
 
+/// THIRD-PARTY-LICENSES.txt in the target directory, for the tarball, the
+/// packages and the image: the notices of the crates built into the binary
+/// (cargo-about, from their sources as Cargo.lock pins them) and of the npm
+/// packages bundled into the web UI (web/scripts/licenses.mjs). Their
+/// licences ask that the notices go with the binary.
+fn dist_notices(root: &Path, host: &str) -> Result {
+    const HEADER: &str = "\
+goethite is dual-licensed under the MIT licence and the Apache License, Version
+2.0 (LICENSE-MIT and LICENSE-APACHE). Its binary also contains the software
+below, whose licences ask that these notices go with it.
+
+==============================================================================
+Rust crates
+==============================================================================
+";
+    const NPM: &str = "
+==============================================================================
+npm packages in the web UI and the API reference
+==============================================================================
+
+";
+    let crates = capture(
+        Command::new(env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo")))
+            .current_dir(root)
+            .args([
+                "about",
+                "generate",
+                "--manifest-path",
+                "crates/goethite/Cargo.toml",
+            ])
+            .args(["--config", "xtask/dist/about.toml", "--target", host])
+            .args(["--locked", "--fail", "xtask/dist/about.hbs"]),
+    )?;
+    let npm = capture(
+        Command::new("npm")
+            .current_dir(root.join("web"))
+            .args(["run", "--silent", "licenses"]),
+    )?;
+    let notices = format!("{HEADER}{crates}\n{NPM}{npm}\n");
+    fs::write(dist_notices_path(root), notices)?;
+    Ok(())
+}
+
+/// Where [`dist_notices`] writes the notices.
+fn dist_notices_path(root: &Path) -> PathBuf {
+    env::var_os("CARGO_TARGET_DIR")
+        .map_or_else(|| root.join("target"), PathBuf::from)
+        .join("THIRD-PARTY-LICENSES.txt")
+}
+
 /// Fails if the binary needs a glibc newer than [`DIST_GLIBC`].
 fn dist_glibc(root: &Path) -> Result {
     let versions = capture(
@@ -479,11 +531,17 @@ fn dist_tarball(root: &Path, out: &Path, name: &str, epoch: &str) -> Result {
     let stage = out.join(name);
     remove_dir_if_exists(&stage)?;
     fs::create_dir_all(stage.join("systemd"))?;
-    let binary = dist_binary_path(root);
+    let built = [
+        (dist_binary_path(root), stage.join("goethite")),
+        (
+            dist_notices_path(root),
+            stage.join("THIRD-PARTY-LICENSES.txt"),
+        ),
+    ];
     let files = DIST_FILES
         .iter()
         .map(|&(from, to)| (root.join(from), stage.join(to)));
-    for (from, to) in [(binary, stage.join("goethite"))].into_iter().chain(files) {
+    for (from, to) in built.into_iter().chain(files) {
         fs::copy(&from, &to).map_err(|error| format!("copying {}: {error}", from.display()))?;
     }
     let tarball = fs::File::create(out.join(format!("{name}.tar.gz")))?;
@@ -527,7 +585,8 @@ fn dist_packages(root: &Path, out: &Path, host: &str, version: &str) -> Result {
             .arg(out)
             .env("GOETHITE_VERSION", version)
             .env("GOETHITE_ARCH", arch)
-            .env("GOETHITE_BINARY", &binary))?;
+            .env("GOETHITE_BINARY", &binary)
+            .env("GOETHITE_NOTICES", dist_notices_path(root)))?;
     }
     Ok(())
 }
@@ -622,14 +681,18 @@ fn image(args: &[String]) -> Result {
         if !tarball.is_file() {
             continue;
         }
-        let binary = fs::File::create(context.join(format!("goethite-{arch}")))?;
-        run(Command::new("tar")
-            .arg("--extract")
-            .arg("--to-stdout")
-            .arg("--file")
-            .arg(&tarball)
-            .arg(format!("{name}/goethite"))
-            .stdout(binary))?;
+        for (file, copy) in [
+            ("goethite", format!("goethite-{arch}")),
+            ("THIRD-PARTY-LICENSES.txt", format!("notices-{arch}.txt")),
+        ] {
+            run(Command::new("tar")
+                .arg("--extract")
+                .arg("--to-stdout")
+                .arg("--file")
+                .arg(&tarball)
+                .arg(format!("{name}/{file}"))
+                .stdout(fs::File::create(context.join(copy))?))?;
+        }
         platforms.push(format!("linux/{arch}"));
     }
     if platforms.is_empty() {
@@ -639,10 +702,13 @@ fn image(args: &[String]) -> Result {
         )
         .into());
     }
-    fs::copy(
-        root.join("deploy").join("container").join("goethite.toml"),
-        context.join("goethite.toml"),
-    )?;
+    for (from, to) in [
+        ("deploy/container/goethite.toml", "goethite.toml"),
+        ("LICENSE-MIT", "LICENSE-MIT"),
+        ("LICENSE-APACHE", "LICENSE-APACHE"),
+    ] {
+        fs::copy(root.join(from), context.join(to))?;
+    }
     let epoch = capture(git(&root).args(["log", "-1", "--format=%ct", "HEAD"]))?;
     let mut build = Command::new("docker");
     build

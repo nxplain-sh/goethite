@@ -8,8 +8,8 @@
 #   come from the official Rust image for Debian 12, by digest. `cargo xtask
 #   dist` checks that the binary needs no glibc newer than 2.34.
 # - Node.js and npm come from the official Node.js image, by digest.
-# - cargo-auditable and cargo-cyclonedx are built from crates.io at a fixed
-#   version with their own lockfiles.
+# - cargo-auditable, cargo-cyclonedx and cargo-about are built from crates.io
+#   at a fixed version with their own lockfiles.
 # - nfpm, which builds the .deb and .rpm packages, comes from its official
 #   image, by digest.
 #
@@ -29,8 +29,10 @@ RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm
 COPY --from=nfpm /usr/bin/nfpm /usr/local/bin/nfpm
 
 # cargo-auditable embeds the dependency list in the binary, where
-# `cargo audit bin` and other scanners find it; cargo-cyclonedx writes the SBOM.
+# `cargo audit bin` and other scanners find it; cargo-cyclonedx writes the SBOM;
+# cargo-about collects the crates' licence notices.
 RUN cargo install --locked cargo-auditable@0.7.7 cargo-cyclonedx@0.5.9 \
+    && cargo install --locked --features cli cargo-about@0.9.2 \
     && rm -rf "$CARGO_HOME/registry" "$CARGO_HOME/git"
 
 # rust-toolchain.toml lists rustfmt and clippy, which rustup would download
