@@ -1,0 +1,42 @@
+# goethite configuration for a server.
+#
+# The .deb and .rpm packages install this file as /etc/goethite/goethite.toml
+# and keep your changes on upgrade. It changes only what a server needs from
+# the defaults; every setting is explained in
+# /usr/share/doc/goethite/goethite.example.toml and in the configuration
+# reference: https://nxplain-sh.github.io/goethite/configuration/
+#
+# Check it after editing, then start goethite:
+#
+#   goethite check-config --config /etc/goethite/goethite.toml
+#   systemctl enable --now goethite
+
+[server]
+# DNS over UDP and TCP on port 53, on every address. If systemd-resolved holds
+# 127.0.0.53:53 (Ubuntu and others), list this host's own addresses instead,
+# for example listen = ["192.0.2.10:53", "[2001:db8::10]:53"]. The install
+# guide explains both: https://nxplain-sh.github.io/goethite/install/
+listen = ["0.0.0.0:53", "[::]:53"]
+
+# Quad9 over DNS over TLS. Replace these with the resolvers you trust.
+[[upstream]]
+address = "9.9.9.9"
+protocol = "tls"
+tls_name = "dns.quad9.net"
+
+[[upstream]]
+address = "149.112.112.112"
+protocol = "tls"
+tls_name = "dns.quad9.net"
+
+[filter]
+# Downloaded lists, kept so goethite starts with them even when offline.
+cache_dir = "/var/lib/goethite/lists"
+
+[store]
+# The filtering configuration, the audit log, the query log and statistics.
+path = "/var/lib/goethite/goethite.redb"
+
+# The REST API, the web UI and the metrics answer on loopback only until an
+# admin token is set: run `goethite token` and follow the "Manage it" section
+# of the install guide.

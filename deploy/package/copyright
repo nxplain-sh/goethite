@@ -1,0 +1,13 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: goethite
+Upstream-Contact: https://github.com/nxplain-sh/goethite/issues
+Source: https://github.com/nxplain-sh/goethite
+
+Files: *
+Copyright: goethite contributors
+License: MIT or Apache-2.0
+ goethite is dual-licensed under the MIT licence and the Apache License,
+ Version 2.0, at your option. The full texts are in
+ /usr/share/doc/goethite/LICENSE-MIT and /usr/share/doc/goethite/LICENSE-APACHE.
+ The crates and npm packages built into the binary, and their licences, are
+ listed in the release's SBOMs.

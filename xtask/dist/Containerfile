@@ -5,11 +5,13 @@
 # Every input is pinned, so two builds of one commit give the same bytes:
 #
 # - Rust 1.99.0 (the version in rust-toolchain.toml), GCC 12 and glibc 2.36
-#   come from the official Rust image for Debian 12, by digest. Building on
-#   Debian 12 makes glibc 2.36 the oldest one a release runs on.
+#   come from the official Rust image for Debian 12, by digest. `cargo xtask
+#   dist` checks that the binary needs no glibc newer than 2.34.
 # - Node.js and npm come from the official Node.js image, by digest.
 # - cargo-auditable and cargo-cyclonedx are built from crates.io at a fixed
 #   version with their own lockfiles.
+# - nfpm, which builds the .deb and .rpm packages, comes from its official
+#   image, by digest.
 #
 # Renovate bumps the digests. When rust-toolchain.toml moves to a new Rust
 # release, this image moves with it: `cargo xtask dist` refuses to build when
@@ -17,11 +19,14 @@
 
 FROM docker.io/library/node:24.21.0-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20 AS node
 
+FROM ghcr.io/goreleaser/nfpm:v2.47.0@sha256:a662cb167d7b6d3a83920c83d76b12d02b8ac5dd2c13e5c62c15270b23f6df0c AS nfpm
+
 FROM docker.io/library/rust:1.99.0-slim-bookworm@sha256:2c3a22f0a5533ea2dd5a16627bc841228151faa2d4de2644ac9987e4a2f1f2fa
 
 COPY --from=node /usr/local/bin/node /usr/local/bin/node
 COPY --from=node /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
 RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm
+COPY --from=nfpm /usr/bin/nfpm /usr/local/bin/nfpm
 
 # cargo-auditable embeds the dependency list in the binary, where
 # `cargo audit bin` and other scanners find it; cargo-cyclonedx writes the SBOM.

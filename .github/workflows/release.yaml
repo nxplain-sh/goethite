@@ -1,10 +1,13 @@
 name: Release
 
-# Builds the release files for amd64 and arm64 twice, on separate runners,
-# and fails unless both builds of an architecture are the same bytes. On a
-# `v*` tag it then attests the files (Sigstore, keyless: no key to keep) and
-# drafts a GitHub Release, which a maintainer reviews and publishes. Weekly,
-# and on changes to the build, it runs as a reproducibility check only.
+# Builds the release files (tarball, .deb, .rpm, SBOMs) for amd64 and arm64
+# twice, on separate runners, and fails unless both builds of an architecture
+# are the same bytes; the container image must come out the same twice too.
+# The packages are installed on the supported distributions. On a `v*` tag it
+# then attests the files (Sigstore, keyless: no key to keep) and drafts a
+# GitHub Release, which a maintainer reviews and publishes; publishing it
+# pushes the container image (image.yaml). Weekly, and on changes to the
+# build, it runs as a check only.
 #
 # Builds run in the pinned image from xtask/dist/Containerfile, exactly as
 # `cargo xtask dist` runs them locally, with no cache: a release never
@@ -16,6 +19,8 @@ on:
   pull_request:
     paths:
       - xtask/**
+      - deploy/**
+      - tests/packages/**
       - web/.node-version
       - .github/workflows/release.yaml
   schedule:
@@ -67,6 +72,9 @@ jobs:
     needs: build
     runs-on: ubuntu-24.04
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: dist-*
@@ -89,11 +97,50 @@ jobs:
             status=1
           fi
           exit "$status"
+      - name: Install the pinned toolchain
+        run: rustup toolchain install
+      # The image is built from the tarballs, so it is the same twice if they are.
+      - name: Build the container image twice
+        run: |
+          docker buildx create --use > /dev/null
+          mkdir -p target/dist
+          cp dist/dist-amd64-first/*.tar.gz dist/dist-arm64-first/*.tar.gz target/dist/
+          cargo xtask image
+          mv target/dist/goethite-*-image.oci.tar first.oci.tar
+          cargo xtask image
+          sha256sum first.oci.tar target/dist/goethite-*-image.oci.tar
+          if ! cmp first.oci.tar target/dist/goethite-*-image.oci.tar; then
+            echo "::error::the two container images differ"
+            exit 1
+          fi
+
+  packages:
+    name: packages (${{ matrix.arch }})
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist-${{ matrix.arch }}-first
+          path: dist
+      - name: Install the packages on each distribution
+        run: tests/packages/install.sh dist
 
   release:
     name: draft the release
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    needs: reproducible
+    needs: [reproducible, packages]
     runs-on: ubuntu-24.04
     permissions:
       contents: write # draft the GitHub Release
@@ -132,21 +179,33 @@ jobs:
         id: provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-path: dist/*.tar.gz
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.deb
+            dist/*.rpm
       - name: Attest the amd64 SBOM
         uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
         with:
-          subject-path: dist/goethite-${{ env.VERSION }}-x86_64-unknown-linux-gnu.tar.gz
+          subject-path: |
+            dist/goethite-${{ env.VERSION }}-x86_64-unknown-linux-gnu.tar.gz
+            dist/goethite_${{ env.VERSION }}-1_amd64.deb
+            dist/goethite-${{ env.VERSION }}-1.x86_64.rpm
           sbom-path: dist/goethite-${{ env.VERSION }}-x86_64-unknown-linux-gnu.cdx.json
       - name: Attest the arm64 SBOM
         uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
         with:
-          subject-path: dist/goethite-${{ env.VERSION }}-aarch64-unknown-linux-gnu.tar.gz
+          subject-path: |
+            dist/goethite-${{ env.VERSION }}-aarch64-unknown-linux-gnu.tar.gz
+            dist/goethite_${{ env.VERSION }}-1_arm64.deb
+            dist/goethite-${{ env.VERSION }}-1.aarch64.rpm
           sbom-path: dist/goethite-${{ env.VERSION }}-aarch64-unknown-linux-gnu.cdx.json
       - name: Attest the web UI SBOM
         uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
         with:
-          subject-path: dist/*.tar.gz
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.deb
+            dist/*.rpm
           sbom-path: dist/goethite-${{ env.VERSION }}-web.cdx.json
       # With the bundle, `gh attestation verify --bundle` needs no GitHub API.
       - name: Keep the provenance bundle with the files
