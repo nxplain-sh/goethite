@@ -106,3 +106,16 @@ unimplemented = "deny"
 dbg_macro = "deny"
 print_stdout = "deny"
 print_stderr = "deny"
+
+# Profiles are only read from the workspace root.
+[profile.release]
+# Thin LTO and one codegen unit trade build time for code generated across
+# crate boundaries; see bench/README.md for what it measured. Unwinding stays
+# on (a panicking task fails alone instead of taking the listeners down) and
+# symbols stay in (backtraces in the journal name their functions).
+lto = "thin"
+codegen-units = 1
+
+# Benches inherit `release`; debug info lets a profiler attribute samples to lines.
+[profile.bench]
+debug = true
