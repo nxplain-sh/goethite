@@ -383,6 +383,14 @@ pub struct Api {
     pub config: ApiConfig,
 }
 
+// Nothing printed: the config carries the TLS server config, private key
+// included, and the rest are handles.
+impl std::fmt::Debug for Api {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Api").finish_non_exhaustive()
+    }
+}
+
 /// How long one request may take.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 

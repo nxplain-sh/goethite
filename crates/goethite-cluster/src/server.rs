@@ -37,6 +37,15 @@ pub struct Shared {
     pub started_at: Timestamp,
 }
 
+impl std::fmt::Debug for Shared {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Shared")
+            .field("node", &self.node)
+            .field("started_at", &self.started_at)
+            .finish_non_exhaustive()
+    }
+}
+
 impl Shared {
     /// This node, as its peer sees it.
     pub fn info(&self) -> NodeInfo {

@@ -379,6 +379,15 @@ pub mod signing {
         dnskey: DNSKEY,
     }
 
+    // The signing key stays out of the output.
+    impl std::fmt::Debug for Key {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("Key")
+                .field("zone", &self.zone)
+                .finish_non_exhaustive()
+        }
+    }
+
     impl Key {
         /// A new key for `zone`, a zone key and a secure entry point.
         ///

@@ -195,6 +195,19 @@ pub struct Resolver {
     filter_failures: AtomicU64,
 }
 
+impl std::fmt::Debug for Resolver {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Resolver")
+            .field("local", &self.local.len())
+            .field("policy", &self.policy.is_some())
+            .field("cache", &self.cache)
+            .field("forwarder", &self.forwarder)
+            .field("recursor", &self.recursor.is_some())
+            .field("fail_mode", &self.fail_mode)
+            .finish_non_exhaustive()
+    }
+}
+
 impl Resolver {
     /// A resolver that answers authoritatively for the names in `local` and
     /// refuses everything else.

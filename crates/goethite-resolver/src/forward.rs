@@ -153,6 +153,16 @@ pub struct Forwarder {
     codec: HickoryCodec,
 }
 
+impl std::fmt::Debug for Forwarder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Forwarder")
+            .field("upstreams", &self.upstreams.len())
+            .field("attempt_timeout", &self.attempt_timeout)
+            .field("total_timeout", &self.total_timeout)
+            .finish_non_exhaustive()
+    }
+}
+
 /// An upstream and how it is doing.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UpstreamStatus {

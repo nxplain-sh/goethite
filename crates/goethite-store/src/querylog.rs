@@ -454,6 +454,14 @@ pub struct QueryLog {
     writer: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
 
+impl std::fmt::Debug for QueryLog {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("QueryLog")
+            .field("dropped", &self.dropped.load(Ordering::Relaxed))
+            .finish_non_exhaustive()
+    }
+}
+
 impl QueryLog {
     /// Queues `event` for the writer. Never waits: if the queue is full, the
     /// event is dropped and counted.

@@ -91,6 +91,8 @@ rust_2018_idioms = { level = "warn", priority = -1 }
 unused_qualifications = "warn"
 # `pub` that no other crate can reach says less than `pub(crate)` would.
 unreachable_pub = "warn"
+# Public types implement Debug; one holding a secret prints it redacted.
+missing_debug_implementations = "warn"
 
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
