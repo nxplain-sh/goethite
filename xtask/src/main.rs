@@ -39,6 +39,9 @@ Tasks:
                   architecture, built from the last commit in the pinned build
                   image (needs docker or podman), into target/dist
     dist-inside   what `dist` runs inside the build image
+    fuzz          every fuzz target (or those named) for 300 seconds each, or
+                  `--seconds N`, on the pinned nightly (needs cargo-fuzz); a
+                  release step, never run in public CI
     image         the container image from the release tarballs in target/dist,
                   as an OCI archive there (needs docker with buildx); with
                   `--push <name:tag>...`, pushed to a registry instead
@@ -47,6 +50,9 @@ Tasks:
 
 /// The cargo-deny checks CI runs.
 const DENY_CHECKS: [&str; 4] = ["advisories", "bans", "licenses", "sources"];
+
+/// How long `fuzz` runs each target unless told otherwise, in seconds.
+const FUZZ_SECONDS: u32 = 300;
 
 /// The local tag of the image `dist` builds in.
 const DIST_IMAGE: &str = "goethite-dist";
@@ -98,6 +104,7 @@ fn main() -> ExitCode {
             None => Err("usage: cargo xtask dist-inside <output directory>".into()),
         },
         Some("image") => image(&env::args().skip(2).collect::<Vec<_>>()),
+        Some("fuzz") => fuzz(&env::args().skip(2).collect::<Vec<_>>()),
         Some("help" | "--help" | "-h") | None => {
             print_help();
             return ExitCode::SUCCESS;
@@ -740,6 +747,79 @@ fn image(args: &[String]) -> Result {
     run(build.arg(&context))?;
     fs::remove_dir_all(&context)?;
     Ok(())
+}
+
+/// Runs the fuzz targets one after another, on the nightly that
+/// fuzz/rust-toolchain.toml pins, each for `--seconds` (300 by default). The
+/// corpus in `fuzz/corpus/<target>` (gitignored) grows from run to run,
+/// seeded from `fuzz/seeds/<target>`. Fuzzing runs here and never in public CI, where
+/// a crash it found would be public before its fix (ADR 0028). A crash stops
+/// only its own target; the others still run, and every failure is named at
+/// the end, with its input in `fuzz/artifacts/<target>`.
+fn fuzz(args: &[String]) -> Result {
+    let mut seconds = FUZZ_SECONDS;
+    let mut targets = Vec::new();
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        if arg == "--seconds" {
+            seconds = args
+                .next()
+                .and_then(|value| value.parse().ok())
+                .filter(|value| (1..=86_400).contains(value))
+                .ok_or("--seconds takes a number of seconds from 1 to 86400")?;
+        } else {
+            targets.push(arg.clone());
+        }
+    }
+    if which("cargo-fuzz").is_none() {
+        return Err("fuzz needs cargo-fuzz: cargo install --locked cargo-fuzz@0.13.2".into());
+    }
+    let root = root()?;
+    let fuzz = root.join("fuzz");
+    let channel = toml_string(&fuzz.join("rust-toolchain.toml"), "channel")?;
+    if targets.is_empty() {
+        for entry in fs::read_dir(fuzz.join("fuzz_targets"))? {
+            let path = entry?.path();
+            if path.extension().is_some_and(|extension| extension == "rs")
+                && let Some(stem) = path.file_stem()
+            {
+                targets.push(stem.to_string_lossy().into_owned());
+            }
+        }
+        targets.sort();
+    }
+    let mut failed = Vec::new();
+    for target in &targets {
+        let corpus = fuzz.join("corpus").join(target);
+        fs::create_dir_all(&corpus)?;
+        // rustup's own cargo, not the one running xtask: it picks the nightly.
+        let result = run(Command::new("cargo")
+            .env_remove("RUSTUP_TOOLCHAIN")
+            .current_dir(&root)
+            .arg(format!("+{channel}"))
+            .args(["fuzz", "run", target])
+            .arg(&corpus)
+            .arg(fuzz.join("seeds").join(target))
+            .arg("--")
+            .arg(format!("-max_total_time={seconds}")));
+        if let Err(error) = result {
+            say(&format!("error: {error}"));
+            failed.push(target.as_str());
+        }
+    }
+    if failed.is_empty() {
+        say(&format!(
+            "{} targets fuzzed for {seconds} s each: no findings",
+            targets.len()
+        ));
+        Ok(())
+    } else {
+        Err(format!(
+            "findings in {}: inputs in fuzz/artifacts; report them privately (SECURITY.md)",
+            failed.join(", ")
+        )
+        .into())
+    }
 }
 
 fn remove_dir_if_exists(dir: &Path) -> Result {
