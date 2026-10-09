@@ -1,0 +1,37 @@
+[Adblock Plus]
+! Title: HaGeZi's Apple Tracker - blocks built-in trackers from devices, apps, and OSes!
+! Description: Blocks the Apple native trackers baked into devices, services, and operating systems that quietly track what you do.
+! Homepage: https://github.com/hagezi/dns-blocklists
+! License: https://github.com/hagezi/dns-blocklists/blob/main/LICENSE
+! Issues: https://github.com/hagezi/dns-blocklists/issues
+! Disclaimer: https://github.com/hagezi/dns-blocklists/blob/main/README.md#disclaimer
+! Expires: 8 hours
+! Last modified: 02 Oct 2026 22:03 UTC
+! Version: 2026.1002.2203.56
+! Syntax: AdBlock
+! Number of entries: 106
+!
+||cstat.g.aaplimg.com^
+||diagassets.g.aaplimg.com^
+||cdn-xp-ingest-ab.v.aaplimg.com^
+||iphonesubmissions.v.aaplimg.com^
+||prod-event-relay-api.v.aaplimg.com^
+||prod-event-relay-books-api.v.aaplimg.com^
+||prod-event-relay-notes-api.v.aaplimg.com^
+||prod-event-relay-sports-api.v.aaplimg.com^
+||prod-event-relay-stocks-api.v.aaplimg.com^
+||prod-event-relay-weather-api.v.aaplimg.com^
+||prod-news-notification-events.v.aaplimg.com^
+||securemetrics.v.aaplimg.com^
+||securemetrics-cn.v.aaplimg.com^
+||securemvt.v.aaplimg.com^
+||smoot-feedback.v.aaplimg.com^
+||supportmetrics.v.aaplimg.com^
+||xp.v.aaplimg.com^
+||diagnostics.apple.com.akadns.net^
+||iadsdk.apple.com.akadns.net^
+||idiagnostics.apple.com.akadns.net^
+||iphonesubmissions.apple.com.akadns.net^
+||radarsubmissions.apple.com.akadns.net^
+||partiality.itunes-apple.com.akadns.net^
+||searchads.lb-apple.com.akadns

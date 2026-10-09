@@ -7,6 +7,116 @@ configuration format.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-08
+
+Phase 4, v0.4: the full web UI, DNS over TLS, HTTPS and QUIC and Oblivious DoH for clients,
+recursion with DNSSEC validation, recommended lists and blocked services, the DNS leak test and
+EDNS padding.
+
+### Added
+
+- **DNS over TLS and DNS over HTTPS for clients** (RFC 7858, RFC 8484), configured in
+  `[server.tls]`: GET and POST at `/dns-query`, over HTTP/1.1 and HTTP/2, with the same connection
+  limits as TCP. `SIGHUP` reloads renewed certificates, for the API too, without dropping a
+  connection; `check-config` checks them. The new listeners are handed over on upgrades and kept
+  by systemd across restarts.
+- **Client IDs**: a client can be known by up to 16 IDs as well as, or instead of, its
+  addresses. A device names itself in the DNS over HTTPS path (`/dns-query/anna-phone`) or the
+  TLS server name (`anna-phone.dns.example`), so its filtering follows it off the network. The
+  web UI shows the values to set a device up with; the TUI lists them.
+- **DNS over QUIC for clients** (RFC 9250): `doq` addresses in `[server.tls]`, with client IDs in
+  the server name. A client's address is checked with a QUIC Retry before its connection counts
+  against the connection limits, which it shares with TCP, DoT and DoH; 0-RTT is refused. DoQ
+  sockets are handed over on upgrades too.
+- **Recursive resolution**: `[recursion] enabled = true` resolves every name from the root
+  servers down instead of asking `[[upstream]]` resolvers, so no upstream sees your network's
+  names. QNAME minimisation (RFC 9156) is on; servers are believed only about their own zones;
+  every query gets a random port, ID and 0x20 case; everything is bounded per client query.
+  Special-use names and private reverse zones are answered without asking anyone. The query log
+  shows the server that answered, and the status API, metrics, web UI and TUI show recursion's
+  counters.
+- **EDNS padding** (RFC 7830, RFC 8467 block sizes): answers to padded queries over DoT, DoH and
+  DoQ are padded to 468-byte blocks, and goethite's queries to DoT and DoH upstreams to 128-byte
+  blocks, so message sizes say less about the names in them.
+- The web UI links to the documentation and the API reference from the top bar of every page and
+  the sign-in page; the API reference is the node's own when it serves one to the browser.
+  `/api/v1/status` says whether it does (`api_docs`).
+- **DNS leak test**: the web UI's Leak test page has the browser look up names only goethite
+  answers, and says whether this device's lookups reach goethite (all, some or none), over which
+  protocol, from which address, as which client and group, and whether filtering applies. A
+  router forwarding lookups shows up as another address. The TUI lists tests and tests its own
+  machine (`t`); the API has `/api/v1/leak-tests`. Everything under `goethite.test` is now
+  answered by goethite itself, never forwarded.
+- **DNSSEC validation** of recursive answers, on by default (`[recursion] dnssec`): signed
+  answers get the AD flag, bogus ones are refused with SERVFAIL, and clients that set DO get the
+  signatures and NSEC/NSEC3 proofs. Built-in root trust anchors (KSK-2017 and KSK-2024); RSA,
+  ECDSA and Ed25519; bounded against KeyTrap and costly NSEC3. New metric
+  `goethite_recursion_dnssec_total`; status, web UI and TUI show secure, insecure and bogus
+  counts.
+- **Oblivious DNS over HTTPS** (RFC 9230), as a target: `odoh = true` in `[server.tls]` answers
+  encrypted queries a proxy forwards at `/dns-query`, and serves the public key at
+  `/.well-known/odohconfigs`. Keys are kept in memory only and rotated daily; the previous key is
+  accepted for a day. Queries are logged and counted as `odoh`; `/api/v1/status` says whether
+  ODoH is on, and the client editor shows the target address.
+- `require_client_id` in `[server.tls]` answers only encrypted queries with a known client ID, for
+  listeners reachable from the internet.
+- The query log and metrics tell `dot`, `doh` and `doq` apart from `udp` and `tcp`; the web UI's query
+  log marks encrypted queries. New metrics: `goethite_tls_handshake_failures_total` and
+  `goethite_https_rejected_total`. `/api/v1/status` reports the encrypted listeners.
+
+- **The full web UI**: lists, rules, groups, clients, schedules, settings and the audit log can
+  be viewed and changed from the browser. Changes carry the revision you saw, so a change made
+  meanwhile is offered instead of overwritten; what Terraform manages is read-only; a list, a
+  schedule or a group that is still in use says what uses it. New lists can join the default
+  group at once.
+- **The API reference in the binary**, at `/api/docs` with `[api] docs = true`: Scalar, built in,
+  for loopback clients only.
+- Web UI tests: Vitest for the forms' logic, and Playwright end-to-end tests against a real
+  goethite, in CI.
+
+- **Recommended filter lists and presets**: 36 lists, each checked, by category: one base list
+  against ads and trackers (★ HaGeZi Multi Normal, Multi Pro, OISD Big, and others for minimal,
+  aggressive or compatible blocking), security lists to stack on it (★ HaGeZi TIF Mini and Fake,
+  and more), optional lists by topic (bypass prevention, device trackers, family, hardening) and
+  legacy ones. The Lists page warns when two base lists overlap, switches rather than stacks
+  lists that do the same job, and shows sizes from each list's header, or what goethite read
+  with the lines it skipped. Presets (Balanced, Strict, Family, Don't break anything) set a
+  group's lists in one step after showing what changes. `GET /api/v1/lists/recommended` and
+  `/api/v1/lists/recommended/sizes`. A new node starts with the Balanced preset (HaGeZi Multi
+  Normal, TIF Mini and Fake) in its default group, unless its config file names lists or sets
+  `[filter] default_lists = false`; existing nodes do not change.
+- A byte order mark at the start of a list file is no longer read as part of its first line.
+- **Find lists in the FilterLists directory** (filterlists.com) from the Lists page: the node
+  fetches the directory when someone browses it, keeps it a day, and shows only the lists
+  goethite can read, allowlists left out. `GET /api/v1/lists/directory`;
+  `[filter] directory = false` turns it off.
+- **An interactive dashboard**: 24 hours, 7 days or 30 days; tiles, top names and clients and the
+  chart's bars open the query log filtered to them; the chart (now TanStack Charts) shows each
+  bar's counts on hover or keyboard focus; a top blocked name can be allowed, and a top name
+  blocked, from the dashboard. The query log shows client and time filters as chips, and dates
+  for entries from other days.
+- **Blocked services**: a group blocks a whole service, such as TikTok, YouTube or Roblox, with a
+  toggle in the web UI, always or during a schedule, whatever its lists say
+  (`blocked_services` on groups). The services and their rules are AdGuard's HostlistsRegistry
+  catalog, which the node downloads with the lists (`GET /api/v1/services`; `[filter] services`
+  and `services_file`). The query log names the service that blocked a query; the TUI counts a
+  group's blocked services.
+- `until` on `GET /api/v1/querylog`: only entries before a time, for time windows with `since`.
+
+- **A Terraform and OpenTofu provider**, in its own repository
+  ([nxplain-sh/terraform-provider-goethite](https://github.com/nxplain-sh/terraform-provider-goethite)):
+  lists, rules, groups, clients, schedules and settings, generated from goethite's OpenAPI
+  document. A new guide on the website explains how to use it.
+
+- Fuzz targets `parse_doh`, `parse_doq`, `parse_odoh`, `classify_response`, `check_dnssec`,
+  `parse_filterlists`, `parse_services` and `parse_leak_probe`.
+
+### Changed
+
+- The web UI has one theme, light, whatever the system prefers; the theme switch in its header
+  is gone.
+- Settings moved from the web UI's page tabs to its header, beside Pause and Sign out.
+
 ## [0.3.0] - 2026-10-08
 
 Phase 3, v0.3 high availability.
@@ -171,7 +281,8 @@ production on Linux. It is pre-alpha software: try it, but do not rely on it yet
   criterion benchmarks, a dnsperf script, and CI with clippy, tests on amd64 and arm64,
   cargo-deny and cargo-audit.
 
-[Unreleased]: https://github.com/nxplain-sh/goethite/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/nxplain-sh/goethite/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/nxplain-sh/goethite/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/nxplain-sh/goethite/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/nxplain-sh/goethite/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/nxplain-sh/goethite/releases/tag/v0.1.0

@@ -91,12 +91,14 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      # Into the workspace: the oasdiff action runs in a container that sees
+      # the workspace, but not the runner's temporary directory.
       - name: Get the base branch's OpenAPI document
         id: base
         env:
           BASE_REF: ${{ github.base_ref }}
         run: |
-          if git show "origin/${BASE_REF}:crates/goethite-api/openapi.json" > "$RUNNER_TEMP/base.json"; then
+          if git show "origin/${BASE_REF}:crates/goethite-api/openapi.json" > base-openapi.json; then
             echo "found=true" >> "$GITHUB_OUTPUT"
           else
             echo "The base branch has no OpenAPI document yet; nothing to compare."
@@ -105,7 +107,7 @@ jobs:
         if: steps.base.outputs.found == 'true' && !contains(github.event.pull_request.labels.*.name, 'api-breaking')
         uses: oasdiff/oasdiff-action/breaking@b9325c9e0a27ab65b0da3b766522cedec6be81dc # v0.1.18
         with:
-          base: ${{ runner.temp }}/base.json
+          base: base-openapi.json
           revision: crates/goethite-api/openapi.json
           fail-on: ERR
 
@@ -135,6 +137,9 @@ jobs:
       - name: Type-check, build and check the size budget
         working-directory: web
         run: npm run build
+      - name: Unit tests
+        working-directory: web
+        run: npm test
       - name: Install the pinned toolchain
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -152,6 +157,22 @@ jobs:
           script=$(grep -o '/assets/index-[A-Za-z0-9_-]*\.js' <<< "$page")
           curl -sf -o /dev/null "http://127.0.0.1:8053${script}"
           kill "$server"
+      - name: Install Chromium for the end-to-end tests
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+      - name: End-to-end tests against the release build
+        working-directory: web
+        env:
+          GOETHITE_BIN: ${{ github.workspace }}/target/release/goethite
+        run: npm run e2e
+      - name: Upload the end-to-end traces
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: web-e2e-traces
+          path: web/test-results
+          if-no-files-found: ignore
+          retention-days: 7
 
   msrv:
     name: MSRV

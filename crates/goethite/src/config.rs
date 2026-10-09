@@ -20,7 +20,7 @@ use goethite_filter::{LineKind, parse_line};
 use goethite_proto::Name;
 use goethite_resolver::{
     CacheConfig, DEFAULT_PRIVATE_DOMAINS, MAX_ENTRIES, MAX_UPSTREAMS, RebindingProtection,
-    Transport, UpstreamConfig,
+    RecursorConfig, Transport, UpstreamConfig,
 };
 use goethite_server::{
     MAX_LISTEN_ADDRESSES, MAX_RATE_LIMITED_CLIENTS, MAX_UDP_SOCKETS, RateLimitConfig, ServerConfig,
@@ -45,6 +45,10 @@ pub struct Config {
     /// The `[[upstream]]` tables, in order of preference.
     #[serde(default)]
     pub upstream: Vec<UpstreamSection>,
+    /// The `[recursion]` table: resolving from the root servers down
+    /// instead of forwarding.
+    #[serde(default)]
+    pub recursion: RecursionSection,
     /// The `[cache]` table.
     #[serde(default)]
     pub cache: CacheSection,
@@ -282,6 +286,9 @@ pub struct ApiSection {
     pub tls_key: Option<PathBuf>,
     /// Whether the web UI is served next to the API.
     pub web_ui: bool,
+    /// Whether the API reference is served at `/api/docs`, to loopback
+    /// clients only.
+    pub docs: bool,
 }
 
 impl Default for ApiSection {
@@ -293,6 +300,7 @@ impl Default for ApiSection {
             tls_cert: None,
             tls_key: None,
             web_ui: true,
+            docs: false,
         }
     }
 }
@@ -479,6 +487,10 @@ const MAX_LISTS: usize = 63;
 const MAX_INLINE_RULES: usize = 10_000;
 
 /// The `[filter]` table.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent on/off switches in the config file"
+)]
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, default)]
 pub struct FilterSection {
@@ -499,6 +511,20 @@ pub struct FilterSection {
     /// What to do when filtering fails. A node setting: it is not
     /// copied into the store.
     pub on_failure: OnFailure,
+    /// Whether a new node starts with goethite's default list (HaGeZi
+    /// Multi Normal) when this table names no lists. Only the first start
+    /// of a new store looks at it.
+    pub default_lists: bool,
+    /// Whether the node looks lists up for the web UI when someone browses
+    /// them: the FilterLists directory (filterlists.com), and the sizes the
+    /// recommended lists state.
+    pub directory: bool,
+    /// Whether groups can block services (TikTok, YouTube…): the node
+    /// downloads AdGuard's services catalog with the lists.
+    pub services: bool,
+    /// Reads the services catalog from this file instead of downloading
+    /// it, for nodes that cannot reach the internet.
+    pub services_file: Option<PathBuf>,
 }
 
 /// What to do when filtering fails: the store cannot be opened, the filter
@@ -534,6 +560,10 @@ impl Default for FilterSection {
             cache_dir: None,
             update_hours: 24,
             on_failure: OnFailure::Open,
+            default_lists: true,
+            directory: true,
+            services: true,
+            services_file: None,
         }
     }
 }
@@ -592,6 +622,16 @@ impl FilterSection {
             }
         }
         Ok(())
+    }
+
+    /// Where the services catalog comes from, unless blocked services are
+    /// turned off.
+    pub fn services_from(&self) -> Option<crate::services::ServicesFrom> {
+        use crate::services::ServicesFrom;
+        self.services.then(|| match &self.services_file {
+            Some(path) => ServicesFrom::File(path.clone()),
+            None => ServicesFrom::Url(goethite_api::services::SOURCE.to_owned()),
+        })
     }
 
     /// The table as resources to import into the store: config rules and
@@ -660,6 +700,9 @@ impl FilterSection {
         if let Some(dir) = &mut self.cache_dir {
             resolve(dir);
         }
+        if let Some(file) = &mut self.services_file {
+            resolve(file);
+        }
         for list in &mut self.list {
             if let Some(path) = &mut list.path {
                 resolve(path);
@@ -696,6 +739,47 @@ const MAX_TTL_LIMIT: u32 = 7 * 86_400;
 
 /// The longest `max_negative_ttl` accepted: one day.
 const MAX_NEGATIVE_TTL_LIMIT: u32 = 86_400;
+
+/// The `[recursion]` table.
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, default)]
+pub struct RecursionSection {
+    /// Resolve from the root servers down instead of asking `[[upstream]]`
+    /// resolvers.
+    pub enabled: bool,
+    /// QNAME minimisation (RFC 9156): show each server only as much of a
+    /// name as it needs to see.
+    pub qname_minimisation: bool,
+    /// Ask servers over IPv6 too. Unset: if this host has an IPv6 route.
+    pub ipv6: Option<bool>,
+    /// DNSSEC validation: AD for answers proved authentic, SERVFAIL for
+    /// bogus ones.
+    pub dnssec: bool,
+}
+
+impl Default for RecursionSection {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            qname_minimisation: true,
+            ipv6: None,
+            dnssec: true,
+        }
+    }
+}
+
+impl RecursionSection {
+    /// The resolver's view of this table; `has_ipv6` decides when `ipv6` is
+    /// unset.
+    pub fn to_recursor_config(&self, has_ipv6: impl FnOnce() -> bool) -> RecursorConfig {
+        RecursorConfig {
+            qname_minimisation: self.qname_minimisation,
+            ipv6: self.ipv6.unwrap_or_else(has_ipv6),
+            dnssec: self.dnssec,
+            ..RecursorConfig::default()
+        }
+    }
+}
 
 /// The `[cache]` table.
 #[derive(Debug, Deserialize, PartialEq, Eq)]
@@ -901,6 +985,93 @@ pub struct ServerSection {
     pub rate_limit: RateLimitSection,
     /// The user to switch to after binding, when started as root (Linux).
     pub user: Option<String>,
+    /// The `[server.tls]` table: DNS over TLS and HTTPS.
+    pub tls: Option<TlsSection>,
+}
+
+/// The `[server.tls]` table: DNS over TLS, HTTPS and QUIC for clients.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct TlsSection {
+    /// The certificate chain (PEM).
+    pub cert: PathBuf,
+    /// Its private key (PEM).
+    pub key: PathBuf,
+    /// The name clients reach goethite by, such as `dns.example`: a server
+    /// name one label below it (`anna-phone.dns.example`) carries a client
+    /// ID. The certificate should cover `*.<server_name>` too.
+    #[serde(default)]
+    pub server_name: Option<String>,
+    /// Addresses for DNS over TLS, usually port 853: one, or a list.
+    #[serde(default, deserialize_with = "listen_addresses")]
+    pub dot: Vec<SocketAddr>,
+    /// Addresses for DNS over HTTPS, usually port 443: one, or a list.
+    #[serde(default, deserialize_with = "listen_addresses")]
+    pub doh: Vec<SocketAddr>,
+    /// Addresses for DNS over QUIC, usually UDP port 853: one, or a list.
+    #[serde(default, deserialize_with = "listen_addresses")]
+    pub doq: Vec<SocketAddr>,
+    /// Whether DNS over TLS, HTTPS and QUIC answer only queries with a
+    /// known client ID, as when they are reachable from the internet.
+    #[serde(default)]
+    pub require_client_id: bool,
+    /// Whether the DNS over HTTPS addresses are also an Oblivious DoH
+    /// target (RFC 9230), for clients that ask through a proxy.
+    #[serde(default)]
+    pub odoh: bool,
+}
+
+impl TlsSection {
+    fn validate(&self) -> Result<()> {
+        if self.dot.is_empty() && self.doh.is_empty() && self.doq.is_empty() {
+            bail!(
+                "server.tls has no dot, doh or doq addresses: give at least one, or remove the table"
+            );
+        }
+        for (name, list) in [("dot", &self.dot), ("doh", &self.doh), ("doq", &self.doq)] {
+            if list.len() > MAX_LISTEN_ADDRESSES {
+                bail!("server.tls.{name} has more than {MAX_LISTEN_ADDRESSES} addresses");
+            }
+        }
+        if let Some(name) = &self.server_name
+            && !is_host_name(name)
+        {
+            bail!(
+                "server.tls.server_name {name:?} is not a host name such as \"dns.example\" \
+                 (letters, digits and hyphens in dot-separated labels)"
+            );
+        }
+        if self.odoh && self.doh.is_empty() {
+            bail!("server.tls.odoh needs doh addresses: Oblivious DoH is served on them");
+        }
+        Ok(())
+    }
+
+    fn resolve_paths(&mut self, base: &Path) {
+        for path in [&mut self.cert, &mut self.key] {
+            if path.is_relative() {
+                *path = base.join(&*path);
+            }
+        }
+    }
+}
+
+/// Whether `name` is a host name: dot-separated labels of 1 to 63 letters,
+/// digits and hyphens, not starting or ending with a hyphen, 253 characters
+/// at most, with an optional final dot.
+fn is_host_name(name: &str) -> bool {
+    let name = name.strip_suffix('.').unwrap_or(name);
+    !name.is_empty()
+        && name.len() <= 253
+        && name.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        })
 }
 
 impl Default for ServerSection {
@@ -916,6 +1087,7 @@ impl Default for ServerSection {
             max_tcp_connections_per_client: defaults.max_tcp_connections_per_client,
             rate_limit: RateLimitSection::default(),
             user: None,
+            tls: None,
         }
     }
 }
@@ -956,6 +1128,9 @@ impl ServerSection {
         {
             bail!("server.user {user:?} is not a valid user name");
         }
+        if let Some(tls) = &self.tls {
+            tls.validate()?;
+        }
         self.rate_limit.validate()
     }
 
@@ -968,6 +1143,17 @@ impl ServerSection {
         config.max_tcp_connections = self.max_tcp_connections;
         config.max_tcp_connections_per_client = self.max_tcp_connections_per_client;
         config.rate_limit = self.rate_limit.to_rate_limit_config();
+        if let Some(tls) = &self.tls {
+            config.dot.clone_from(&tls.dot);
+            config.doh.clone_from(&tls.doh);
+            config.doq.clone_from(&tls.doq);
+            config.require_client_id = tls.require_client_id;
+            config.odoh = tls.odoh;
+            config.server_name = tls
+                .server_name
+                .as_ref()
+                .map(|name| name.strip_suffix('.').unwrap_or(name).to_ascii_lowercase());
+        }
         config
     }
 }
@@ -1105,12 +1291,18 @@ impl Config {
         }
         let config = Self::parse(&text)
             .with_context(|| format!("invalid config file {}", path.display()))?;
-        if config.upstream.is_empty() {
-            bail!(
+        match (config.upstream.is_empty(), config.recursion.enabled) {
+            (true, false) => bail!(
                 "no upstream resolvers configured in {}: add at least one [[upstream]] table, \
-                 for example\n\n[[upstream]]\naddress = \"9.9.9.9\"",
+                 for example\n\n[[upstream]]\naddress = \"9.9.9.9\"\n\nor resolve from the \
+                 root servers yourself:\n\n[recursion]\nenabled = true",
                 path.display()
-            );
+            ),
+            (false, true) => bail!(
+                "{} has [[upstream]] resolvers and [recursion] enabled: choose one",
+                path.display()
+            ),
+            _ => {}
         }
         config
             .server
@@ -1132,6 +1324,7 @@ impl Config {
                     .map_or(Ok(()), |vrrp| vrrp.validate(&config.server))
             })
             .and_then(|()| config.security.rebinding_protection().map(drop))
+            .and_then(|()| config.check_tcp_addresses())
             .with_context(|| format!("invalid config file {}", path.display()))?;
         let mut config = config;
         let base = path
@@ -1143,6 +1336,9 @@ impl Config {
         let dir = config.dir.clone();
         config.filter.resolve_paths(&dir);
         config.api.resolve_paths(&dir);
+        if let Some(tls) = &mut config.server.tls {
+            tls.resolve_paths(&dir);
+        }
         if let Some(cluster) = &mut config.cluster {
             cluster.resolve_paths(&dir);
         }
@@ -1168,6 +1364,51 @@ impl Config {
             })?;
         }
         Ok(config)
+    }
+
+    /// Every TCP address must be listened on once: DNS over TCP, TLS and
+    /// HTTPS, the API and the cluster; and every UDP address: DNS over UDP
+    /// and QUIC.
+    fn check_tcp_addresses(&self) -> Result<()> {
+        let mut seen = HashSet::new();
+        let tls = self.server.tls.as_ref();
+        let api = if self.api.enabled {
+            self.api.listen.as_slice()
+        } else {
+            &[]
+        };
+        let all = [
+            ("server.listen", self.server.listen.as_slice()),
+            ("server.tls.dot", tls.map_or(&[][..], |tls| &tls.dot)),
+            ("server.tls.doh", tls.map_or(&[][..], |tls| &tls.doh)),
+            ("api.listen", api),
+            (
+                "cluster.listen",
+                self.cluster
+                    .as_ref()
+                    .map_or(&[][..], |cluster| std::slice::from_ref(&cluster.listen)),
+            ),
+        ];
+        for (name, addresses) in all {
+            for addr in addresses {
+                if addr.port() != 0 && !seen.insert(*addr) {
+                    bail!("{name} uses the TCP address {addr}, which is listened on already");
+                }
+            }
+        }
+        let mut udp = HashSet::new();
+        let doq = tls.map_or(&[][..], |tls| &tls.doq);
+        for (name, addresses) in [
+            ("server.listen", self.server.listen.as_slice()),
+            ("server.tls.doq", doq),
+        ] {
+            for addr in addresses {
+                if addr.port() != 0 && !udp.insert(*addr) {
+                    bail!("{name} uses the UDP address {addr}, which is listened on already");
+                }
+            }
+        }
+        Ok(())
     }
 
     /// The DNS listener settings, with the floating IP (if any) bound
@@ -1555,6 +1796,85 @@ mod tests {
         let server = off.server.to_server_config();
         assert_eq!(server.rate_limit.queries_per_second, 0);
         assert!(server.rate_limit.exempt_loopback);
+    }
+
+    #[test]
+    fn tls_settings() {
+        let config = Config::parse(
+            r#"
+            [server.tls]
+            cert = "dns.crt"
+            key = "dns.key"
+            server_name = "DNS.example."
+            dot = "0.0.0.0:853"
+            doh = ["0.0.0.0:443", "[::]:443"]
+            doq = "0.0.0.0:853"
+            require_client_id = true
+            odoh = true
+            "#,
+        )
+        .unwrap();
+        assert!(config.server.validate().is_ok());
+        assert!(config.check_tcp_addresses().is_ok());
+        let server = config.server.to_server_config();
+        assert_eq!(server.dot, ["0.0.0.0:853".parse().unwrap()]);
+        assert_eq!(server.doh.len(), 2);
+        assert_eq!(server.doq, ["0.0.0.0:853".parse().unwrap()]);
+        assert_eq!(server.server_name.as_deref(), Some("dns.example"));
+        assert!(server.require_client_id);
+        assert!(server.odoh);
+        let plain = Config::parse("").unwrap().server.to_server_config();
+        assert_eq!((plain.dot.len(), plain.doh.len()), (0, 0));
+        assert!(!plain.odoh);
+
+        for (bad, expected) in [
+            ("", "no dot, doh or doq"),
+            ("dot = \"0.0.0.0:853\"\nodoh = true", "odoh needs doh"),
+            (
+                "dot = \"0.0.0.0:853\"\nserver_name = \"dns example\"",
+                "server_name",
+            ),
+            (
+                "dot = \"0.0.0.0:853\"\nserver_name = \"-x.example\"",
+                "server_name",
+            ),
+        ] {
+            let config =
+                Config::parse(&format!("[server.tls]\ncert = \"c\"\nkey = \"k\"\n{bad}")).unwrap();
+            let err = config.server.validate().unwrap_err();
+            assert!(err.to_string().contains(expected), "{bad}: {err:#}");
+        }
+        assert!(Config::parse("[server.tls]\ncert = \"c\"\ndot = \"0.0.0.0:853\"").is_err());
+
+        let clash = Config::parse(
+            "[server]\nlisten = \"127.0.0.1:8053\"\n\
+             [server.tls]\ncert = \"c\"\nkey = \"k\"\ndot = \"127.0.0.1:853\"",
+        )
+        .unwrap();
+        let err = clash.check_tcp_addresses().unwrap_err().to_string();
+        assert!(
+            err.contains("api.listen") && err.contains("127.0.0.1:8053"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn host_names() {
+        for good in ["dns.example", "dns.example.", "a", "x-1.b2.example"] {
+            assert!(is_host_name(good), "{good}");
+        }
+        let long = format!("{}.example", "a".repeat(64));
+        for bad in [
+            "",
+            ".",
+            "a..b",
+            "-a.example",
+            "a-.example",
+            "a_b.example",
+            &long,
+        ] {
+            assert!(!is_host_name(bad), "{bad}");
+        }
     }
 
     /// A config file with these listen addresses and a valid `[vrrp]`

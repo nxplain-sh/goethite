@@ -14,17 +14,18 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use goethite_filter::Sources;
 use goethite_resolver::{
     BlockResponse, Cidr, ClientPolicy, GroupPolicy, Policy, PolicyError, PolicyParts, PolicyState,
-    ScheduledSources,
+    ScheduledServices, ScheduledSources, ServiceFilter, ServiceMask,
 };
 use goethite_store::{BlockResponseKind, ConfigSnapshot, Store};
 use jiff::Timestamp;
 use tokio::sync::{Notify, watch};
 use tokio::task::JoinSet;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::download::Downloader;
 use crate::filters::{self, CUSTOM_RULES, Compiled, Downloaded, ListStatus};
 use crate::lists::ListStore;
+use crate::services::{self, Catalog, ServicesFrom};
 
 /// The control plane's handle on the data plane.
 pub struct Control {
@@ -37,12 +38,22 @@ pub struct Control {
     refresh: Notify,
     /// Why the last filter or policy build failed, while it did.
     build_error: Mutex<Option<String>>,
+    /// Where the services catalog comes from; no blocked services without.
+    services_from: Option<ServicesFrom>,
+    catalog: Mutex<Arc<Catalog>>,
+    /// Why the catalog could not be downloaded or read, while it could not.
+    services_error: Mutex<Option<String>>,
 }
 
 impl Control {
     /// A control plane for `store`, steering `state`, keeping downloaded
-    /// lists in `lists`.
-    pub fn new(store: Arc<Store>, state: Arc<PolicyState>, lists: ListStore) -> Arc<Self> {
+    /// lists in `lists`, with the services catalog from `services_from`.
+    pub fn new(
+        store: Arc<Store>,
+        state: Arc<PolicyState>,
+        lists: ListStore,
+        services_from: Option<ServicesFrom>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             store,
             state,
@@ -52,6 +63,9 @@ impl Control {
             rebuilding: tokio::sync::Mutex::new(()),
             refresh: Notify::new(),
             build_error: Mutex::new(None),
+            services_from,
+            catalog: Mutex::new(Arc::new(Catalog::empty())),
+            services_error: Mutex::new(None),
         })
     }
 
@@ -86,11 +100,110 @@ impl Control {
             .unwrap_or_else(PoisonError::into_inner) = error;
     }
 
+    /// The services catalog in use.
+    pub fn catalog(&self) -> Arc<Catalog> {
+        Arc::clone(&self.catalog.lock().unwrap_or_else(PoisonError::into_inner))
+    }
+
+    /// The services groups can block, for the API; `None` when this node
+    /// does not use the catalog.
+    pub fn services(&self) -> Option<goethite_api::services::Services> {
+        let from = self.services_from.as_ref()?;
+        let catalog = self.catalog();
+        Some(goethite_api::services::Services {
+            source: match from {
+                ServicesFrom::Url(url) => url.clone(),
+                ServicesFrom::File(path) => path.display().to_string(),
+            },
+            license: goethite_api::services::LICENSE.into(),
+            downloaded_at: catalog.saved_at,
+            error: self
+                .services_error
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone(),
+            services: catalog.services.clone(),
+        })
+    }
+
+    fn set_services_error(&self, error: Option<String>) {
+        *self
+            .services_error
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = error;
+    }
+
+    /// The file the catalog is read from.
+    fn catalog_file(&self) -> Option<std::path::PathBuf> {
+        match self.services_from.as_ref()? {
+            ServicesFrom::Url(url) => Some(self.lists.path_for(url)),
+            ServicesFrom::File(path) => Some(path.clone()),
+        }
+    }
+
+    /// Reads the services catalog again, off the async runtime. If it
+    /// cannot be read, the current one stays.
+    async fn reload_services(&self) {
+        let Some(path) = self.catalog_file() else {
+            return;
+        };
+        let known = self.catalog().saved_at;
+        let file = matches!(self.services_from, Some(ServicesFrom::File(_)));
+        match tokio::task::spawn_blocking(move || services::read(&path, known)).await {
+            Ok(Ok(services::Read::Changed(catalog))) => {
+                info!(services = catalog.services.len(), "services catalog ready");
+                *self.catalog.lock().unwrap_or_else(PoisonError::into_inner) = Arc::new(catalog);
+                if file {
+                    self.set_services_error(None);
+                }
+            }
+            Ok(Ok(services::Read::Unchanged)) => {
+                if file {
+                    self.set_services_error(None);
+                }
+            }
+            Ok(Ok(services::Read::Missing)) if file => {
+                error!(path = %self.catalog_file().unwrap_or_default().display(), "the services file does not exist");
+                self.set_services_error(Some("the services file does not exist".into()));
+            }
+            Ok(Ok(services::Read::Missing)) => debug!("services catalog not downloaded yet"),
+            Ok(Err(err)) => {
+                error!("{err:#}; keeping the current services catalog");
+                self.set_services_error(Some(format!("{err:#}")));
+            }
+            Err(err) => error!(%err, "reading the services catalog failed"),
+        }
+    }
+
+    /// Downloads the services catalog if it comes from a URL. Returns
+    /// whether it changed.
+    async fn download_services(&self, downloader: &Downloader) -> bool {
+        let Some(ServicesFrom::Url(url)) = &self.services_from else {
+            return false;
+        };
+        match filters::download_checked(url, &self.lists, downloader, services::validate).await {
+            Downloaded::Changed => {
+                self.set_services_error(None);
+                true
+            }
+            Downloaded::Unchanged => {
+                self.set_services_error(None);
+                false
+            }
+            Downloaded::Failed(why) => {
+                self.set_services_error(Some(why));
+                false
+            }
+        }
+    }
+
     /// Recompiles the filter from the store's lists and rules off the async
-    /// runtime, then the policy. If compiling fails, the current filter
-    /// stays. Returns whether the new filter is in use.
+    /// runtime, then the policy. The services catalog is read again too. If
+    /// compiling fails, the current filter stays. Returns whether the new
+    /// filter is in use.
     pub async fn rebuild_filter(&self) -> bool {
         let _rebuilding = self.rebuilding.lock().await;
+        self.reload_services().await;
         let config = self.store.config();
         let lists = self.lists.clone();
         match tokio::task::spawn_blocking(move || filters::compile(&config, &lists)).await {
@@ -125,7 +238,7 @@ impl Control {
     /// clients, schedules or settings changed.
     pub fn rebuild_policy(&self) -> bool {
         let config = self.store.config();
-        match build_policy(&config, &self.compiled()) {
+        match build_policy(&config, &self.compiled(), &self.catalog().filter) {
             Ok(policy) => {
                 self.state.replace(policy);
                 self.update_schedules();
@@ -191,8 +304,16 @@ impl Control {
                     changed = control.download_all(&downloader) => changed,
                     () = crate::until(stop.clone()) => return,
                 };
+                let services_changed = tokio::select! {
+                    changed = control.download_services(&downloader) => changed,
+                    () = crate::until(stop.clone()) => return,
+                };
                 if lists_changed {
                     control.rebuild_filter().await;
+                } else if services_changed {
+                    let _rebuilding = control.rebuilding.lock().await;
+                    control.reload_services().await;
+                    control.rebuild_policy();
                 }
                 let hours = control.store.config().settings.spec.list_update_hours;
                 let interval = Duration::from_secs(u64::from(hours).saturating_mul(3600));
@@ -274,9 +395,54 @@ fn active_schedules(config: &ConfigSnapshot, now: Timestamp) -> u64 {
         })
 }
 
-/// The policy for `config` around the filter in `compiled`. Lists that are
-/// not compiled in (disabled ones) are left out of every group.
-pub fn build_policy(config: &ConfigSnapshot, compiled: &Compiled) -> Result<Policy, PolicyError> {
+/// The index of schedule `id`, as the policy counts schedules.
+fn schedule_index(config: &ConfigSnapshot, id: &str) -> Option<u8> {
+    config
+        .schedules
+        .iter()
+        .position(|schedule| schedule.id == id)
+        .and_then(|index| u8::try_from(index).ok())
+}
+
+/// The services `group` blocks, always and per schedule. Services the
+/// catalog does not have are left out.
+fn group_services(
+    config: &ConfigSnapshot,
+    group: &goethite_store::Group,
+    catalog: &ServiceFilter,
+) -> (ServiceMask, Vec<ScheduledServices>) {
+    let mut always = ServiceMask::NONE;
+    let mut scheduled: Vec<ScheduledServices> = Vec::new();
+    for entry in &group.spec.blocked_services {
+        let Some(service) = catalog.index(&entry.service) else {
+            continue;
+        };
+        let Some(schedule_id) = &entry.schedule else {
+            always = always.with(service);
+            continue;
+        };
+        let Some(index) = schedule_index(config, schedule_id) else {
+            continue;
+        };
+        match scheduled.iter_mut().find(|s| s.schedule == index) {
+            Some(existing) => existing.services = existing.services.with(service),
+            None => scheduled.push(ScheduledServices {
+                schedule: index,
+                services: ServiceMask::NONE.with(service),
+            }),
+        }
+    }
+    (always, scheduled)
+}
+
+/// The policy for `config` around the filter in `compiled` and the services
+/// in `catalog`. Lists that are not compiled in (disabled ones) are left out
+/// of every group.
+pub fn build_policy(
+    config: &ConfigSnapshot,
+    compiled: &Compiled,
+    catalog: &Arc<ServiceFilter>,
+) -> Result<Policy, PolicyError> {
     let custom = compiled
         .source(CUSTOM_RULES)
         .map_or(Sources::NONE, |source| Sources::NONE.with(source));
@@ -294,12 +460,7 @@ pub fn build_policy(config: &ConfigSnapshot, compiled: &Compiled) -> Result<Poli
                     always = always.with(source);
                     continue;
                 };
-                let Some(index) = config
-                    .schedules
-                    .iter()
-                    .position(|schedule| &schedule.id == schedule_id)
-                    .and_then(|index| u8::try_from(index).ok())
-                else {
+                let Some(index) = schedule_index(config, schedule_id) else {
                     continue;
                 };
                 match scheduled.iter_mut().find(|s| s.schedule == index) {
@@ -310,12 +471,15 @@ pub fn build_policy(config: &ConfigSnapshot, compiled: &Compiled) -> Result<Poli
                     }),
                 }
             }
+            let (services, scheduled_services) = group_services(config, group, catalog);
             GroupPolicy {
                 id: group.id.as_str().into(),
                 filtering: group.spec.filtering,
                 safe_search: group.spec.safe_search,
                 sources: always,
                 scheduled,
+                services,
+                scheduled_services,
             }
         })
         .collect();
@@ -343,6 +507,12 @@ pub fn build_policy(config: &ConfigSnapshot, compiled: &Compiled) -> Result<Poli
             ClientPolicy {
                 id: client.id.as_str().into(),
                 addresses,
+                ids: client
+                    .spec
+                    .ids
+                    .iter()
+                    .map(|id| id.as_str().into())
+                    .collect(),
                 group,
             }
         })
@@ -360,6 +530,7 @@ pub fn build_policy(config: &ConfigSnapshot, compiled: &Compiled) -> Result<Poli
         },
         blocked_ttl: settings.blocked_ttl,
         protection: settings.protection,
+        services: Arc::clone(catalog),
     })
 }
 
@@ -369,8 +540,8 @@ mod tests {
 
     use goethite_filter::{FilterBuilder, Source};
     use goethite_store::{
-        Client, ClientSpec, Group, GroupList, GroupSpec, ManagedBy, Schedule, ScheduleSpec,
-        Weekday, Window,
+        BlockedService, Client, ClientSpec, Group, GroupList, GroupSpec, ManagedBy, Schedule,
+        ScheduleSpec, Weekday, Window,
     };
 
     use super::*;
@@ -433,6 +604,7 @@ mod tests {
                         schedule: None,
                     },
                 ],
+                blocked_services: Vec::new(),
                 comment: String::new(),
                 managed_by: ManagedBy::Api,
             },
@@ -445,6 +617,7 @@ mod tests {
             spec: ClientSpec {
                 name: "Tablet".into(),
                 addresses: vec!["192.168.1.23".into()],
+                ids: vec!["tablet".into()],
                 group: "gr_kids".into(),
                 comment: String::new(),
                 managed_by: ManagedBy::Api,
@@ -458,9 +631,9 @@ mod tests {
         let wednesday_morning: Timestamp = "2026-10-07T09:00:00Z".parse().unwrap();
         let config = config(wednesday_morning);
         let compiled = compiled();
-        let policy = build_policy(&config, &compiled).unwrap();
+        let policy = build_policy(&config, &compiled, &Arc::new(ServiceFilter::empty())).unwrap();
         let blocked = |ip: &str, name: &str, active: u64| {
-            let (_, group) = policy.identify(ip.parse::<IpAddr>().unwrap());
+            let (_, group) = policy.identify(ip.parse::<IpAddr>().unwrap(), None);
             policy
                 .filter()
                 .check(&name.parse().unwrap(), group.sources_now(active))
@@ -478,9 +651,65 @@ mod tests {
         assert!(blocked("192.168.1.23", "social.example", active));
         let evening = "2026-10-07T18:00:00Z".parse().unwrap();
         assert_eq!(active_schedules(&config, evening), 0);
-        let (client, group) = policy.identify("192.168.1.23".parse().unwrap());
+        let (client, group) = policy.identify("192.168.1.23".parse().unwrap(), None);
         assert_eq!(client.unwrap().id.as_ref(), "cl_tablet");
         assert!(group.safe_search);
+        // The tablet's client ID finds it on any network.
+        let (client, _) = policy.identify("203.0.113.5".parse().unwrap(), Some("tablet"));
+        assert_eq!(client.unwrap().id.as_ref(), "cl_tablet");
+    }
+
+    #[test]
+    fn groups_block_services_in_the_catalog() {
+        let now: Timestamp = "2026-10-07T09:00:00Z".parse().unwrap();
+        let mut config = config(now);
+        let blocked = |service: &str, schedule: Option<&str>| BlockedService {
+            service: service.into(),
+            schedule: schedule.map(Into::into),
+        };
+        config.groups[1].spec.blocked_services = vec![
+            blocked("tiktok", None),
+            blocked("youtube", Some("sc_school")),
+            blocked("not_in_the_catalog", None),
+        ];
+        let rules = |line: &str| {
+            let mut rules = Vec::new();
+            goethite_filter::parse_line(line, |rule| rules.push(rule));
+            rules
+        };
+        let catalog = Arc::new(
+            ServiceFilter::build(&[
+                goethite_resolver::ServiceRules {
+                    id: "youtube".into(),
+                    rules: rules("||youtube.com^"),
+                },
+                goethite_resolver::ServiceRules {
+                    id: "tiktok".into(),
+                    rules: rules("||tiktok.com^"),
+                },
+            ])
+            .unwrap(),
+        );
+        let policy = build_policy(&config, &compiled(), &catalog).unwrap();
+        let (_, kids) = policy.identify("192.168.1.23".parse().unwrap(), None);
+        let (youtube, tiktok) = (
+            catalog.index("youtube").unwrap(),
+            catalog.index("tiktok").unwrap(),
+        );
+        assert_eq!(kids.services, ServiceMask::NONE.with(tiktok));
+        assert_eq!(
+            kids.services_now(1),
+            ServiceMask::NONE.with(tiktok).with(youtube),
+            "YouTube while school is on"
+        );
+        let (_, default) = policy.identify("10.0.0.9".parse().unwrap(), None);
+        assert!(default.services_now(u64::MAX).is_empty());
+        let name = "www.tiktok.com".parse().unwrap();
+        let (service, _) = policy.services().check(&name, &kids.services).unwrap();
+        assert_eq!(
+            policy.services().source_id(service).map(|s| &**s),
+            Some("service:tiktok")
+        );
     }
 
     #[test]

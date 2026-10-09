@@ -15,6 +15,7 @@ goethite-cluster = { path = "../crates/goethite-cluster" }
 goethite-filter = { path = "../crates/goethite-filter" }
 goethite-proto = { path = "../crates/goethite-proto" }
 goethite-resolver = { path = "../crates/goethite-resolver" }
+goethite-server = { path = "../crates/goethite-server" }
 goethite-store = { path = "../crates/goethite-store" }
 libfuzzer-sys = "0.4.13"
 
@@ -22,6 +23,20 @@ libfuzzer-sys = "0.4.13"
 # (the root workspace excludes this directory).
 [workspace]
 members = ["."]
+
+[[bin]]
+name = "classify_response"
+path = "fuzz_targets/classify_response.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "check_dnssec"
+path = "fuzz_targets/check_dnssec.rs"
+test = false
+doc = false
+bench = false
 
 [[bin]]
 name = "decode_query"
@@ -54,6 +69,48 @@ bench = false
 [[bin]]
 name = "parse_cidr"
 path = "fuzz_targets/parse_cidr.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_doh"
+path = "fuzz_targets/parse_doh.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_doq"
+path = "fuzz_targets/parse_doq.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_filterlists"
+path = "fuzz_targets/parse_filterlists.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_odoh"
+path = "fuzz_targets/parse_odoh.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_services"
+path = "fuzz_targets/parse_services.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_leak_probe"
+path = "fuzz_targets/parse_leak_probe.rs"
 test = false
 doc = false
 bench = false

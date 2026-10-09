@@ -42,8 +42,9 @@ impl Question {
 /// The EDNS(0) parameters of a message (RFC 6891).
 ///
 /// Only version 0 exists; queries with any other version are rejected with
-/// `BADVERS` while decoding, so the version is not stored. EDNS options are
-/// not modelled yet.
+/// `BADVERS` while decoding, so the version is not stored. Of the EDNS
+/// options, only Padding is modelled; the codec checks the others' lengths
+/// and drops them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Edns {
     /// The largest UDP payload the sender can receive. Values below 512 are
@@ -51,6 +52,13 @@ pub struct Edns {
     pub udp_payload_size: u16,
     /// The DNSSEC OK (`DO`) bit.
     pub dnssec_ok: bool,
+    /// The Padding option (RFC 7830). Decoded: the message carried one.
+    /// Encoded: the message is padded as RFC 8467 recommends, a query to a
+    /// multiple of [`QUERY_PADDING_BLOCK`] bytes and a response to a
+    /// multiple of [`RESPONSE_PADDING_BLOCK`], within its size limit.
+    /// Padding hides a message's length from someone watching an encrypted
+    /// connection; it is pointless, and never used, in plain DNS.
+    pub padding: bool,
 }
 
 impl Edns {
@@ -59,9 +67,16 @@ impl Edns {
         Self {
             udp_payload_size: MAX_UDP_PAYLOAD,
             dnssec_ok: false,
+            padding: false,
         }
     }
 }
+
+/// Queries are padded to a multiple of this many bytes (RFC 8467 4.1).
+pub const QUERY_PADDING_BLOCK: usize = 128;
+
+/// Responses are padded to a multiple of this many bytes (RFC 8467 4.1).
+pub const RESPONSE_PADDING_BLOCK: usize = 468;
 
 /// A standard query (`OPCODE` = `QUERY`) with exactly one question.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -121,6 +136,11 @@ impl Record {
     /// An `IN CNAME` record pointing at `target`.
     pub fn cname(name: Name, ttl: u32, target: Name) -> Self {
         Self::new(name, ttl, RData::CNAME(rdata::CNAME(target.0)))
+    }
+
+    /// An `IN NS` record naming `server`.
+    pub fn ns(name: Name, ttl: u32, server: Name) -> Self {
+        Self::new(name, ttl, RData::NS(rdata::NS(server.0)))
     }
 
     /// An `IN SOA` record; only the fields negative caching needs are taken.
@@ -187,6 +207,37 @@ impl Record {
     pub fn cname_target(&self) -> Option<Name> {
         match &self.data {
             RData::CNAME(target) => Some(Name(target.0.clone())),
+            _ => None,
+        }
+    }
+
+    /// Undoes 0x20 randomization in the owner name and the names in the
+    /// record data (see [`Name::with_case_restored`]).
+    pub fn restore_case(&mut self, randomized: &Name, original: &Name) {
+        let restore = |name: &mut hickory_proto::rr::Name| {
+            let restored = Name(name.clone()).with_case_restored(randomized, original);
+            *name = restored.0;
+        };
+        self.name = self.name.with_case_restored(randomized, original);
+        match &mut self.data {
+            RData::CNAME(rdata::CNAME(name))
+            | RData::NS(rdata::NS(name))
+            | RData::PTR(rdata::PTR(name)) => restore(name),
+            RData::MX(mx) => restore(&mut mx.exchange),
+            RData::SRV(srv) => restore(&mut srv.target),
+            RData::SOA(soa) => {
+                restore(&mut soa.mname);
+                restore(&mut soa.rname);
+            }
+            RData::SVCB(svcb) | RData::HTTPS(rdata::HTTPS(svcb)) => restore(&mut svcb.target_name),
+            _ => {}
+        }
+    }
+
+    /// The name server of an `NS` record.
+    pub fn ns_target(&self) -> Option<Name> {
+        match &self.data {
+            RData::NS(server) => Some(Name(server.0.clone())),
             _ => None,
         }
     }
@@ -338,6 +389,7 @@ mod tests {
             Some(Edns {
                 udp_payload_size: size,
                 dnssec_ok: false,
+                padding: false,
             })
         };
         assert_eq!(query(edns(100)).max_udp_response_len(), 512);
@@ -350,6 +402,7 @@ mod tests {
         let q = query(Some(Edns {
             udp_payload_size: 4096,
             dnssec_ok: true,
+            padding: true,
         }));
         let r = Response::for_query(&q, ResponseCode::REFUSED);
         assert_eq!(r.id, 7);
@@ -361,6 +414,7 @@ mod tests {
             Some(Edns {
                 udp_payload_size: MAX_UDP_PAYLOAD,
                 dnssec_ok: true,
+                padding: false,
             })
         );
         assert_eq!(r.rcode, ResponseCode::REFUSED);

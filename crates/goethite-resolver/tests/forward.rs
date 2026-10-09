@@ -18,8 +18,9 @@ use goethite_filter::{Action, Filter, FilterBuilder, Source, Sources};
 use goethite_proto::{Edns, Name, Query, Question, RecordClass, RecordType, ResponseCode};
 use goethite_resolver::{
     BlockResponse, Cache, CacheConfig, ClientPolicy, Forwarder, ForwarderConfig, GroupPolicy,
-    Outcome, Policy, PolicyParts, PolicyState, RebindingProtection, Resolution, Resolver,
-    ScheduledSources, Transport, UpstreamConfig,
+    Outcome, Policy, PolicyParts, PolicyState, RebindingProtection, Recursor, RecursorConfig,
+    Resolution, Resolver, ScheduledServices, ScheduledSources, ServiceFilter, ServiceMask,
+    ServiceRules, Transport, UpstreamConfig,
 };
 use hickory_proto::op::{self, Message, MessageType, OpCode};
 use hickory_proto::rr::{self, RData, rdata};
@@ -142,6 +143,7 @@ fn query(name: &str) -> Query {
         edns: Some(Edns {
             udp_payload_size: 4096,
             dnssec_ok: false,
+            padding: false,
         }),
     }
 }
@@ -327,6 +329,7 @@ async fn dnssec_ok_bit_is_passed_up_and_copied_back() {
     query.edns = Some(Edns {
         udp_payload_size: 1232,
         dnssec_ok: true,
+        padding: false,
     });
     let response = forwarder.forward(&query).await;
     assert!(response.edns.unwrap().dnssec_ok);
@@ -393,6 +396,25 @@ async fn cached_answers_are_served_without_asking_upstream() {
     assert!(second.recursion_available);
     let stats = resolver.cache().unwrap().stats();
     assert_eq!((stats.hits, stats.misses), (1, 1));
+}
+
+#[tokio::test]
+async fn goethites_own_names_never_leave() {
+    let upstream = fake(always(Ipv4Addr::new(192, 0, 2, 90)), silent()).await;
+    let resolver = Resolver::new(vec![goethite_resolver::test_record().unwrap()])
+        .with_forwarder(forwarder(vec![UpstreamConfig::udp(upstream.addr)]));
+    for name in [
+        "0123456789abcdef0123456789abcdef-1.leak.goethite.test.",
+        "anything.goethite.test.",
+    ] {
+        let resolution = resolver.resolve(&query(name), CLIENT).await;
+        assert_eq!(resolution.response.rcode, ResponseCode::NX_DOMAIN, "{name}");
+        assert!(resolution.response.authoritative);
+        assert_eq!(resolution.outcome, Outcome::Local);
+    }
+    let own = resolver.resolve(&query("goethite.test."), CLIENT).await;
+    assert_eq!(ip(&own.response), Some(Ipv4Addr::new(127, 0, 0, 53).into()));
+    assert!(upstream.seen.lock().unwrap().is_empty(), "never forwarded");
 }
 
 #[tokio::test]
@@ -546,17 +568,20 @@ fn grouped() -> Policy {
             ClientPolicy {
                 id: "tablet".into(),
                 addresses: vec!["10.0.0.2".parse().unwrap(), "10.0.1.0/24".parse().unwrap()],
+                ids: Vec::new(),
                 group: 1,
             },
             ClientPolicy {
                 id: "laptop".into(),
                 addresses: vec!["10.0.0.3".parse().unwrap()],
+                ids: vec!["laptop".into()],
                 group: 2,
             },
         ],
         block_response: BlockResponse::NxDomain,
         blocked_ttl: 10,
         protection: true,
+        services: Arc::new(ServiceFilter::empty()),
     })
     .unwrap()
 }
@@ -603,6 +628,13 @@ async fn groups_schedules_and_pausing() {
     assert_eq!(resolution.group.as_deref(), Some("kids"));
     assert_eq!(resolution.filter.unwrap().source.as_deref(), Some("social"));
 
+    // A client ID identifies the laptop wherever it is.
+    let resolution = resolver
+        .resolve_with_id(&query("ads.example."), from("10.9.9.9"), Some("laptop"))
+        .await;
+    assert_eq!(resolution.client.as_deref(), Some("laptop"));
+    assert_eq!(resolution.outcome, Outcome::Upstream(0));
+
     // Pausing turns filtering off for everyone, until the pause ends.
     state.pause(Some(SystemTime::now() + Duration::from_secs(60)));
     assert_eq!(
@@ -611,6 +643,98 @@ async fn groups_schedules_and_pausing() {
     );
     state.pause(None);
     assert_eq!(outcome("ads.example.", "10.9.9.9").await, blocked);
+}
+
+/// A catalog of two services, compiled.
+fn services() -> Arc<ServiceFilter> {
+    let rules = |lines: &[&str]| {
+        let mut rules = Vec::new();
+        for line in lines {
+            goethite_filter::parse_line(line, |rule| rules.push(rule));
+        }
+        rules
+    };
+    Arc::new(
+        ServiceFilter::build(&[
+            ServiceRules {
+                id: "tiktok".into(),
+                rules: rules(&["||tiktok.com^", "||tiktokv.com^"]),
+            },
+            ServiceRules {
+                id: "youtube".into(),
+                rules: rules(&["||youtube.com^"]),
+            },
+        ])
+        .unwrap(),
+    )
+}
+
+#[tokio::test]
+async fn groups_block_services_always_or_on_a_schedule() {
+    let upstream = fake(always(Ipv4Addr::new(192, 0, 2, 80)), silent()).await;
+    let services = services();
+    let tiktok = services.index("tiktok").unwrap();
+    let youtube = services.index("youtube").unwrap();
+    let mut kids = GroupPolicy::new("kids", sources(&[0]));
+    kids.services = ServiceMask::NONE.with(tiktok);
+    kids.scheduled_services.push(ScheduledServices {
+        schedule: 1,
+        services: ServiceMask::NONE.with(youtube),
+    });
+    let policy = Policy::new(PolicyParts {
+        // A list that makes an exception for TikTok, which does not undo
+        // the group's choice.
+        filter: Arc::new(filter("@@||tiktok.com^\n")),
+        source_ids: vec!["allow".into()],
+        groups: vec![GroupPolicy::new("default", sources(&[0])), kids],
+        clients: vec![ClientPolicy {
+            id: "tablet".into(),
+            addresses: vec!["10.0.0.2".parse().unwrap()],
+            ids: Vec::new(),
+            group: 1,
+        }],
+        block_response: BlockResponse::NxDomain,
+        blocked_ttl: 10,
+        protection: true,
+        services,
+    })
+    .unwrap();
+    let state = Arc::new(PolicyState::new(policy));
+    let resolver = Resolver::new(Vec::new())
+        .with_policy(Arc::clone(&state))
+        .with_forwarder(forwarder(vec![UpstreamConfig::udp(upstream.addr)]));
+    let ask = async |name: &str, client: &str| resolver.resolve(&query(name), from(client)).await;
+
+    let blocked = ask("www.tiktok.com.", "10.0.0.2").await;
+    assert_eq!(blocked.outcome, Outcome::Blocked);
+    assert_eq!(blocked.response.rcode, ResponseCode::NX_DOMAIN);
+    let hit = blocked.filter.unwrap();
+    assert_eq!(hit.source.as_deref(), Some("service:tiktok"));
+    assert_eq!(
+        hit.matched
+            .rule_text(&"www.tiktok.com".parse().unwrap(), hit.action),
+        "||tiktok.com^"
+    );
+    // Not for other groups, and YouTube only while its schedule is on.
+    assert_eq!(
+        ask("www.tiktok.com.", "10.9.9.9").await.outcome,
+        Outcome::Upstream(0)
+    );
+    assert_eq!(
+        ask("m.youtube.com.", "10.0.0.2").await.outcome,
+        Outcome::Upstream(0)
+    );
+    state.set_active_schedules(1 << 1);
+    assert_eq!(
+        ask("m.youtube.com.", "10.0.0.2").await.outcome,
+        Outcome::Blocked
+    );
+    // A pause stops it, like any filtering.
+    state.pause(Some(SystemTime::now() + Duration::from_secs(60)));
+    assert_eq!(
+        ask("www.tiktok.com.", "10.0.0.2").await.outcome,
+        Outcome::Upstream(0)
+    );
 }
 
 /// Answers every query with a CNAME from the question name to `target`,
@@ -723,4 +847,68 @@ async fn failed_forwarding_is_reported() {
     assert_eq!(status.len(), 1);
     assert_eq!(status[0].consecutive_failures, 1);
     assert!(status[0].healthy);
+}
+
+/// Recursion over real sockets, against one server playing every zone: it
+/// answers directly, truncates `big.example.` over UDP, and serves it over
+/// TCP.
+#[tokio::test]
+async fn recursion_asks_over_udp_and_tcp() {
+    let udp = script(|query| {
+        let mut reply = answer(query, Ipv4Addr::new(192, 0, 2, 80));
+        reply.metadata.authoritative = true;
+        if query.queries[0]
+            .name()
+            .to_ascii()
+            .eq_ignore_ascii_case("big.example.")
+        {
+            reply.answers.clear();
+            reply.metadata.truncation = true;
+        }
+        vec![reply]
+    });
+    let server = fake(udp, always(Ipv4Addr::new(192, 0, 2, 81))).await;
+    let recursor = Recursor::new(RecursorConfig {
+        roots: Some(vec![server.addr.ip()]),
+        port: server.addr.port(),
+        ipv6: false,
+        total_timeout: Duration::from_secs(2),
+        // An unsigned test server.
+        dnssec: false,
+        ..RecursorConfig::default()
+    });
+    let resolver = Resolver::new(Vec::new()).with_recursor(recursor);
+
+    let answered = resolver
+        .resolve(&query("www.example."), from("10.0.0.1"))
+        .await;
+    assert_eq!(answered.outcome, Outcome::Recursive(server.addr));
+    assert_eq!(
+        ip(&answered.response),
+        Some(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 80)))
+    );
+    assert!(answered.response.recursion_available);
+    // Recursion asks without recursion desired, and the case echoed back
+    // was checked.
+    let seen = server.seen.lock().unwrap().clone();
+    assert!(seen.iter().all(|query| !query.metadata.recursion_desired));
+
+    let big = resolver
+        .resolve(&query("big.example."), from("10.0.0.1"))
+        .await;
+    assert_eq!(
+        ip(&big.response),
+        Some(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 81))),
+        "over TCP"
+    );
+    assert!(resolver.recursor().unwrap().stats().tcp >= 1);
+
+    // Special-use names never leave the house.
+    let before = server.seen.lock().unwrap().len();
+    let private = resolver
+        .resolve(&query("1.1.168.192.in-addr.arpa."), from("10.0.0.1"))
+        .await;
+    assert_eq!(private.outcome, Outcome::Local);
+    assert_eq!(private.response.rcode, ResponseCode::NX_DOMAIN);
+    assert_eq!(server.seen.lock().unwrap().len(), before);
 }

@@ -70,6 +70,76 @@ code,
 	gap: var(--space-5);
 }
 
+/* Documentation links: a joined pair in the top bar, pressing like its buttons. */
+
+.docs-links {
+	display: flex;
+	border: var(--border);
+	background: var(--panel);
+	box-shadow: var(--shadow-small);
+	transition:
+		transform 60ms,
+		box-shadow 60ms;
+}
+
+.docs-links:hover {
+	transform: translate(1px, 1px);
+	box-shadow: 2px 2px 0 var(--ink);
+}
+
+.docs-links:has(a:active) {
+	transform: translate(2px, 2px);
+	box-shadow: var(--shadow-pressed);
+}
+
+.docs-links a {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-2);
+	padding: var(--space-1) var(--space-3);
+	font-size: 0.9rem;
+	font-weight: 700;
+	white-space: nowrap;
+	color: var(--ink);
+	text-decoration: none;
+}
+
+.docs-links a + a {
+	border-left: var(--border);
+}
+
+.docs-links a:hover {
+	background: var(--cached);
+}
+
+.docs-links a:focus-visible {
+	outline: none;
+	box-shadow: inset 0 0 0 3px var(--ink);
+}
+
+.docs-links svg {
+	flex: none;
+}
+
+/* Where the top bar is tight, the icons say it; the links keep their names
+   for screen readers. The sign-in page has room for the labels. */
+@media (max-width: 960px) {
+	.topbar .docs-links .docs-label,
+	.topbar .docs-links .docs-out {
+		display: none;
+	}
+
+	.topbar .docs-links a {
+		padding: var(--space-1) var(--space-2);
+	}
+}
+
+.login .docs-links {
+	width: fit-content;
+	margin-top: var(--space-5);
+}
+
+
 .topbar {
 	display: flex;
 	flex-wrap: wrap;
@@ -121,6 +191,11 @@ code,
 .nav a:hover {
 	transform: translate(1px, 1px);
 	box-shadow: 2px 2px 0 var(--ink);
+}
+
+.topbar a.button[aria-current='page'] {
+	background: var(--accent);
+	color: var(--on-accent);
 }
 
 /* Buttons and inputs */
@@ -260,6 +335,60 @@ code,
 .stat.cached {
 	background: var(--cached);
 	color: var(--on-cached);
+}
+
+/* A tile that opens its queries presses like a button. */
+a.stat {
+	color: inherit;
+	text-decoration: none;
+}
+
+a.stat:hover {
+	transform: translate(3px, 3px);
+	box-shadow: var(--shadow-small);
+}
+
+a.stat:active {
+	transform: translate(5px, 5px);
+	box-shadow: var(--shadow-pressed);
+}
+
+a.stat:focus-visible {
+	outline: none;
+	box-shadow: var(--shadow), var(--focus);
+}
+
+/* The time range switch. */
+.segmented {
+	display: flex;
+	margin-left: auto;
+	border: var(--border);
+	box-shadow: var(--shadow-small);
+	background: var(--panel);
+}
+
+.segmented a {
+	padding: var(--space-2) var(--space-4);
+	font-weight: 700;
+	text-decoration: none;
+	color: var(--ink);
+}
+
+.segmented a + a {
+	border-left: var(--border);
+}
+
+.segmented a[aria-current='true'] {
+	background: var(--accent);
+	color: var(--on-accent);
+}
+
+.segmented a:hover {
+	background: var(--cached);
+}
+
+.segmented a[aria-current='true']:hover {
+	background: var(--accent);
 }
 
 .muted {
@@ -423,25 +552,43 @@ code,
 	border-top: var(--border);
 }
 
-/* The hourly chart. */
+/* The queries chart (TanStack Charts); ticks in the mono face. */
 
-.chart {
-	width: 100%;
-	height: 140px;
+.chart-host {
 	display: block;
+	font-family: var(--font-mono);
+	font-size: 0.75rem;
+	color: var(--ink);
+	cursor: pointer;
 }
 
-.chart .all {
-	fill: var(--muted);
+/* What TanStack Charts would set inline, which the CSP refuses. */
+.chart-host svg.ts-chart {
+	display: block;
+	overflow: visible;
 }
 
-.chart .blocked {
-	fill: var(--blocked);
+.chart-host:focus-visible {
+	outline: none;
+	box-shadow: var(--focus);
 }
 
-.chart .axis {
-	stroke: var(--ink);
-	stroke-width: 3;
+/* Where the chart goes while it loads. */
+.chart-placeholder {
+	height: 200px;
+}
+
+/* Its tooltip reads these variables; it may sit outside the chart. */
+.chart-tooltip {
+	--ts-chart-tooltip-background: var(--panel);
+	--ts-chart-tooltip-color: var(--ink);
+	--ts-chart-tooltip-border: var(--border);
+	--ts-chart-tooltip-border-radius: 0;
+	--ts-chart-tooltip-shadow: var(--shadow-small);
+	--ts-chart-tooltip-padding: var(--space-2) var(--space-3);
+	--ts-chart-tooltip-font: 500 0.85rem var(--font-ui);
+	--ts-chart-tooltip-active-row-border-radius: 0;
+	--ts-chart-tooltip-active-row-shadow: none;
 }
 
 .legend {
@@ -467,6 +614,215 @@ code,
 
 .legend .blocked::before {
 	background: var(--blocked);
+}
+
+.legend .hint {
+	margin-left: auto;
+	color: var(--muted);
+}
+
+.legend .hint::before {
+	display: none;
+}
+
+/* Top lists: a link per name, and a quick rule. */
+.table.top td.name a {
+	color: inherit;
+	text-decoration-thickness: 2px;
+}
+
+/* A quick rule's question or result, under its entry. */
+.table.top tr:has(+ .follow-up) td {
+	border-bottom: none;
+}
+
+.table.top .follow-up td {
+	padding-bottom: var(--space-2);
+	text-align: right;
+}
+
+.quick-rule {
+	display: inline-flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: flex-end;
+	gap: var(--space-2);
+}
+
+/* Recommended lists and the FilterLists directory. */
+.table.recommended td {
+	padding-top: var(--space-2);
+	padding-bottom: var(--space-2);
+}
+
+.table.recommended td > div + div {
+	margin-top: var(--space-1);
+}
+
+.directory {
+	display: grid;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.directory li {
+	padding: var(--space-3) 0;
+	border-bottom: 1px solid var(--muted);
+}
+
+.directory li p {
+	margin: var(--space-1) 0 0;
+}
+
+.directory-head {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--space-2);
+}
+
+.directory-head .button {
+	margin-left: auto;
+}
+
+.directory-description {
+	max-width: 80ch;
+}
+
+.directory .subform {
+	margin-top: var(--space-3);
+}
+
+/* Recommended lists: presets, categories, badges. */
+.category {
+	display: grid;
+	gap: var(--space-2);
+}
+
+.category h3,
+.category h4 {
+	margin: var(--space-2) 0 0;
+}
+
+.category > p {
+	margin: 0;
+}
+
+.presets {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
+	gap: var(--space-3);
+}
+
+.preset {
+	display: grid;
+	gap: var(--space-2);
+	align-content: start;
+	padding: var(--space-3);
+	border: var(--border);
+	box-shadow: 4px 4px 0 var(--ink);
+	background: var(--bg);
+}
+
+.preset p,
+.preset ul {
+	margin: 0;
+}
+
+.preset ul {
+	padding-left: 1.2rem;
+	font-size: 0.88rem;
+}
+
+.preset .button {
+	justify-self: start;
+}
+
+.recommended-head {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--space-2);
+}
+
+.table.recommended .note {
+	font-style: italic;
+}
+
+.plan {
+	margin: 0;
+	padding-left: 1.2rem;
+}
+
+.apply-preset {
+	border-top: var(--border);
+	padding-top: var(--space-3);
+}
+
+details.legacy summary {
+	cursor: pointer;
+	font-weight: 700;
+	font-size: 1.1rem;
+}
+
+details.legacy summary:focus-visible {
+	outline: none;
+	box-shadow: var(--focus);
+}
+
+/* Blocked services: toggles by kind. */
+.services h3 {
+	margin: 0 0 var(--space-2);
+	font-size: 1rem;
+}
+
+.services ul {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+	gap: var(--space-2) var(--space-3);
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.services .check {
+	font-weight: 400;
+}
+
+/* Filters set from elsewhere, on the query log. */
+.chips {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--space-2);
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.chip {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-2);
+	padding: var(--space-1) var(--space-1) var(--space-1) var(--space-3);
+	border: var(--border);
+	background: var(--cached);
+	font-weight: 700;
+	font-size: 0.9rem;
+}
+
+.chip-remove {
+	border: 2px solid var(--ink);
+	background: var(--panel);
+	font: inherit;
+	line-height: 1;
+	padding: 0 var(--space-2);
+	cursor: pointer;
+}
+
+.chip-remove:focus-visible {
+	outline: none;
+	box-shadow: var(--focus);
 }
 
 /* Login */
@@ -501,4 +857,201 @@ code,
 .client-name {
 	font-family: var(--font-ui);
 	font-weight: 700;
+}
+
+/* The configuration pages: index tables and editors. */
+
+.page-head {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: end;
+	gap: var(--space-3);
+}
+
+.page-head h1 {
+	margin-right: auto;
+}
+
+.grow {
+	flex: 1 1 240px;
+}
+
+.hint {
+	font-weight: 400;
+	font-size: 0.88rem;
+	color: var(--muted);
+}
+
+.input.sans {
+	font-family: var(--font-ui);
+}
+
+textarea.input {
+	resize: vertical;
+}
+
+.editor {
+	max-width: 760px;
+}
+
+.form .fields,
+.subform {
+	border: none;
+	margin: 0;
+	padding: 0;
+	display: grid;
+	gap: var(--space-4);
+	min-width: 0;
+}
+
+.subform {
+	border-top: var(--border);
+	padding-top: var(--space-3);
+}
+
+.subform legend {
+	font-weight: 700;
+	font-size: 1.1rem;
+	padding-right: var(--space-2);
+}
+
+.subform p {
+	margin: 0;
+}
+
+.setup {
+	display: grid;
+	grid-template-columns: max-content minmax(0, 1fr);
+	gap: var(--space-2) var(--space-3);
+	margin: 0;
+}
+
+.setup dt {
+	font-weight: 700;
+}
+
+.setup dd {
+	margin: 0;
+	overflow-wrap: anywhere;
+}
+
+@media (max-width: 520px) {
+	.setup {
+		grid-template-columns: minmax(0, 1fr);
+		row-gap: var(--space-1);
+	}
+
+	.setup dd + dt {
+		margin-top: var(--space-2);
+	}
+}
+
+.row {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: end;
+	gap: var(--space-3);
+}
+
+.actions {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--space-3);
+}
+
+.actions-cell {
+	width: 1%;
+	white-space: nowrap;
+	text-align: right;
+}
+
+.confirm {
+	display: inline-flex;
+	gap: var(--space-2);
+}
+
+.button.danger {
+	background: var(--blocked);
+	color: var(--on-blocked);
+}
+
+.button.danger-outline {
+	color: var(--blocked);
+}
+
+.add-form {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: end;
+	gap: var(--space-3);
+}
+
+.add-form .notice {
+	flex-basis: 100%;
+}
+
+.window {
+	display: grid;
+	gap: var(--space-2);
+	padding-bottom: var(--space-3);
+	border-bottom: 1px solid var(--muted);
+}
+
+.days {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--space-2);
+}
+
+.day {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-1);
+	padding: var(--space-1) var(--space-2);
+	border: var(--border);
+	font-weight: 700;
+	cursor: pointer;
+}
+
+.day:has(input:checked) {
+	background: var(--accent);
+	color: var(--on-accent);
+}
+
+.day input {
+	accent-color: var(--ink);
+}
+
+.change {
+	display: grid;
+	gap: var(--space-3);
+	grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+
+.change h3 {
+	margin: 0 0 var(--space-1);
+	font-size: 0.85rem;
+	text-transform: uppercase;
+	letter-spacing: 0.06em;
+}
+
+.change pre {
+	margin: 0;
+	padding: var(--space-2);
+	border: 1px solid var(--muted);
+	background: var(--bg);
+	font-family: var(--font-mono);
+	font-size: 0.82rem;
+	overflow-x: auto;
+}
+
+a.button {
+	text-decoration: none;
+}
+
+.table input[type='checkbox'] {
+	width: 18px;
+	height: 18px;
+	accent-color: var(--ink);
 }

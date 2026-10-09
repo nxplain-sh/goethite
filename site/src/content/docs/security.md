@@ -73,13 +73,18 @@ local stub resolver (systemd-resolved, dnsmasq) may forward every query of the h
 client networks are active than `max_clients`, the networks that are not tracked share one limit.
 
 Rate limiting is a safety net, not a firewall: do not expose goethite to the internet unless you
-mean to run a public resolver.
+mean to run a public resolver. To reach it from outside, serve
+[DNS over TLS, HTTPS or QUIC](../encrypted-dns/#reaching-goethite-from-the-internet) with
+`require_client_id = true` instead of port 53.
 
 ## Connection limits
 
 goethite serves at most 256 TCP connections at once, and at most 16 from one client (an IPv4
-address or an IPv6 /64), so a single host cannot take every connection. A connection that sends
-nothing for 10 seconds is closed.
+address or an IPv6 /64), so a single host cannot take every connection. DNS over TLS, HTTPS and
+QUIC connections count against the same limits; a QUIC client's address is checked with a Retry
+first, so forged packets cannot take a connection. A TCP connection that sends nothing for 10
+seconds is closed; an encrypted one after 30 seconds, and its TLS handshake must finish within
+10.
 
 ```toml
 [server]
@@ -132,6 +137,9 @@ DNS server's, with netlink and packet sockets allowed and nothing writable;
   do not name this machine, so pages you visit cannot use your browser against it (including by
   DNS rebinding). The [web UI](../web-ui/) runs under a strict Content Security Policy and keeps
   the token in its browser tab only. `[api] web_ui = false` turns it off.
+- **API reference.** `/api/docs` is off unless `[api] docs` turns it on, answers loopback only,
+  and serves files built into goethite. Its scripts are limited to goethite's own, like the UI's;
+  see [Web UI](../web-ui/#api-reference) for its style policy.
 - **Limits.** At most 64 API connections, 10 seconds for the TLS handshake and headers, 1 MiB
   request bodies and 30 seconds per request.
 - **Audit log.** Every change to lists, rules, groups, clients, schedules and settings is recorded
@@ -139,6 +147,28 @@ DNS server's, with netlink and packet sockets allowed and nothing writable;
 - **Query privacy.** The [query log](../configuration/#querylog) keeps 7 days by default, can
   shorten client addresses to their /24 and /56 (`anonymize_clients = true`) or be turned off. The
   store file is readable by goethite's user only.
+
+## Connections goethite makes
+
+goethite opens connections only to:
+
+- the **upstream resolvers** in `[[upstream]]`, for the queries it forwards; or, with
+  [recursion](../recursion/), the **root servers and the authoritative servers** of the names
+  looked up, each shown only as much of a name as it needs;
+- the hosts of **downloaded filter lists**, over HTTPS, when lists are refreshed (by default
+  every 24 hours), including the [default lists](../filtering/#recommended-lists-and-presets) of
+  a new node; and the hosts of the recommended lists, for the first 8 KiB of each, when someone
+  opens the Lists page, at most once a day (`[filter] directory = false` turns it off);
+- **`adguardteam.github.io`**, over HTTPS, for the [blocked services](../groups/#blocked-services)
+  catalog, when lists are refreshed (`[filter] services = false` turns it off, `services_file`
+  reads it from a file instead);
+- **`api.filterlists.com`**, over HTTPS, only when someone opens Find lists in the web UI, at
+  most once a day ([FilterLists directory](../filtering/#finding-more-lists); `[filter]
+  directory = false` turns it off);
+- its **cluster peer**, if it has one.
+
+Names are resolved through goethite's own upstreams. The web UI's pages talk to goethite only;
+links to list home pages open in a new tab.
 
 ## When filtering fails
 

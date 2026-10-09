@@ -12,7 +12,40 @@ export type StatsReport = Schemas['StatsReport']
 export type QueryEntry = Schemas['QueryEntry']
 export type QueryOutcome = Schemas['QueryOutcome']
 export type List = Schemas['List']
+export type ListSpec = Schemas['ListSpec']
+export type ListStatus = Schemas['ListStatus']
+export type RecommendedList = Schemas['RecommendedList']
+export type Recommended = Schemas['Recommended']
+export type Preset = Schemas['Preset']
+export type RecommendedSizes = Schemas['RecommendedSizes']
+export type Directory = Schemas['Directory']
+export type DirectoryEntry = Schemas['DirectoryEntry']
+export type DirectoryList = Schemas['DirectoryList']
+export type Rule = Schemas['Rule']
+export type RuleSpec = Schemas['RuleSpec']
+export type Group = Schemas['Group']
+export type GroupSpec = Schemas['GroupSpec']
+export type GroupList = Schemas['GroupList']
+export type BlockedService = Schemas['BlockedService']
+export type Service = Schemas['Service']
+export type Services = Schemas['Services']
+export type Client = Schemas['Client']
+export type ClientSpec = Schemas['ClientSpec']
+export type Schedule = Schemas['Schedule']
+export type ScheduleSpec = Schemas['ScheduleSpec']
+export type Window = Schemas['Window']
+export type Weekday = Schemas['Weekday']
+export type Settings = Schemas['Settings']
+export type SettingsSpec = Schemas['SettingsSpec']
+export type BlockResponseKind = Schemas['BlockResponseKind']
+export type ManagedBy = Schemas['ManagedBy']
+export type AuditEntry = Schemas['AuditEntry']
 export type ClusterStatus = Schemas['ClusterStatus']
+
+/** The If-Match header for a change based on `revision`. */
+export function ifMatch(revision: number): { 'If-Match': string } {
+	return { 'If-Match': `"${revision}"` }
+}
 
 /** Every outcome, in display order. */
 export const OUTCOMES: readonly QueryOutcome[] = [

@@ -3,9 +3,13 @@
 use std::sync::Arc;
 use std::time::SystemTime;
 
+use goethite_api::catalog::{Directory, DirectoryList};
+use goethite_api::leak::LeakTests;
+use goethite_api::recommended::RecommendedSizes;
 use goethite_api::{
-    BoxFuture, BoxResult, CacheStatus, Change, ClusterRole, ClusterStatus, FilterStatus, Forwarded,
-    ForwardedAnswer, ListStatus, QueryLogStatus, Status, UpstreamStatus, Writes,
+    ApiError, BoxFuture, BoxResult, CacheStatus, Change, ClusterRole, ClusterStatus,
+    EncryptedStatus, FilterStatus, Forwarded, ForwardedAnswer, ListStatus, QueryLogStatus,
+    RecursionStatus, Status, UpstreamStatus, Writes,
 };
 use goethite_resolver::{Resolver, Transport};
 use goethite_server::ServerStats;
@@ -15,7 +19,9 @@ use tracing::warn;
 
 use crate::cluster::Cluster;
 use crate::control::Control;
+use crate::filterlists::FilterLists;
 use crate::metrics::{self, Metrics};
+use crate::sizes::ListSizes;
 
 /// Everything the API reports on and acts through.
 pub struct Node {
@@ -37,6 +43,14 @@ pub struct Node {
     pub cluster: Option<Arc<Cluster>>,
     /// Why the store file is not in use, if it is not.
     pub store_problem: Option<String>,
+    /// DNS over TLS and HTTPS, if they are served.
+    pub encrypted: Option<EncryptedStatus>,
+    /// The FilterLists directory, unless turned off.
+    pub filterlists: Option<Arc<FilterLists>>,
+    /// The recommended lists' sizes, unless looking lists up is turned off.
+    pub sizes: Option<Arc<ListSizes>>,
+    /// DNS leak tests.
+    pub leak: Arc<LeakTests>,
 }
 
 impl Node {
@@ -124,6 +138,23 @@ impl goethite_api::Control for Node {
             },
             lists,
             upstreams,
+            recursion: self.resolver.recursor().map(|recursor| {
+                let stats = recursor.stats();
+                RecursionStatus {
+                    qname_minimisation: recursor.config().qname_minimisation,
+                    ipv6: recursor.config().ipv6,
+                    dnssec: recursor.config().dnssec,
+                    sent: stats.sent,
+                    tcp: stats.tcp,
+                    timeouts: stats.timeouts,
+                    failures: stats.failures,
+                    secure: stats.secure,
+                    insecure: stats.insecure,
+                    bogus: stats.bogus,
+                    zones: as_u64(stats.zones),
+                    servers: as_u64(stats.servers),
+                }
+            }),
             cache,
             query_log: QueryLogStatus {
                 enabled: self.querylog_enabled,
@@ -131,8 +162,60 @@ impl goethite_api::Control for Node {
                 dropped: self.log.dropped(),
             },
             cluster: self.cluster.as_ref().map(|cluster| cluster.status()),
+            encrypted: self.encrypted.clone(),
+            // Filled in by the API, which knows whether it serves them.
+            api_docs: false,
             problems: self.problems(),
         }
+    }
+
+    fn directory(&self) -> BoxResult<'_, Directory> {
+        Box::pin(async move {
+            let filterlists = self
+                .filterlists
+                .as_ref()
+                .ok_or_else(goethite_api::directory_off)?;
+            filterlists
+                .directory()
+                .await
+                .map_err(|err| ApiError::unavailable(format!("FilterLists: {err:#}")))
+        })
+    }
+
+    fn directory_list(&self, id: u64) -> BoxResult<'_, DirectoryList> {
+        Box::pin(async move {
+            let filterlists = self
+                .filterlists
+                .as_ref()
+                .ok_or_else(goethite_api::directory_off)?;
+            filterlists
+                .list(id)
+                .await
+                .map_err(|err| ApiError::unavailable(format!("FilterLists: {err:#}")))
+        })
+    }
+
+    fn leak_tests(&self) -> Result<&LeakTests, ApiError> {
+        Ok(&self.leak)
+    }
+
+    fn services(&self) -> Result<goethite_api::services::Services, ApiError> {
+        self.control
+            .services()
+            .ok_or_else(goethite_api::services_off)
+    }
+
+    fn recommended_sizes(&self) -> BoxResult<'_, RecommendedSizes> {
+        Box::pin(async move {
+            let sizes = self
+                .sizes
+                .as_ref()
+                .ok_or_else(goethite_api::directory_off)?;
+            sizes
+                .sizes()
+                .await
+                .map_err(|err| ApiError::unavailable(format!("{err:#}")))
+        })
     }
 
     fn apply(&self, change: Change) -> BoxFuture<'_> {
@@ -174,9 +257,7 @@ impl goethite_api::Control for Node {
         Box::pin(async move {
             match &self.cluster {
                 Some(cluster) => cluster.forward(forwarded).await,
-                None => Err(goethite_api::ApiError::not_found(
-                    "this node is not in a cluster",
-                )),
+                None => Err(ApiError::not_found("this node is not in a cluster")),
             }
         })
     }
@@ -185,9 +266,7 @@ impl goethite_api::Control for Node {
         Box::pin(async move {
             match &self.cluster {
                 Some(cluster) => cluster.peer_stats(hours).await,
-                None => Err(goethite_api::ApiError::not_found(
-                    "this node is not in a cluster",
-                )),
+                None => Err(ApiError::not_found("this node is not in a cluster")),
             }
         })
     }
@@ -201,9 +280,7 @@ impl goethite_api::Control for Node {
         Box::pin(async move {
             match &self.cluster {
                 Some(cluster) => cluster.set_role(role, force, actor).await,
-                None => Err(goethite_api::ApiError::not_found(
-                    "this node is not in a cluster",
-                )),
+                None => Err(ApiError::not_found("this node is not in a cluster")),
             }
         })
     }
@@ -223,6 +300,10 @@ impl goethite_api::Control for Node {
                 .cache()
                 .map(|cache| (cache.stats(), cache.len())),
             upstreams: &upstreams,
+            recursion: self
+                .resolver
+                .recursor()
+                .map(goethite_resolver::Recursor::stats),
             filter_rules: self.control.compiled().filter.rule_count(),
             lists: (
                 config.lists.len(),

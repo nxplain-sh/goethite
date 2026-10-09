@@ -76,13 +76,6 @@ releases.
 
 - **[P2] Scoped API tokens:** read-only tokens (for monitoring) and a Terraform token, beside the
   single admin token.
-- **[P4] `/api/docs` in the binary** (Scalar, bundled assets, off by default, loopback only), with
-  the full web UI.
-- **[P4] Web UI tests.** Component and end-to-end tests (for example Vitest and Playwright) once
-  the UI has screens that change things; the skeleton is checked by the type-checker, the Rust
-  serving tests and a CI job that embeds and fetches it.
-- **[P4] Theme before the first paint.** A stored light/dark choice is applied when the script
-  starts, so it can flash; fixing it needs a CSP hash for a tiny inline script.
 - **[P5] Release builds include the web UI.** The release workflow must build `web/` before
   `cargo build --release`, reproducibly (pinned Node, `npm ci`).
 - **[P3] Query log writer priority and cost.** The writer thread competes with the DNS workers
@@ -109,8 +102,73 @@ Phase 3's scope shipped in v0.3.0. These items came up along the way.
 
 ## Phase 4: v0.4
 
-- **[P4] EDNS padding (RFC 7830 / RFC 8467)** for DoT, DoH and DoQ, both server and upstream.
+- **[P4] Forward chosen domains while recursing:** `printer.lan` or `fritz.box` to the router,
+  everything else from the root down, like AdGuard Home's per-domain upstreams.
+- **[later] Recursion extras:** coalescing identical queries in flight, prefetching popular
+  names before they expire, serving stale answers when servers are unreachable (RFC 8767),
+  NXDOMAIN cuts (RFC 8020) and aggressive use of NSEC and NSEC3 (RFC 8198), now that proofs are
+  validated.
+- **[later] Leak tests for the whole cluster:** a test only sees lookups that reach the node that
+  made it; nodes could share test names over the cluster channel, so a pair counts lookups at
+  either node.
+- **[later] An open leak test page** for devices whose users have no admin token (family
+  devices): a page that runs one test and shows only its own result, with its own rate limit.
+- **[later] Stopping bypasses, not just seeing them:** answering the canary domain
+  `use-application-dns.net` with NXDOMAIN (Firefox then keeps its DoH off), blocking known DoH
+  resolvers' names by a preset, and a guide for redirecting port 53 at the router.
+- **[later] Extended DNS Errors (RFC 8914):** say why an answer is SERVFAIL (DNSSEC bogus,
+  signature expired, no reachable authority) or blocked (filtered), for clients and the query
+  log.
+- **[later] More DNSSEC controls:** negative trust anchors (RFC 7646) for domains whose DNSSEC
+  is broken, configurable trust anchors and RFC 5011 tracking of root key rollovers (the anchors
+  are built in today), and the bogus count per domain in the query log.
+- **[later] Validating forwarded answers:** forwarding neither validates nor passes on an
+  upstream's AD flag; validating with the upstream's DS and DNSKEY answers would let forwarding
+  nodes set AD too.
+- **[later] Oblivious DoH upstreams:** goethite's own queries to an upstream through an ODoH
+  proxy, so the upstream does not learn the network's address. And being a proxy itself.
+- **[later] ODoH configurations in DNS:** an `HTTPS` record carrying the target's key, so
+  clients need not fetch `/.well-known/odohconfigs`.
+- **[P4] DoQ address validation tokens.** Every new DoQ connection costs a Retry round trip;
+  NEW_TOKEN tokens would let returning clients skip it, but quinn keeps their replay protection
+  in its `bloom` feature (another dependency).
+- **[later] DoH over HTTP/3,** on the QUIC stack DoQ already uses.
+- **[P4] DoH behind a reverse proxy:** plain HTTP from configured trusted proxies, with the
+  client address from `X-Forwarded-For` or `Forwarded`, for setups where a web server owns port
+  443.
+- **[P4] Check the certificate against `server_name`.** goethite does not check that the DNS
+  certificate covers `server_name` and `*.<server_name>`, or warn before it expires; both need an
+  X.509 parser (a new dependency).
+- **[P4] systemd credentials for TLS keys.** `LoadCredential=` would let the unit read
+  root-only keys without a group, but systemd in the test container does not mount credentials
+  even for a bare unit, so it is untested and undocumented. Try it on a real host; it needs a
+  restart, not a reload, after renewal.
+- **[P4] Reload without `/bin/kill`.** `ExecReload=` runs `/bin/kill`, which minimal systems
+  (and the systemd test image) lack. `Type=notify-reload` (systemd 253) with `ReloadSignal=SIGHUP`
+  needs goethite to report `RELOADING=1` and `READY=1` around a reload.
+- **[P4] Client IDs in the Terraform provider:** `ids` on `goethite_client`, once 0.4.0 is out.
+  Its acceptance tests start fresh nodes, which now begin with the Balanced preset's three lists
+  in the default group: set `[filter] default_lists = false` in their config when moving them
+  to 0.4.
+- **[later] Presets in the API and TUI:** presets are applied by the web UI, one change at a
+  time; an API call would apply one in a single store transaction, for the TUI and scripts.
+- **[P4] Blocked services in the Terraform provider:** `blocked_services` on `goethite_group`,
+  once 0.4.0 is out; its test nodes need `[filter] services = false` (or a `services_file`).
+- **[later] `$dnsrewrite=NXDOMAIN` rules,** which only block: the services catalog's iCloud
+  Private Relay uses nothing else, so goethite leaves that service out today.
+- **[P5] Access control beyond client IDs:** allowed and blocked client networks for every
+  transport, and per-client query rate limits for DoT and DoH, which are not rate limited today
+  (only connection-limited).
 - **[P4] Differential fuzzing** of `HickoryCodec` against the fast-path decoder, once it exists.
+
+- **[P4] Scalar's AI SDK advisory.** `npm audit` reports a low-severity resource consumption
+  issue (GHSA-866g-f22w-33x8) in `@ai-sdk/provider-utils`, which `@scalar/api-reference` pulls in
+  for its chat agent; goethite turns the agent off. Update Scalar once it ships a fixed version.
+- **[later] Ask TanStack Charts for a CSP-friendly root.** Its SVG root carries an inline style,
+  which goethite strips (ADR 0017); an option to leave it out would remove the workaround.
+
+- **[P4] dnsperf for v0.4.0 on a quiet machine.** The release run (bench/README.md) was on a busy
+  host: no regression against v0.3.0, but the sub-millisecond p99 was not shown for v0.4.0.
 
 ## Phase 5: 1.0
 

@@ -16,11 +16,14 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
+use goethite_api::leak::{Arrival, LeakTests};
 use goethite_api::{
-    Api, ApiConfig, ApiListeners, BoxFuture, BoxResult, Change, ClusterRole, ClusterStatus,
-    Control, FilterStatus, Forwarded, ForwardedAnswer, PeerStatus, QueryLogStatus, Status,
-    WebAssets, Writes, generate_token,
+    Api, ApiConfig, ApiError, ApiListeners, BoxFuture, BoxResult, Change, ClusterRole,
+    ClusterStatus, Control, DOCS_SCALAR, FilterStatus, Forwarded, ForwardedAnswer, PeerStatus,
+    QueryLogStatus, Status, WebAssets, Writes, generate_token,
 };
+use goethite_proto::{Name, RecordType};
+use goethite_store::Protocol;
 use goethite_store::{
     Actor, ActorKind, ConfigVersion, QueryLogConfig, StatsReport, Store, TopEntry,
 };
@@ -50,9 +53,15 @@ struct FakeControl {
     cluster: Mutex<Option<ClusterStatus>>,
     /// The other node's statistics; unreachable when unset.
     peer_stats: Mutex<Option<StatsReport>>,
+    /// DNS leak tests.
+    leak: LeakTests,
 }
 
 impl Control for FakeControl {
+    fn leak_tests(&self) -> Result<&LeakTests, ApiError> {
+        Ok(&self.leak)
+    }
+
     fn status(&self) -> Status {
         Status {
             version: "test".into(),
@@ -65,6 +74,7 @@ impl Control for FakeControl {
             },
             lists: Vec::new(),
             upstreams: Vec::new(),
+            recursion: None,
             cache: None,
             query_log: QueryLogStatus {
                 enabled: true,
@@ -72,6 +82,8 @@ impl Control for FakeControl {
                 dropped: 0,
             },
             cluster: None,
+            encrypted: None,
+            api_docs: false,
             problems: Vec::new(),
         }
     }
@@ -103,9 +115,7 @@ impl Control for FakeControl {
 
     fn peer_stats(&self, _hours: u32) -> BoxResult<'_, StatsReport> {
         let stats = self.peer_stats.lock().unwrap().clone();
-        Box::pin(async move {
-            stats.ok_or_else(|| goethite_api::ApiError::unavailable("dns2 is unreachable"))
-        })
+        Box::pin(async move { stats.ok_or_else(|| ApiError::unavailable("dns2 is unreachable")) })
     }
 
     fn writes(&self) -> Writes {
@@ -143,6 +153,16 @@ impl WebAssets for FakeWeb {
     }
 }
 
+/// The API reference's one built file.
+#[derive(Debug)]
+struct FakeDocs;
+
+impl WebAssets for FakeDocs {
+    fn file(&self, path: &str) -> Option<Cow<'static, [u8]>> {
+        (path == DOCS_SCALAR).then_some(Cow::Borrowed(b"gzipped scalar".as_slice()))
+    }
+}
+
 struct Server {
     addr: SocketAddr,
     api: Arc<Api>,
@@ -168,6 +188,14 @@ fn start(with_token: bool) -> Server {
 }
 
 fn start_with(with_token: bool, web: Option<Arc<dyn WebAssets>>) -> Server {
+    start_with_docs(with_token, web, None)
+}
+
+fn start_with_docs(
+    with_token: bool,
+    web: Option<Arc<dyn WebAssets>>,
+    docs: Option<Arc<dyn WebAssets>>,
+) -> Server {
     static NEXT: AtomicU32 = AtomicU32::new(0);
     let path = std::env::temp_dir().join(format!(
         "goethite-api-{}-{}.redb",
@@ -189,6 +217,7 @@ fn start_with(with_token: bool, web: Option<Arc<dyn WebAssets>>) -> Server {
             token: with_token.then_some(hash),
             tls: None,
             web,
+            docs,
         },
     });
     let listeners = ApiListeners::bind(&["127.0.0.1:0".parse().unwrap()]).unwrap();
@@ -448,6 +477,63 @@ async fn bad_requests_get_json_errors() {
         assert_eq!(too_big.status, StatusCode::PAYLOAD_TOO_LARGE);
     }
     assert_eq!(server.get("/api/v1/health").await.status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn recommended_lists_and_a_directory_turned_off() {
+    let server = start(false);
+    let recommended = server.get("/api/v1/lists/recommended").await;
+    assert_eq!(recommended.status, StatusCode::OK);
+    let lists = recommended.body["lists"].as_array().unwrap();
+    assert_eq!(lists.len(), goethite_api::recommended::LISTS.len());
+    let defaults: Vec<&str> = lists
+        .iter()
+        .filter(|list| list["default"] == true)
+        .filter_map(|list| list["id"].as_str())
+        .collect();
+    assert_eq!(
+        defaults,
+        ["hagezi-normal", "hagezi-tif-mini", "hagezi-fake"]
+    );
+    assert!(
+        lists
+            .iter()
+            .all(|list| list["url"].as_str().unwrap().starts_with("https://"))
+    );
+    let categories: Vec<&str> = lists
+        .iter()
+        .filter_map(|list| list["category"].as_str())
+        .collect();
+    for category in ["base", "security", "optional", "legacy"] {
+        assert!(categories.contains(&category), "{category}");
+    }
+    let presets = recommended.body["presets"].as_array().unwrap();
+    let names: Vec<&str> = presets.iter().filter_map(|p| p["name"].as_str()).collect();
+    assert_eq!(
+        names,
+        ["Balanced", "Strict", "Family", "Don't break anything"]
+    );
+
+    // A node that does not look lists up says why.
+    for path in [
+        "/api/v1/lists/directory",
+        "/api/v1/lists/directory/2594",
+        "/api/v1/lists/recommended/sizes",
+    ] {
+        let off = server.get(path).await;
+        assert_eq!(off.status, StatusCode::SERVICE_UNAVAILABLE, "{path}");
+        assert_eq!(off.body["error"]["code"], "unavailable");
+        assert!(
+            off.body["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("[filter] directory"),
+            "{}",
+            off.text
+        );
+    }
+    let bad = server.get("/api/v1/lists/directory/not-a-number").await;
+    assert_eq!(bad.status, StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]
@@ -923,4 +1009,135 @@ async fn cluster_statistics_add_up_every_node() {
         server.get("/api/v1/stats?scope=everyone").await.status,
         StatusCode::BAD_REQUEST
     );
+}
+
+/// The API reference: off by default; on, a page with a fresh nonce in its
+/// policy, its files and the OpenAPI document, without a token.
+#[tokio::test]
+async fn api_reference_is_off_unless_turned_on() {
+    let off = start(false);
+    for path in [
+        "/api/docs",
+        "/api/docs/scalar.js",
+        "/api/docs/start.js",
+        "/api/docs/openapi.json",
+    ] {
+        assert_eq!(off.get(path).await.status, StatusCode::NOT_FOUND, "{path}");
+    }
+    // The status says so, for the web UI's link.
+    assert_eq!(off.get("/api/v1/status").await.body["api_docs"], false);
+
+    let mut on = start_with_docs(true, None, Some(Arc::new(FakeDocs)));
+    assert_eq!(on.get("/api/v1/status").await.body["api_docs"], true);
+    // The docs need no token; the rest of the API still does.
+    on.token = None;
+    assert_eq!(
+        on.get("/api/v1/openapi.json").await.status,
+        StatusCode::UNAUTHORIZED
+    );
+
+    let page = on.get("/api/docs").await;
+    assert_eq!(page.status, StatusCode::OK);
+    let policy = page.headers["content-security-policy"]
+        .to_str()
+        .unwrap()
+        .to_owned();
+    let nonce = policy
+        .split("'nonce-")
+        .nth(1)
+        .and_then(|rest| rest.split('\'').next())
+        .unwrap()
+        .to_owned();
+    assert_eq!(nonce.len(), 32);
+    assert!(policy.contains("script-src 'self';"), "{policy}");
+    // Inline style attributes only: style elements need the nonce or a hash.
+    assert!(
+        policy.contains("style-src-attr 'unsafe-inline'"),
+        "{policy}"
+    );
+    assert_eq!(policy.matches("unsafe-inline").count(), 1, "{policy}");
+    assert!(
+        policy.contains(&format!("style-src-elem 'self' 'nonce-{nonce}' 'sha256-")),
+        "{policy}"
+    );
+    assert!(page.text.contains(&format!(
+        "<meta property=\"csp-nonce\" content=\"{nonce}\">"
+    )));
+    let again = on.get("/api/docs").await;
+    assert!(!again.text.contains(&nonce), "a nonce is used once");
+
+    let scalar = on
+        .send(
+            Method::GET,
+            "/api/docs/scalar.js",
+            None,
+            &[("accept-encoding", "gzip, br")],
+        )
+        .await;
+    assert_eq!(scalar.status, StatusCode::OK);
+    assert_eq!(scalar.headers["content-encoding"], "gzip");
+    assert_eq!(scalar.text, "gzipped scalar");
+    assert_eq!(
+        on.get("/api/docs/scalar.js").await.status,
+        StatusCode::NOT_ACCEPTABLE
+    );
+    let start = on.get("/api/docs/start.js").await;
+    assert!(start.text.contains("/api/docs/openapi.json"));
+    let document = on.get("/api/docs/openapi.json").await;
+    assert_eq!(document.status, StatusCode::OK);
+    assert!(document.body["paths"]["/api/v1/lists"].is_object());
+    // Every other page keeps the strict policy.
+    let other = on.get("/api/docs/start.js").await;
+    assert!(
+        !other.headers["content-security-policy"]
+            .to_str()
+            .unwrap()
+            .contains("nonce")
+    );
+}
+
+#[tokio::test]
+async fn leak_tests_record_their_names_only() {
+    let server = start(true);
+    let created = server
+        .send(Method::POST, "/api/v1/leak-tests", None, &[])
+        .await;
+    assert_eq!(created.status, StatusCode::CREATED, "{}", created.text);
+    let id = created.body["id"].as_str().unwrap().to_owned();
+    let names = created.body["names"].as_array().unwrap();
+    assert_eq!(names.len(), 8);
+    assert_eq!(created.body["requested_by"], "127.0.0.1");
+    assert_eq!(created.body["reached"], 0);
+
+    // A lookup of the second name, as the DNS server would report it.
+    let name: Name = names[1].as_str().unwrap().parse().unwrap();
+    server.control.leak.observe(&name, || Arrival {
+        address: "192.0.2.1".parse().unwrap(),
+        protocol: Protocol::Udp,
+        qtype: RecordType::A,
+        client: None,
+        group: Some("default".into()),
+        filtering: true,
+    });
+    let seen = server.get(&format!("/api/v1/leak-tests/{id}")).await;
+    assert_eq!(seen.status, StatusCode::OK);
+    assert_eq!(seen.body["reached"], 1);
+    let lookup = &seen.body["lookups"][0];
+    assert_eq!(lookup["probe"], 2);
+    assert_eq!(lookup["protocol"], "udp");
+    assert_eq!(lookup["address"], "192.0.2.1");
+    assert_eq!(lookup["group"], "default");
+    assert_eq!(lookup["filtering"], true);
+
+    let list = server.get("/api/v1/leak-tests").await;
+    assert_eq!(list.body["tests"][0]["id"], id.as_str());
+    let missing = server.get("/api/v1/leak-tests/0123").await;
+    assert_eq!(missing.status, StatusCode::NOT_FOUND);
+
+    // The page may load images from the test names, and nothing else new.
+    let csp = seen.headers["content-security-policy"].to_str().unwrap();
+    assert!(csp.contains(
+        "img-src 'self' data: http://*.leak.goethite.test https://*.leak.goethite.test;"
+    ));
+    assert!(csp.contains("connect-src 'self';"));
 }

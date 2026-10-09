@@ -34,6 +34,7 @@ impl Control for Idle {
             },
             lists: Vec::new(),
             upstreams: Vec::new(),
+            recursion: None,
             cache: None,
             query_log: QueryLogStatus {
                 enabled: true,
@@ -41,6 +42,8 @@ impl Control for Idle {
                 dropped: 0,
             },
             cluster: None,
+            encrypted: None,
+            api_docs: false,
             problems: Vec::new(),
         }
     }
@@ -74,6 +77,7 @@ async fn talks_to_the_api() {
             token: Some(hash),
             tls: None,
             web: None,
+            docs: None,
         },
     });
     let listeners = ApiListeners::bind(&["127.0.0.1:0".parse().unwrap()]).unwrap();

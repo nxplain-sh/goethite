@@ -74,6 +74,11 @@ impl Sources {
     /// No source: nothing matches.
     pub const NONE: Self = Self(0);
 
+    /// The set whose bit `i` is source `i`.
+    pub const fn from_bits(bits: u64) -> Self {
+        Self(bits)
+    }
+
     /// This set plus `source`.
     #[must_use]
     pub fn with(self, source: Source) -> Self {
@@ -263,6 +268,9 @@ impl FilterBuilder {
     pub fn add_list(&mut self, source: Source, text: &str) -> ListStats {
         let before = self.stats;
         let mut lines = ListStats::default();
+        // A byte order mark, as Windows editors write, is not part of the
+        // first line.
+        let text = text.strip_prefix('\u{feff}').unwrap_or(text);
         for line in text.lines() {
             match parse_line(line, |rule| {
                 self.add_rule(source, &rule);
@@ -581,6 +589,18 @@ mod tests {
             Verdict::Blocked(_) => "blocked",
             Verdict::Allowed(_) => "allowed",
         }
+    }
+
+    #[test]
+    fn a_byte_order_mark_is_not_part_of_the_first_line() {
+        let mut builder = FilterBuilder::new();
+        let stats = builder.add_list(
+            source(0),
+            "\u{feff}# A list saved on Windows\nads.example\n",
+        );
+        assert_eq!((stats.rules, stats.ignored, stats.invalid), (1, 1, 0));
+        let stats = builder.add_list(source(0), "\u{feff}tracker.example\n");
+        assert_eq!((stats.rules, stats.invalid), (1, 0));
     }
 
     #[test]

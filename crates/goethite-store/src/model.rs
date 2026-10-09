@@ -8,7 +8,7 @@
 use std::collections::HashSet;
 
 use goethite_filter::{LineKind, parse_line};
-use goethite_resolver::{Cidr, MAX_SCHEDULES};
+use goethite_resolver::{Cidr, MAX_SCHEDULES, MAX_SERVICES, is_client_id, is_service_id};
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use serde::{Deserialize, Serialize};
@@ -28,8 +28,12 @@ pub const MAX_GROUPS: usize = 256;
 pub const MAX_CLIENTS: usize = 10_000;
 /// The most addresses one client has.
 pub const MAX_CLIENT_ADDRESSES: usize = 64;
+/// The most client IDs one client has.
+pub const MAX_CLIENT_IDS: usize = 16;
 /// The most schedules.
 pub const MAX_SCHEDULE_COUNT: usize = MAX_SCHEDULES;
+/// The most blocked services one group names, schedules included.
+pub const MAX_BLOCKED_SERVICES: usize = MAX_SERVICES;
 /// The most time windows in one schedule.
 pub const MAX_WINDOWS: usize = 32;
 /// The longest name, in characters.
@@ -159,6 +163,19 @@ pub struct GroupList {
     pub schedule: Option<String>,
 }
 
+/// A service a group blocks, always or while a schedule is active.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BlockedService {
+    /// The service's ID in the services catalog (`GET /api/v1/services`),
+    /// such as `tiktok`. An ID the catalog does not have blocks nothing.
+    pub service: String,
+    /// The schedule's ID: the service is blocked only while the schedule is
+    /// active. Without one it is always blocked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schedule: Option<String>,
+}
+
 /// A group of clients with the same filtering.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
@@ -175,6 +192,11 @@ pub struct GroupSpec {
     /// is on.
     #[serde(default)]
     pub lists: Vec<GroupList>,
+    /// The services the group blocks, such as TikTok or YouTube: every name
+    /// the service uses, whatever the lists say. They apply while filtering
+    /// is on.
+    #[serde(default)]
+    pub blocked_services: Vec<BlockedService>,
     /// Free text.
     #[serde(default)]
     pub comment: String,
@@ -183,7 +205,7 @@ pub struct GroupSpec {
     pub managed_by: ManagedBy,
 }
 
-/// A device or network, identified by its addresses.
+/// A device or network, identified by its addresses or its client IDs.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ClientSpec {
@@ -191,8 +213,16 @@ pub struct ClientSpec {
     pub name: String,
     /// IP addresses or networks in CIDR notation, such as `192.168.1.23`
     /// or `192.168.1.0/24`. The longest network containing a query's source
-    /// address decides which client asked.
+    /// address decides which client asked. May be empty for a client known
+    /// by its client IDs only.
     pub addresses: Vec<String>,
+    /// Client IDs, such as `anna-phone`: over DNS over TLS, HTTPS or QUIC a
+    /// device can name itself, in the server name (`anna-phone.dns.example`)
+    /// or the DNS over HTTPS path (`/dns-query/anna-phone`), wherever it is.
+    /// A known ID decides which client asked before the address does. 1 to
+    /// 63 lowercase letters, digits and hyphens, not at either end.
+    #[serde(default)]
+    pub ids: Vec<String>,
     /// The group's ID.
     #[serde(default = "default_group")]
     pub group: String,
@@ -714,6 +744,30 @@ impl ConfigSnapshot {
                     return Err(invalid(at, "names the same list and schedule twice"));
                 }
             }
+            if group.spec.blocked_services.len() > MAX_BLOCKED_SERVICES {
+                return Err(invalid(
+                    format!("{field}.blocked_services"),
+                    format!("has more than {MAX_BLOCKED_SERVICES} entries"),
+                ));
+            }
+            let mut seen = HashSet::new();
+            for (index, entry) in group.spec.blocked_services.iter().enumerate() {
+                let at = format!("{field}.blocked_services[{index}]");
+                if !is_service_id(&entry.service) {
+                    return Err(invalid(
+                        format!("{at}.service"),
+                        "needs 1 to 64 lowercase letters, digits, underscores and hyphens",
+                    ));
+                }
+                if let Some(schedule) = &entry.schedule
+                    && !schedules.contains(schedule.as_str())
+                {
+                    return Err(conflict(at, format!("there is no schedule {schedule:?}")));
+                }
+                if !seen.insert(entry) {
+                    return Err(invalid(at, "names the same service and schedule twice"));
+                }
+            }
         }
         Ok(())
     }
@@ -721,6 +775,7 @@ impl ConfigSnapshot {
     fn validate_clients(&self) -> Result<(), ValidationError> {
         let groups: HashSet<&str> = self.groups.iter().map(|g| g.id.as_str()).collect();
         let mut networks = HashSet::new();
+        let mut ids = HashSet::new();
         for client in &self.clients {
             let field = format!("clients[{}]", client.id);
             check_name(&format!("{field}.name"), &client.spec.name)?;
@@ -731,13 +786,35 @@ impl ConfigSnapshot {
                     format!("there is no group {:?}", client.spec.group),
                 ));
             }
-            if client.spec.addresses.is_empty()
-                || client.spec.addresses.len() > MAX_CLIENT_ADDRESSES
-            {
+            if client.spec.addresses.len() > MAX_CLIENT_ADDRESSES {
                 return Err(invalid(
                     format!("{field}.addresses"),
-                    format!("needs 1 to {MAX_CLIENT_ADDRESSES} addresses"),
+                    format!("has more than {MAX_CLIENT_ADDRESSES} addresses"),
                 ));
+            }
+            if client.spec.ids.len() > MAX_CLIENT_IDS {
+                return Err(invalid(
+                    format!("{field}.ids"),
+                    format!("has more than {MAX_CLIENT_IDS} client IDs"),
+                ));
+            }
+            if client.spec.addresses.is_empty() && client.spec.ids.is_empty() {
+                return Err(invalid(
+                    format!("{field}.addresses"),
+                    "needs an address or a client ID",
+                ));
+            }
+            for (index, id) in client.spec.ids.iter().enumerate() {
+                let at = format!("{field}.ids[{index}]");
+                if !is_client_id(id) {
+                    return Err(invalid(
+                        at,
+                        "needs 1 to 63 lowercase letters, digits and hyphens, not at either end",
+                    ));
+                }
+                if !ids.insert(id.as_str()) {
+                    return Err(invalid(at, format!("{id} is used by another client")));
+                }
             }
             for (index, address) in client.spec.addresses.iter().enumerate() {
                 let at = format!("{field}.addresses[{index}]");
@@ -765,6 +842,7 @@ pub(crate) fn default_group_resource(now: Timestamp) -> Group {
             filtering: true,
             safe_search: false,
             lists: Vec::new(),
+            blocked_services: Vec::new(),
             comment: "Clients that are not in another group.".to_owned(),
             managed_by: ManagedBy::Api,
         },
@@ -869,6 +947,7 @@ mod tests {
             spec: ClientSpec {
                 name: "Tablet".into(),
                 addresses: vec!["192.168.1.23".into()],
+                ids: vec!["tablet".into()],
                 group: DEFAULT_GROUP.into(),
                 comment: String::new(),
                 managed_by: ManagedBy::Api,
@@ -922,9 +1001,77 @@ mod tests {
                 .contains("another client")
         );
 
+        let mut bad = good.clone();
+        let mut twin = bad.clients[0].clone();
+        twin.id = "cl_2".into();
+        twin.spec.addresses.clear();
+        bad.clients.push(twin);
+        let err = bad.validate().unwrap_err();
+        assert_eq!(err.field, "clients[cl_2].ids[0]");
+        assert!(err.message.contains("another client"));
+
+        let mut bad = good.clone();
+        bad.clients[0].spec.ids = vec!["Tablet".into()];
+        assert!(bad.validate().unwrap_err().field.ends_with("ids[0]"));
+
+        // An ID alone is enough; neither is not.
+        let mut fine = good.clone();
+        fine.clients[0].spec.addresses.clear();
+        assert_eq!(fine.validate(), Ok(()));
+        fine.clients[0].spec.ids.clear();
+        assert!(fine.validate().unwrap_err().message.contains("client ID"));
+
         let mut bad = good;
         bad.settings.spec.list_update_hours = 0;
         assert!(bad.validate().is_err());
+    }
+
+    #[test]
+    fn blocked_services() {
+        let blocked = |service: &str, schedule: Option<&str>| BlockedService {
+            service: service.into(),
+            schedule: schedule.map(Into::into),
+        };
+        let mut good = snapshot();
+        good.groups[0].spec.blocked_services = vec![
+            blocked("tiktok", None),
+            // Not in the catalog (yet): kept, and blocks nothing.
+            blocked("tomorrows_app", None),
+        ];
+        assert_eq!(good.validate(), Ok(()));
+
+        let mut bad = good.clone();
+        bad.groups[0].spec.blocked_services[1].service = "Tik Tok".into();
+        let err = bad.validate().unwrap_err();
+        assert_eq!(err.field, "groups[default].blocked_services[1].service");
+
+        let mut bad = good.clone();
+        bad.groups[0]
+            .spec
+            .blocked_services
+            .push(blocked("tiktok", None));
+        assert!(bad.validate().unwrap_err().message.contains("twice"));
+
+        let mut bad = good.clone();
+        bad.groups[0].spec.blocked_services[0].schedule = Some("sc_nope".into());
+        assert!(bad.validate().unwrap_err().conflict);
+
+        let mut bad = good;
+        bad.groups[0].spec.blocked_services = (0..=MAX_BLOCKED_SERVICES)
+            .map(|i| blocked(&format!("s{i}"), None))
+            .collect();
+        assert!(
+            bad.validate()
+                .unwrap_err()
+                .field
+                .ends_with("blocked_services")
+        );
+
+        let json = r#"{"name": "Kids", "blocked_services": [{"service": "tiktok"}]}"#;
+        let spec: GroupSpec = serde_json::from_str(json).unwrap();
+        assert_eq!(spec.blocked_services, [blocked("tiktok", None)]);
+        let spec: GroupSpec = serde_json::from_str(r#"{"name": "Old"}"#).unwrap();
+        assert!(spec.blocked_services.is_empty(), "older groups have none");
     }
 
     #[test]

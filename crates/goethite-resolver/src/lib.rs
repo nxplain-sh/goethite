@@ -11,11 +11,14 @@
 mod blocking;
 mod cache;
 mod cidr;
+mod exchange;
 mod forward;
 mod guard;
 mod policy;
 mod rebinding;
+pub mod recurse;
 mod safe_search;
+mod services;
 mod tls;
 
 use std::net::{IpAddr, Ipv4Addr};
@@ -38,13 +41,21 @@ pub use forward::{
 };
 pub use guard::FailMode;
 pub use policy::{
-    ClientPolicy, GroupPolicy, MAX_SCHEDULES, Policy, PolicyError, PolicyParts, PolicyState,
-    ScheduledSources,
+    ClientPolicy, GroupPolicy, MAX_CLIENT_ID_LEN, MAX_SCHEDULES, Policy, PolicyError, PolicyParts,
+    PolicyState, ScheduledServices, ScheduledSources, is_client_id,
 };
 pub use rebinding::{DEFAULT_PRIVATE_DOMAINS, RebindingProtection, is_private};
+pub use recurse::{Recursor, RecursorConfig, RecursorStats};
+pub use services::{
+    MAX_SERVICE_ID_LEN, MAX_SERVICES, ServiceError, ServiceFilter, ServiceMask, ServiceRules,
+    is_service_id,
+};
 pub use tls::{TlsError, TlsRoots, tls_client_config};
 
 /// The name every build answers itself, to check that the server is alive.
+/// Every name below it is goethite's own too: answered locally (NXDOMAIN
+/// unless it is a built-in record), never forwarded, never filtered. The
+/// DNS leak test's names are there.
 pub const TEST_NAME: &str = "goethite.test.";
 
 /// The address [`TEST_NAME`] resolves to.
@@ -114,6 +125,8 @@ pub enum Outcome {
     Cached,
     /// From the upstream with this index.
     Upstream(usize),
+    /// Resolved from the authoritative servers; this one answered last.
+    Recursive(std::net::SocketAddr),
     /// No upstream answered in time: SERVFAIL.
     Failed,
 }
@@ -152,6 +165,9 @@ pub struct Resolution {
     pub client: Option<Arc<str>>,
     /// The asking client's group, by ID.
     pub group: Option<Arc<str>>,
+    /// Whether the asking client's queries are filtered: its group filters,
+    /// and protection is on and not paused.
+    pub filtering: bool,
 }
 
 /// What applies to the client asking a query.
@@ -162,15 +178,19 @@ struct Asker {
     filtering: bool,
     safe_search: bool,
     sources: Sources,
+    services: ServiceMask,
 }
 
 /// Answers queries.
 pub struct Resolver {
     local: Vec<Record>,
+    /// [`TEST_NAME`]: names below it are answered locally.
+    own: Option<Name>,
     policy: Option<Arc<PolicyState>>,
     rebinding: Option<RebindingProtection>,
     cache: Option<Cache>,
     forwarder: Option<Forwarder>,
+    recursor: Option<Recursor>,
     fail_mode: FailMode,
     filter_failures: AtomicU64,
 }
@@ -181,10 +201,12 @@ impl Resolver {
     pub fn new(local: Vec<Record>) -> Self {
         Self {
             local,
+            own: TEST_NAME.parse().ok(),
             policy: None,
             rebinding: None,
             cache: None,
             forwarder: None,
+            recursor: None,
             fail_mode: FailMode::Open,
             filter_failures: AtomicU64::new(0),
         }
@@ -272,6 +294,24 @@ impl Resolver {
         self.forwarder.as_ref()
     }
 
+    /// Resolves everything that is not a local name from the root servers
+    /// down with `recursor`, instead of forwarding.
+    #[must_use]
+    pub fn with_recursor(mut self, recursor: Recursor) -> Self {
+        self.recursor = Some(recursor);
+        self
+    }
+
+    /// The recursor, if recursion is on.
+    pub fn recursor(&self) -> Option<&Recursor> {
+        self.recursor.as_ref()
+    }
+
+    /// Whether queries are resolved at all: forwarded or recursively.
+    fn resolves(&self) -> bool {
+        self.forwarder.is_some() || self.recursor.is_some()
+    }
+
     /// Answers `query` from `client`.
     ///
     /// - zone transfers (`AXFR`, `IXFR`): `REFUSED`, since none are offered
@@ -283,32 +323,60 @@ impl Resolver {
     ///   `REFUSED`, never forwarded;
     /// - a name with local records: those records of the asked type,
     ///   authoritatively, or an empty `NOERROR` (NODATA) if there are none;
+    ///   any other name under [`TEST_NAME`] (such as the DNS leak test's):
+    ///   `NXDOMAIN`, authoritatively, never forwarded or filtered;
     /// - a name the filter blocks for the client's group: the configured
     ///   block response, even if an answer is cached;
     /// - a search host, when the group has safe search on: a CNAME to the
     ///   engine's safe endpoint and that endpoint's records;
     /// - a fresh cached answer, with TTLs counted down;
-    /// - anything else: forwarded upstream, with private addresses removed
-    ///   for public names if rebinding protection is on, and cached if
-    ///   cacheable; or `REFUSED` without a forwarder.
+    /// - anything else: forwarded upstream or resolved recursively, with
+    ///   private addresses removed for public names if rebinding protection
+    ///   is on, and cached if cacheable; or `REFUSED` with neither. With
+    ///   recursion, special-use names (`localhost`, `invalid`, private
+    ///   reverse zones…) are answered without asking anyone.
     ///
     /// An answer whose CNAME chain leads to a name the filter blocks is
     /// blocked too (CNAME uncloaking), unless an exception matched the name
     /// asked for.
     pub async fn resolve(&self, query: &Query, client: IpAddr) -> Resolution {
-        let asker = self.asker(client);
+        self.resolve_with_id(query, client, None).await
+    }
+
+    /// Answers `query` from `client`, as [`Resolver::resolve`] does, for a
+    /// client that also gave a client ID (over an encrypted transport). A
+    /// known ID identifies the client before its address does.
+    pub async fn resolve_with_id(
+        &self,
+        query: &Query,
+        client: IpAddr,
+        client_id: Option<&str>,
+    ) -> Resolution {
+        let asker = self.asker(client, client_id);
         let (mut response, outcome, filter) = self.answer(query, &asker).await;
-        response.recursion_available = self.forwarder.is_some();
+        response.recursion_available = self.resolves();
+        // AD only for a client that shows it understands it, with AD or DO
+        // (RFC 6840, 5.7 and 5.8).
+        response.authentic_data &=
+            query.authentic_data || query.edns.is_some_and(|edns| edns.dnssec_ok);
         Resolution {
             response,
             outcome,
             filter,
             client: asker.client,
             group: asker.group,
+            filtering: asker.filtering,
         }
     }
 
-    fn asker(&self, client: IpAddr) -> Asker {
+    /// Whether a known client uses the client ID `id`.
+    pub fn knows_client_id(&self, id: &str) -> bool {
+        self.policy
+            .as_ref()
+            .is_some_and(|state| state.policy().client_with_id(id).is_some())
+    }
+
+    fn asker(&self, client: IpAddr, client_id: Option<&str>) -> Asker {
         let Some(state) = &self.policy else {
             return Asker {
                 policy: None,
@@ -317,10 +385,11 @@ impl Resolver {
                 filtering: false,
                 safe_search: false,
                 sources: Sources::NONE,
+                services: ServiceMask::NONE,
             };
         };
         let policy = state.policy();
-        let (known, group) = policy.identify(client);
+        let (known, group) = policy.identify(client, client_id);
         let on = policy.protection() && !state.is_paused();
         let asker = Asker {
             client: known.map(|known| Arc::clone(&known.id)),
@@ -328,6 +397,7 @@ impl Resolver {
             filtering: on && group.filtering,
             safe_search: on && group.safe_search,
             sources: group.sources_now(state.active_schedules()),
+            services: group.services_now(state.active_schedules()),
             policy: None,
         };
         Asker {
@@ -353,6 +423,22 @@ impl Resolver {
         }
         let mut exception = None;
         if let (true, Some(policy)) = (asker.filtering, &asker.policy) {
+            // A blocked service is the group's own choice: no list's
+            // exception undoes it.
+            if !asker.services.is_empty() {
+                match guard::guarded(|| policy.services().check(&question.name, &asker.services)) {
+                    Some(Some((service, matched))) => {
+                        debug!(name = %question.name, qtype = %question.qtype, "blocked service");
+                        return blocked_service(query, policy, service, matched);
+                    }
+                    Some(None) => {}
+                    None => {
+                        if let Some(answer) = self.filter_failed(query) {
+                            return answer;
+                        }
+                    }
+                }
+            }
             match Self::check(policy, &question.name, asker.sources) {
                 Some(Verdict::Blocked(matched)) => {
                     debug!(name = %question.name, qtype = %question.qtype, "blocked");
@@ -369,7 +455,7 @@ impl Resolver {
                 }
             }
         }
-        if self.forwarder.is_none() {
+        if !self.resolves() {
             return rejected(ResponseCode::REFUSED);
         }
         if asker.safe_search
@@ -402,22 +488,38 @@ impl Resolver {
         (response, outcome, exception)
     }
 
-    /// The answer from the cache, or else from the upstreams (with rebinding
-    /// protection applied, then cached).
+    /// The answer from the cache, or else from the upstreams or the
+    /// authoritative servers (with rebinding protection applied, then
+    /// cached).
     async fn cached_or_forwarded(&self, query: &Query) -> (Response, Outcome) {
+        if self.recursor.is_some()
+            && let Some(response) = Recursor::special(query)
+        {
+            return (response, Outcome::Local);
+        }
         if let Some(response) = self.cache.as_ref().and_then(|cache| cache.get(query)) {
             return (response, Outcome::Cached);
         }
-        let Some(forwarder) = &self.forwarder else {
+        let (mut response, outcome) = if let Some(recursor) = &self.recursor {
+            let (response, server) = recursor.resolve(query).await;
+            (response, server.map_or(Outcome::Failed, Outcome::Recursive))
+        } else if let Some(forwarder) = &self.forwarder {
+            let (response, upstream) = forwarder.forward_from(query).await;
+            (
+                response,
+                upstream.map_or(Outcome::Failed, Outcome::Upstream),
+            )
+        } else {
             return (
                 Response::for_query(query, ResponseCode::REFUSED),
                 Outcome::Rejected,
             );
         };
-        let (mut response, upstream) = forwarder.forward_from(query).await;
         if let Some(protection) = &self.rebinding {
             let removed = protection.apply(&query.question.name, &mut response);
             if removed > 0 {
+                // No longer what was signed.
+                response.authentic_data = false;
                 debug!(
                     name = %query.question.name,
                     removed,
@@ -428,10 +530,7 @@ impl Resolver {
         if let Some(cache) = &self.cache {
             cache.insert(query, &response);
         }
-        (
-            response,
-            upstream.map_or(Outcome::Failed, Outcome::Upstream),
-        )
+        (response, outcome)
     }
 
     /// A CNAME from the asked name to `target`, followed by `target`'s own
@@ -472,7 +571,7 @@ impl Resolver {
             };
             let response = if let Some(response) = self.local_answer(&query) {
                 response
-            } else if self.forwarder.is_some() || self.cache.is_some() {
+            } else if self.resolves() || self.cache.is_some() {
                 self.cached_or_forwarded(&query).await.0
             } else {
                 continue;
@@ -495,7 +594,20 @@ impl Resolver {
             .iter()
             .filter(|record| record.name() == &question.name)
             .peekable();
-        matching.peek()?;
+        if matching.peek().is_none() {
+            // goethite's own names that do not exist, the leak test's
+            // included: never asked of anyone else.
+            let own = self
+                .own
+                .as_ref()
+                .is_some_and(|own| question.name.is_within(own));
+            if !own {
+                return None;
+            }
+            let mut response = Response::for_query(query, ResponseCode::NX_DOMAIN);
+            response.authoritative = true;
+            return Some(response);
+        }
         let mut response = Response::for_query(query, ResponseCode::NO_ERROR);
         response.authoritative = true;
         response.answers = matching
@@ -517,6 +629,23 @@ fn blocked(
 ) -> (Response, Outcome, Option<FilterHit>) {
     let response = blocking::blocked_response(query, policy.block_response(), policy.blocked_ttl());
     let hit = hit(policy, Action::Block, matched, cname);
+    (response, Outcome::Blocked, Some(hit))
+}
+
+/// The answer to a name a blocked service uses.
+fn blocked_service(
+    query: &Query,
+    policy: &Policy,
+    service: usize,
+    matched: Match,
+) -> (Response, Outcome, Option<FilterHit>) {
+    let response = blocking::blocked_response(query, policy.block_response(), policy.blocked_ttl());
+    let hit = FilterHit {
+        action: Action::Block,
+        matched,
+        source: policy.services().source_id(service).cloned(),
+        cname: None,
+    };
     (response, Outcome::Blocked, Some(hit))
 }
 
@@ -564,6 +693,7 @@ mod tests {
             edns: Some(Edns {
                 udp_payload_size: 4096,
                 dnssec_ok: false,
+                padding: false,
             }),
         }
     }
@@ -674,7 +804,6 @@ mod tests {
         for (name, qclass) in [
             ("example.com.", RecordClass::IN),
             ("test.", RecordClass::IN),
-            ("sub.goethite.test.", RecordClass::IN),
             (TEST_NAME, RecordClass::CH),
         ] {
             let response = resolve(&resolver(), &query(name, RecordType::A, qclass));
@@ -682,5 +811,12 @@ mod tests {
             assert_eq!(response.answers, vec![]);
             assert!(!response.authoritative);
         }
+        // Names below goethite.test are goethite's own: they do not exist.
+        let own = resolve(
+            &resolver(),
+            &query("sub.goethite.test.", RecordType::A, RecordClass::IN),
+        );
+        assert_eq!(own.rcode, ResponseCode::NX_DOMAIN);
+        assert!(own.authoritative);
     }
 }

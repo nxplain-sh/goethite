@@ -5,6 +5,7 @@
     clippy::expect_used,
     clippy::panic,
     clippy::indexing_slicing,
+    clippy::arithmetic_side_effects,
     reason = "test helpers; the no-panic rules cover non-test code"
 )]
 
@@ -119,6 +120,30 @@ fn missing_upstreams_are_an_error() {
         "{stderr}"
     );
     assert!(stderr.contains("[[upstream]]"), "{stderr}");
+    assert!(stderr.contains("[recursion]"), "{stderr}");
+}
+
+/// Recursion instead of upstreams: one or the other.
+#[test]
+fn recursion_or_upstreams() {
+    let recursive = config_file(
+        "recursive",
+        "[server]\nlisten = \"127.0.0.1:0\"\n\n[recursion]\nenabled = true\nipv6 = false\n",
+    );
+    let output = goethite(&["check-config", "--config", recursive.to_str().unwrap()]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let both = config_file(
+        "recursive_and_upstreams",
+        "[[upstream]]\naddress = \"9.9.9.9\"\n\n[recursion]\nenabled = true\n",
+    );
+    let output = goethite(&["check-config", "--config", both.to_str().unwrap()]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(stderr.contains("choose one"), "{stderr}");
 }
 
 #[test]
@@ -153,6 +178,35 @@ fn check_config_rejects_problems() {
             "[[filter.list]]\npath = \"/nonexistent/goethite/list.txt\"\n",
             "cannot open filter list",
         ),
+        (
+            "check_missing_services_file",
+            "[filter]\nservices_file = \"/nonexistent/goethite/services.json\"\n",
+            "/nonexistent/goethite/services.json does not exist",
+        ),
+        (
+            "check_bad_services_file",
+            &format!(
+                "[filter]\nservices_file = {:?}\n",
+                config_file("not_a_catalog", "<html>").display().to_string()
+            ),
+            "unexpected data in the services catalog",
+        ),
+        (
+            "check_missing_dns_certificate",
+            "[server.tls]\ncert = \"/nonexistent/dns.crt\"\nkey = \"/nonexistent/dns.key\"\n\
+             dot = \"127.0.0.1:853\"\n",
+            "cannot read the DNS certificate",
+        ),
+        (
+            "check_bad_dns_certificate",
+            &format!(
+                "[server.tls]\ncert = {path:?}\nkey = {path:?}\ndot = \"127.0.0.1:853\"\n",
+                path = config_file("not_a_certificate", "not PEM")
+                    .display()
+                    .to_string()
+            ),
+            "holds no certificate",
+        ),
     ] {
         let contents = if test == "check_no_upstreams" || test == "check_bad_tls_name" {
             extra.to_owned()
@@ -169,16 +223,17 @@ fn check_config_rejects_problems() {
 
 #[cfg(unix)]
 mod serving {
-    use std::io::{BufRead, BufReader};
-    use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::net::{Ipv4Addr, SocketAddr, TcpStream, UdpSocket};
     use std::path::PathBuf;
     use std::process::{Child, Command, Stdio};
     use std::str::FromStr;
-    use std::sync::mpsc;
+    use std::sync::{Arc, mpsc};
     use std::time::Duration;
 
     use hickory_proto::op::{Message, MessageType, OpCode, Query, ResponseCode};
     use hickory_proto::rr::{Name, RData, RecordType, rdata::A};
+    use rustls::pki_types::{CertificateDer, ServerName};
 
     use super::{BIN, config_file};
 
@@ -206,8 +261,26 @@ mod serving {
         }
 
         /// Starts goethite with `config`, plus a fresh store of its own
-        /// unless the config names one.
+        /// unless the config names one, and without the default list and
+        /// the services catalog, which it would try to download.
         fn start_config(test: &str, config: &str) -> Self {
+            // Nor the services catalog, unless the test brings its own.
+            let offline = if config.contains("services") {
+                "default_lists = false\n"
+            } else {
+                "default_lists = false\nservices = false\n"
+            };
+            let config = if config.contains("[filter]\n") {
+                config.replacen("[filter]\n", &format!("[filter]\n{offline}"), 1)
+            } else {
+                format!("{config}\n[filter]\n{offline}")
+            };
+            Self::start_exact(test, &config)
+        }
+
+        /// Starts goethite with `config` as it is, plus a store and the API
+        /// on an ephemeral port unless the config names them.
+        fn start_exact(test: &str, config: &str) -> Self {
             // No two servers on the API's default port at once.
             let config = if config.contains("[api]") {
                 config.to_owned()
@@ -246,6 +319,15 @@ mod serving {
                 lines,
                 log: Vec::new(),
             }
+        }
+
+        /// The first log line containing `needle`, logged already or to
+        /// come: for lines whose order is not fixed.
+        fn find_log(&mut self, needle: &str) -> String {
+            if let Some(line) = self.log.iter().find(|line| line.contains(needle)) {
+                return line.clone();
+            }
+            self.wait_for_log(needle)
         }
 
         /// Waits for a log line containing `needle` and returns it.
@@ -585,6 +667,520 @@ mod serving {
         let log = String::from_utf8_lossy(&again.stderr);
         assert!(again.status.success(), "{log}");
         assert!(log.contains("rules_added=0"), "{log}");
+    }
+
+    /// A certificate for `dns.example` and `*.dns.example`, written to
+    /// `cert` and `key`; its DER.
+    fn write_certificate(cert: &std::path::Path, key: &std::path::Path) -> Vec<u8> {
+        let rcgen::CertifiedKey {
+            cert: made,
+            signing_key,
+        } = rcgen::generate_simple_self_signed(vec!["dns.example".into(), "*.dns.example".into()])
+            .unwrap();
+        std::fs::write(cert, made.pem()).unwrap();
+        std::fs::write(key, signing_key.serialize_pem()).unwrap();
+        made.der().to_vec()
+    }
+
+    /// A TLS client that trusts any certificate: the test checks which one
+    /// it got itself.
+    #[derive(Debug)]
+    struct TrustAll(Arc<rustls::crypto::CryptoProvider>);
+
+    impl rustls::client::danger::ServerCertVerifier for TrustAll {
+        fn verify_server_cert(
+            &self,
+            _: &CertificateDer<'_>,
+            _: &[CertificateDer<'_>],
+            _: &ServerName<'_>,
+            _: &[u8],
+            _: rustls::pki_types::UnixTime,
+        ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+            Ok(rustls::client::danger::ServerCertVerified::assertion())
+        }
+
+        fn verify_tls12_signature(
+            &self,
+            message: &[u8],
+            cert: &CertificateDer<'_>,
+            dss: &rustls::DigitallySignedStruct,
+        ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+            rustls::crypto::verify_tls12_signature(
+                message,
+                cert,
+                dss,
+                &self.0.signature_verification_algorithms,
+            )
+        }
+
+        fn verify_tls13_signature(
+            &self,
+            message: &[u8],
+            cert: &CertificateDer<'_>,
+            dss: &rustls::DigitallySignedStruct,
+        ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+            rustls::crypto::verify_tls13_signature(
+                message,
+                cert,
+                dss,
+                &self.0.signature_verification_algorithms,
+            )
+        }
+
+        fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+            self.0.signature_verification_algorithms.supported_schemes()
+        }
+    }
+
+    type Tls = rustls::StreamOwned<rustls::ClientConnection, TcpStream>;
+
+    /// A TLS connection to `addr` for `server_name`, handshake done.
+    fn tls(addr: SocketAddr, server_name: &str, alpn: &[u8]) -> Tls {
+        let provider = Arc::new(rustls::crypto::ring::default_provider());
+        let mut config = rustls::ClientConfig::builder_with_provider(Arc::clone(&provider))
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(TrustAll(provider)))
+            .with_no_client_auth();
+        config.alpn_protocols = vec![alpn.to_vec()];
+        let name = ServerName::try_from(server_name.to_owned()).unwrap();
+        let connection = rustls::ClientConnection::new(Arc::new(config), name).unwrap();
+        let socket = TcpStream::connect(addr).unwrap();
+        socket.set_read_timeout(Some(WAIT)).unwrap();
+        let mut stream = rustls::StreamOwned::new(connection, socket);
+        while stream.conn.is_handshaking() {
+            stream.conn.complete_io(&mut stream.sock).unwrap();
+        }
+        stream
+    }
+
+    fn query(name: &str) -> Vec<u8> {
+        let mut query = Message::new(0, MessageType::Query, OpCode::Query);
+        query.add_query(Query::query(Name::from_str(name).unwrap(), RecordType::A));
+        query.to_vec().unwrap()
+    }
+
+    fn dot_ask(stream: &mut Tls, name: &str) -> Message {
+        let wire = query(name);
+        let mut frame = u16::try_from(wire.len()).unwrap().to_be_bytes().to_vec();
+        frame.extend_from_slice(&wire);
+        stream.write_all(&frame).unwrap();
+        stream.flush().unwrap();
+        let mut len = [0; 2];
+        stream.read_exact(&mut len).unwrap();
+        let mut buf = vec![0; usize::from(u16::from_be_bytes(len))];
+        stream.read_exact(&mut buf).unwrap();
+        Message::from_vec(&buf).unwrap()
+    }
+
+    /// An HTTP/1.1 request for `host` on `stream`; the status, the headers
+    /// (lowercase names) and the body.
+    fn request(
+        stream: &mut impl ReadWrite,
+        host: &str,
+        head: &str,
+        body: &[u8],
+    ) -> (u16, Vec<(String, String)>, Vec<u8>) {
+        let mut sent = format!(
+            "{head}\r\nHost: {host}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        )
+        .into_bytes();
+        sent.extend_from_slice(body);
+        stream.write_all(&sent).unwrap();
+        stream.flush().unwrap();
+        let mut received = Vec::new();
+        let mut chunk = [0; 4096];
+        let (head_len, length) = loop {
+            let read = stream.read(&mut chunk).unwrap();
+            assert!(read > 0, "the connection ended early");
+            received.extend_from_slice(&chunk[..read]);
+            if let Some(end) = received.windows(4).position(|w| w == b"\r\n\r\n") {
+                let head = String::from_utf8_lossy(&received[..end]).to_lowercase();
+                let length = head
+                    .lines()
+                    .find_map(|line| line.strip_prefix("content-length:"))
+                    .map_or(0, |len| len.trim().parse::<usize>().unwrap());
+                break (end + 4, length);
+            }
+        };
+        while received.len() < head_len + length {
+            let read = stream.read(&mut chunk).unwrap();
+            assert!(read > 0, "the connection ended early");
+            received.extend_from_slice(&chunk[..read]);
+        }
+        let head = String::from_utf8_lossy(&received[..head_len]).into_owned();
+        let mut lines = head.lines();
+        let status = lines
+            .next()
+            .unwrap()
+            .split_whitespace()
+            .nth(1)
+            .unwrap()
+            .parse()
+            .unwrap();
+        let headers = lines
+            .filter_map(|line| line.split_once(':'))
+            .map(|(name, value)| (name.to_lowercase(), value.trim().to_owned()))
+            .collect();
+        (
+            status,
+            headers,
+            received[head_len..head_len + length].to_vec(),
+        )
+    }
+
+    /// Asks `name` over DNS over QUIC, as `server_name`, on a stream of its
+    /// own, trusting any certificate.
+    fn doq_ask(addr: SocketAddr, server_name: &str, name: &str) -> Message {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let provider = Arc::new(rustls::crypto::ring::default_provider());
+            let mut config = rustls::ClientConfig::builder_with_provider(Arc::clone(&provider))
+                .with_protocol_versions(&[&rustls::version::TLS13])
+                .unwrap()
+                .dangerous()
+                .with_custom_certificate_verifier(Arc::new(TrustAll(provider)))
+                .with_no_client_auth();
+            config.alpn_protocols = vec![b"doq".to_vec()];
+            let crypto = quinn::crypto::rustls::QuicClientConfig::try_from(config).unwrap();
+            let mut endpoint = quinn::Endpoint::client("127.0.0.1:0".parse().unwrap()).unwrap();
+            endpoint.set_default_client_config(quinn::ClientConfig::new(Arc::new(crypto)));
+            let connection = endpoint.connect(addr, server_name).unwrap().await.unwrap();
+            let (mut send, mut recv) = connection.open_bi().await.unwrap();
+            let wire = query(name);
+            let mut frame = u16::try_from(wire.len()).unwrap().to_be_bytes().to_vec();
+            frame.extend_from_slice(&wire);
+            send.write_all(&frame).await.unwrap();
+            send.finish().unwrap();
+            let stream = recv.read_to_end(65_537).await.unwrap();
+            connection.close(0_u32.into(), b"");
+            endpoint.wait_idle().await;
+            Message::from_vec(&stream[2..]).unwrap()
+        })
+    }
+
+    trait ReadWrite: Read + Write {}
+    impl<T: Read + Write> ReadWrite for T {}
+
+    /// A JSON request to the API.
+    fn api(addr: SocketAddr, head: &str, body: &str) -> (u16, serde_json::Value) {
+        let mut stream = TcpStream::connect(addr).unwrap();
+        stream.set_read_timeout(Some(WAIT)).unwrap();
+        let (status, _, body) = request(
+            &mut stream,
+            "localhost",
+            &format!("{head}\r\nContent-Type: application/json"),
+            body.as_bytes(),
+        );
+        (status, serde_json::from_slice(&body).unwrap_or_default())
+    }
+
+    /// An Oblivious DoH target: keys at the well-known path, encrypted
+    /// queries and answers at `/dns-query`, logged as `odoh`.
+    #[test]
+    fn serves_oblivious_doh() {
+        use goethite_server::odoh::client::{parse_configs, seal_query};
+
+        let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+        let (cert, key) = (dir.join("odoh.crt"), dir.join("odoh.key"));
+        write_certificate(&cert, &key);
+        let config = format!(
+            "[server]\nlisten = \"127.0.0.1:0\"\n\n[server.tls]\ncert = {:?}\nkey = {:?}\n\
+             doh = \"127.0.0.1:0\"\nodoh = true\n\n[[upstream]]\naddress = \"{}\"\n",
+            cert.display().to_string(),
+            key.display().to_string(),
+            upstream()
+        );
+        let mut server = Running::start_config("oblivious_doh", &config);
+        let doh = field(&server.find_log("DNS over HTTPS listening"), "address");
+        let api_addr = field(&server.find_log("API listening"), "address");
+        server.find_log("Oblivious DoH target");
+
+        let mut stream = tls(doh, "dns.example", b"http/1.1");
+        let (status, _, configs) = request(
+            &mut stream,
+            "dns.example",
+            "GET /.well-known/odohconfigs HTTP/1.1",
+            b"",
+        );
+        assert_eq!(status, 200);
+        let target = parse_configs(&configs).unwrap();
+        let (wire, pending) = seal_query(&target, &query("example.com."), 32).unwrap();
+        let mut stream = tls(doh, "dns.example", b"http/1.1");
+        let (status, headers, body) = request(
+            &mut stream,
+            "dns.example",
+            "POST /dns-query HTTP/1.1\r\nContent-Type: application/oblivious-dns-message",
+            &wire,
+        );
+        assert_eq!(status, 200);
+        assert!(headers.contains(&(
+            "content-type".into(),
+            "application/oblivious-dns-message".into()
+        )));
+        let answer = Message::from_vec(&pending.open(&body).unwrap()).unwrap();
+        assert_eq!(
+            answer.answers[0].data,
+            RData::A(A(Ipv4Addr::new(192, 0, 2, 53)))
+        );
+
+        let (_, status) = api(api_addr, "GET /api/v1/status HTTP/1.1", "");
+        assert_eq!(status["encrypted"]["odoh"], true);
+        let mut logged = serde_json::Value::Null;
+        for _ in 0..100 {
+            let (_, page) = api(api_addr, "GET /api/v1/querylog HTTP/1.1", "");
+            if let Some(entry) = page["entries"].as_array().and_then(|e| e.first()) {
+                logged = entry.clone();
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert_eq!(logged["protocol"], "odoh", "{logged}");
+        assert_eq!(logged["name"], "example.com.");
+        server.signal("TERM");
+        assert!(server.wait_for_exit().success());
+    }
+
+    #[test]
+    fn serves_dns_over_tls_and_https_with_client_ids() {
+        let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+        let (cert, key) = (dir.join("dns-tls.crt"), dir.join("dns-tls.key"));
+        let first = write_certificate(&cert, &key);
+        let config = format!(
+            "[server]\nlisten = \"127.0.0.1:0\"\n\n[server.tls]\ncert = {:?}\nkey = {:?}\n\
+             server_name = \"dns.example\"\ndot = \"127.0.0.1:0\"\ndoh = \"127.0.0.1:0\"\n\
+             doq = \"127.0.0.1:0\"\n\n\
+             [[upstream]]\naddress = \"{}\"\n",
+            cert.display().to_string(),
+            key.display().to_string(),
+            upstream()
+        );
+        let mut server = Running::start_config("dns_over_tls_and_https", &config);
+        let dot = field(&server.find_log("DNS over TLS listening"), "address");
+        let doh = field(&server.find_log("DNS over HTTPS listening"), "address");
+        let doq = field(&server.find_log("DNS over QUIC listening"), "address");
+        let api_addr = field(&server.find_log("API listening"), "address");
+
+        let (status, kid) = api(
+            api_addr,
+            "POST /api/v1/clients HTTP/1.1",
+            r#"{"name": "Kid", "addresses": [], "ids": ["kid"]}"#,
+        );
+        assert_eq!(status, 201, "{kid}");
+        let kid = kid["id"].as_str().unwrap().to_owned();
+
+        // DNS over TLS, named by the server name.
+        let mut stream = tls(dot, "kid.dns.example", b"dot");
+        assert_eq!(stream.conn.alpn_protocol(), Some(&b"dot"[..]));
+        let peer_cert = |stream: &Tls| stream.conn.peer_certificates().unwrap()[0].to_vec();
+        assert_eq!(peer_cert(&stream), first);
+        let answer = dot_ask(&mut stream, "goethite.test.");
+        assert_eq!(answer.answers.len(), 1);
+        let forwarded = dot_ask(&mut stream, "example.com.");
+        assert_eq!(
+            forwarded.answers[0].data,
+            RData::A(A(Ipv4Addr::new(192, 0, 2, 53)))
+        );
+
+        // DNS over HTTPS, named by the path.
+        let mut stream = tls(doh, "dns.example", b"http/1.1");
+        let (status, headers, body) = request(
+            &mut stream,
+            "dns.example",
+            "POST /dns-query/kid HTTP/1.1\r\nContent-Type: application/dns-message",
+            &query("goethite.test."),
+        );
+        assert_eq!(status, 200);
+        assert!(headers.contains(&("cache-control".into(), "max-age=60".into())));
+        assert_eq!(Message::from_vec(&body).unwrap().answers.len(), 1);
+        let mut stream = tls(doh, "dns.example", b"http/1.1");
+        let (status, _, _) = request(&mut stream, "dns.example", "GET /nothing HTTP/1.1", b"");
+        assert_eq!(status, 404);
+
+        // DNS over QUIC, named by the server name.
+        let answer = doq_ask(doq, "kid.dns.example", "goethite.test.");
+        assert_eq!(answer.answers.len(), 1);
+
+        // All reach the query log, as the client with the ID.
+        let mut seen = Vec::new();
+        for _ in 0..100 {
+            let (_, page) = api(api_addr, "GET /api/v1/querylog HTTP/1.1", "");
+            seen = page["entries"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|entry| {
+                    (
+                        entry["protocol"].as_str().unwrap().to_owned(),
+                        entry["client_id"].as_str().map(str::to_owned),
+                    )
+                })
+                .collect();
+            if seen.len() >= 4 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let by_kid = |protocol: &str| {
+            seen.iter()
+                .filter(|(p, id)| p == protocol && id.as_deref() == Some(kid.as_str()))
+                .count()
+        };
+        assert_eq!(
+            (by_kid("dot"), by_kid("doh"), by_kid("doq")),
+            (2, 1, 1),
+            "{seen:?}"
+        );
+
+        // A renewed certificate is served after SIGHUP, to new connections.
+        let renewed = write_certificate(&cert, &key);
+        server.signal("HUP");
+        server.wait_for_log("serving the renewed DNS certificate");
+        assert_eq!(peer_cert(&tls(dot, "dns.example", b"dot")), renewed);
+
+        // A broken one is not.
+        std::fs::write(&key, "not a key").unwrap();
+        server.signal("HUP");
+        server.wait_for_log("still serving the DNS certificate in use");
+        let mut stream = tls(dot, "dns.example", b"dot");
+        assert_eq!(peer_cert(&stream), renewed);
+        assert_eq!(dot_ask(&mut stream, "goethite.test.").answers.len(), 1);
+
+        server.signal("TERM");
+        assert!(server.wait_for_exit().success());
+    }
+
+    /// A new node with no lists in its config file filters with the
+    /// default preset's lists, in the default group; once only.
+    #[test]
+    fn a_new_node_starts_with_the_default_lists() {
+        let store = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("default_list.redb");
+        let _ = std::fs::remove_file(&store);
+        let config = format!(
+            "[server]\nlisten = \"127.0.0.1:0\"\n\n[[upstream]]\naddress = \"{}\"\n\n\
+             [store]\npath = {:?}\n",
+            upstream(),
+            store.display().to_string()
+        );
+        for start in 0..2 {
+            let mut server = Running::start_exact("default_list", &config);
+            if start == 0 {
+                server.find_log("filtering with a default list");
+            }
+            let api_addr = field(&server.find_log("API listening"), "address");
+            let (_, lists) = api(api_addr, "GET /api/v1/lists HTTP/1.1", "");
+            let lists = lists.as_array().unwrap();
+            let names: Vec<&str> = lists
+                .iter()
+                .map(|list| list["spec"]["name"].as_str().unwrap())
+                .collect();
+            assert_eq!(
+                names,
+                [
+                    "HaGeZi Multi Normal",
+                    "HaGeZi Threat Intelligence Feeds Mini",
+                    "HaGeZi Fake"
+                ],
+                "start {start}"
+            );
+            assert_eq!(
+                lists[0]["spec"]["url"],
+                "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/multi.txt"
+            );
+            assert!(lists.iter().all(|list| list["spec"]["managed_by"] == "api"));
+            let (_, group) = api(api_addr, "GET /api/v1/groups/default HTTP/1.1", "");
+            let used: Vec<&serde_json::Value> = group["spec"]["lists"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|entry| &entry["list"])
+                .collect();
+            let ids: Vec<&serde_json::Value> = lists.iter().map(|list| &list["id"]).collect();
+            assert_eq!(used, ids);
+            server.signal("TERM");
+            assert!(server.wait_for_exit().success());
+        }
+        let _ = std::fs::remove_file(&store);
+    }
+
+    /// A group blocks a service from the catalog: every name the service
+    /// uses, logged as the service's.
+    #[test]
+    fn groups_block_services() {
+        let catalog = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("services.json");
+        std::fs::write(
+            &catalog,
+            r#"{"groups": [{"id": "social_network"}], "blocked_services": [
+                {"id": "tiktok", "name": "TikTok", "group": "social_network", "icon_svg": "<svg/>",
+                 "rules": ["||tiktok.com^", "||tiktokv.com^"]},
+                {"id": "youtube", "name": "YouTube", "group": "video",
+                 "rules": ["||youtube.com^"]}
+            ]}"#,
+        )
+        .unwrap();
+        let mut server = Running::start_with(
+            "groups_block_services",
+            upstream(),
+            &format!(
+                "\n[filter]\nservices_file = {:?}\n",
+                catalog.display().to_string()
+            ),
+        );
+        let udp = field(&server.find_log(DNS_LISTENING), "udp");
+        let api_addr = field(&server.find_log("API listening"), "address");
+        server.find_log("services catalog ready");
+        let (status, services) = api(api_addr, "GET /api/v1/services HTTP/1.1", "");
+        assert_eq!(status, 200, "{services}");
+        assert_eq!(services["source"], catalog.display().to_string());
+        assert_eq!(services["license"], "GPL-3.0");
+        let names: Vec<&str> = services["services"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|service| service["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["TikTok", "YouTube"]);
+
+        let (status, body) = api(
+            api_addr,
+            "PUT /api/v1/groups/default HTTP/1.1",
+            r#"{"name": "Default", "blocked_services": [{"service": "tiktok"}]}"#,
+        );
+        assert_eq!(status, 200, "{body}");
+        let blocked = ask(udp, "api16-normal.tiktokv.com.");
+        assert_eq!(
+            blocked.answers[0].data,
+            RData::A(A(Ipv4Addr::UNSPECIFIED)),
+            "blocked"
+        );
+        let allowed = ask(udp, "www.youtube.com.");
+        assert_eq!(
+            allowed.answers[0].data,
+            RData::A(A(Ipv4Addr::new(192, 0, 2, 53)))
+        );
+
+        let mut entry = serde_json::Value::Null;
+        for _ in 0..100 {
+            let (_, page) = api(
+                api_addr,
+                "GET /api/v1/querylog?outcome=blocked HTTP/1.1",
+                "",
+            );
+            if let Some(found) = page["entries"].as_array().and_then(|e| e.first()) {
+                entry = found.clone();
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert_eq!(entry["list"], "service:tiktok", "{entry}");
+        assert_eq!(entry["rule"], "||tiktokv.com^");
+        server.signal("TERM");
+        assert!(server.wait_for_exit().success());
     }
 
     #[test]

@@ -23,6 +23,48 @@ export const listsQuery = queryOptions({
 	refetchInterval: 30_000,
 })
 
+/** goethite's recommended lists and presets: built in, so fetched once. */
+export const recommendedQuery = queryOptions({
+	queryKey: ['recommended'],
+	queryFn: () => call(api.GET('/api/v1/lists/recommended')),
+	staleTime: Number.POSITIVE_INFINITY,
+})
+
+/** How big the recommended lists say they are, as the node read them (it keeps them a day). */
+export const recommendedSizesQuery = queryOptions({
+	queryKey: ['recommended', 'sizes'],
+	queryFn: () => call(api.GET('/api/v1/lists/recommended/sizes')),
+	staleTime: 3_600_000,
+	retry: false,
+	select: (sizes) => new Map(sizes.lists.map((size) => [size.id, size.entries])),
+})
+
+/** The FilterLists directory, as the node fetched it (it keeps it a day). */
+export const directoryQuery = queryOptions({
+	queryKey: ['directory'],
+	queryFn: () => call(api.GET('/api/v1/lists/directory')),
+	staleTime: 3_600_000,
+	retry: false,
+})
+
+/** One list's details from the FilterLists directory. */
+export const directoryListQuery = (id: number) =>
+	queryOptions({
+		queryKey: ['directory', id],
+		queryFn: () =>
+			call(api.GET('/api/v1/lists/directory/{id}', { params: { path: { id } } })),
+		staleTime: 3_600_000,
+		retry: false,
+	})
+
+/** The services groups can block, from the catalog the node downloads. */
+export const servicesQuery = queryOptions({
+	queryKey: ['services'],
+	queryFn: () => call(api.GET('/api/v1/services')),
+	staleTime: 3_600_000,
+	retry: false,
+})
+
 export const clientsQuery = queryOptions({
 	queryKey: ['clients'],
 	queryFn: () => call(api.GET('/api/v1/clients')),
@@ -34,11 +76,22 @@ export const clientsQuery = queryOptions({
 export interface LogSearch {
 	name?: string | undefined
 	outcome?: QueryOutcome | undefined
+	/** A client address, client ID or group ID. */
+	client?: string | undefined
+	/** Entries at or after this time (RFC 3339). */
+	since?: string | undefined
+	/** Entries before this time (RFC 3339). */
+	until?: string | undefined
 	before?: number | undefined
 }
 
 /** How many entries one page shows. */
 export const LOG_PAGE = 500
+
+/** Whether a search shows the newest entries as they come. */
+export function isLive(search: LogSearch): boolean {
+	return search.before === undefined && search.until === undefined
+}
 
 export const queryLogQuery = (search: LogSearch) =>
 	queryOptions({
@@ -51,12 +104,16 @@ export const queryLogQuery = (search: LogSearch) =>
 							limit: LOG_PAGE,
 							...(search.name === undefined ? {} : { name: search.name }),
 							...(search.outcome === undefined ? {} : { outcome: search.outcome }),
+							...(search.client === undefined ? {} : { client: search.client }),
+							...(search.since === undefined ? {} : { since: search.since }),
+							...(search.until === undefined ? {} : { until: search.until }),
 							...(search.before === undefined ? {} : { before: search.before }),
 						},
 					},
 				}),
 			),
-		// The newest page follows the log live; older pages stand still.
-		refetchInterval: search.before === undefined ? 3_000 : false,
+		// The newest page follows the log live; older pages and closed time
+		// windows stand still.
+		refetchInterval: isLive(search) ? 3_000 : false,
 		placeholderData: (previous) => previous,
 	})

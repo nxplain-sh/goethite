@@ -34,7 +34,12 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
+use crate::auth::PeerAddr;
+use crate::catalog::{Directory, DirectoryList};
 use crate::error::{ApiError, ApiJson, ErrorBody};
+use crate::leak::{LeakTest, LeakTestList};
+use crate::recommended::{self, Recommended, RecommendedSizes};
+use crate::services::Services;
 use crate::{Api, Change, Status};
 
 type Shared = State<Arc<Api>>;
@@ -321,7 +326,9 @@ pub(crate) async fn health() -> Json<Health> {
     responses((status = 200, description = "The status", body = Status)),
     security(("token" = [])))]
 pub(crate) async fn get_status(State(api): Shared) -> Json<Status> {
-    Json(api.control.status())
+    let mut status = api.control.status();
+    status.api_docs = api.config.docs.is_some();
+    Json(status)
 }
 
 /// The filtering settings.
@@ -468,6 +475,9 @@ pub(crate) struct QueryLogParams {
     /// Only entries at or after this time (RFC 3339).
     #[param(value_type = Option<String>, format = DateTime)]
     since: Option<Timestamp>,
+    /// Only entries before this time (RFC 3339).
+    #[param(value_type = Option<String>, format = DateTime)]
+    until: Option<Timestamp>,
 }
 
 /// Searches the query log, newest first. A search looks at no more than
@@ -487,6 +497,7 @@ pub(crate) async fn get_querylog(
         name: params.name,
         outcome: params.outcome,
         since: params.since,
+        until: params.until,
     };
     let store = Arc::clone(&api.store);
     Ok(Json(blocking(move || store.search_queries(&search)).await?))
@@ -591,6 +602,133 @@ pub(crate) async fn get_metrics(State(api): Shared) -> Response {
         .into_response()
 }
 
+/// The filter lists goethite recommends, each checked to download and read
+/// cleanly, by category: one base list against ads and trackers, security
+/// lists to stack on it, optional lists by topic, and legacy lists the base
+/// lists include. Lists that do the same job name each other in `excludes`.
+/// Presets are sets of them for a group; the `default` one is what a new
+/// node starts with.
+#[utoipa::path(get, path = "/api/v1/lists/recommended", tag = "lists",
+    responses((status = 200, description = "Recommended lists and presets", body = Recommended)),
+    security(("token" = [])))]
+pub(crate) async fn recommended_lists() -> Json<Recommended> {
+    Json(recommended::RECOMMENDED)
+}
+
+/// How big the recommended lists say they are, read from the start of each
+/// list by the node when asked, and kept for a day. Lists whose header
+/// states no size are left out.
+#[utoipa::path(get, path = "/api/v1/lists/recommended/sizes", tag = "lists",
+    responses(
+        (status = 200, description = "The sizes", body = RecommendedSizes),
+        (status = 503, description = "Turned off on this node", body = ErrorBody),
+    ),
+    security(("token" = [])))]
+pub(crate) async fn recommended_sizes(
+    State(api): Shared,
+) -> Result<Json<RecommendedSizes>, ApiError> {
+    Ok(Json(api.control.recommended_sizes().await?))
+}
+
+/// The FilterLists directory (filterlists.com): the lists goethite can
+/// read, allowlists left out. The node fetches it when asked, and keeps it
+/// for a day.
+#[utoipa::path(get, path = "/api/v1/lists/directory", tag = "lists",
+    responses(
+        (status = 200, description = "The directory", body = Directory),
+        (status = 503, description = "Turned off on this node, or FilterLists cannot be reached", body = ErrorBody),
+    ),
+    security(("token" = [])))]
+pub(crate) async fn get_directory(State(api): Shared) -> Result<Json<Directory>, ApiError> {
+    Ok(Json(api.control.directory().await?))
+}
+
+/// A list's details from the FilterLists directory, with its `https://`
+/// addresses. Licenses and descriptions are FilterLists' and may be out of
+/// date.
+#[utoipa::path(get, path = "/api/v1/lists/directory/{id}", tag = "lists",
+    params(("id" = u64, Path, description = "The list's FilterLists ID")),
+    responses(
+        (status = 200, description = "The list", body = DirectoryList),
+        (status = 503, description = "Turned off on this node, or FilterLists cannot be reached", body = ErrorBody),
+    ),
+    security(("token" = [])))]
+pub(crate) async fn get_directory_list(
+    State(api): Shared,
+    Path(id): Path<String>,
+) -> Result<Json<DirectoryList>, ApiError> {
+    let id = id
+        .parse::<u64>()
+        .map_err(|_| ApiError::bad_request("a FilterLists ID is a number"))?;
+    Ok(Json(api.control.directory_list(id).await?))
+}
+
+/// The services groups can block (`blocked_services`), such as TikTok or
+/// YouTube, with the rules that block them. The catalog is AdGuard's
+/// HostlistsRegistry (GPL-3.0), which the node downloads and refreshes with
+/// the filter lists.
+#[utoipa::path(get, path = "/api/v1/services", tag = "groups",
+    responses(
+        (status = 200, description = "The services", body = Services),
+        (status = 503, description = "Turned off on this node", body = ErrorBody),
+    ),
+    security(("token" = [])))]
+pub(crate) async fn get_services(State(api): Shared) -> Result<Json<Services>, ApiError> {
+    Ok(Json(api.control.services()?))
+}
+
+/// Starts a DNS leak test: names under `leak.goethite.test` that only
+/// goethite answers, for the device being tested to look up. The lookups
+/// that reach this node are recorded for an hour; names that never arrive
+/// were asked of another resolver. Tests live in memory, on this node.
+#[utoipa::path(post, path = "/api/v1/leak-tests", tag = "node",
+    responses(
+        (status = 201, description = "The test, with the names to look up", body = LeakTest),
+        (status = 503, description = "Not run on this node", body = ErrorBody),
+    ),
+    security(("token" = [])))]
+pub(crate) async fn create_leak_test(
+    State(api): Shared,
+    peer: Option<Extension<PeerAddr>>,
+) -> Result<(StatusCode, Json<LeakTest>), ApiError> {
+    let requested_by = peer.map(|Extension(peer)| peer.0.ip());
+    let test = api.control.leak_tests()?.create(requested_by);
+    Ok((StatusCode::CREATED, Json(test)))
+}
+
+/// The DNS leak tests this node keeps, newest first, with the lookups
+/// that reached it.
+#[utoipa::path(get, path = "/api/v1/leak-tests", tag = "node",
+    responses(
+        (status = 200, description = "The tests", body = LeakTestList),
+        (status = 503, description = "Not run on this node", body = ErrorBody),
+    ),
+    security(("token" = [])))]
+pub(crate) async fn list_leak_tests(State(api): Shared) -> Result<Json<LeakTestList>, ApiError> {
+    Ok(Json(api.control.leak_tests()?.list()))
+}
+
+/// A DNS leak test: which of its names reached this node, from where, how
+/// and as which client.
+#[utoipa::path(get, path = "/api/v1/leak-tests/{id}", tag = "node",
+    params(("id" = String, Path, description = "The test's ID")),
+    responses(
+        (status = 200, description = "The test", body = LeakTest),
+        (status = 404, description = "No such test, or it expired", body = ErrorBody),
+        (status = 503, description = "Not run on this node", body = ErrorBody),
+    ),
+    security(("token" = [])))]
+pub(crate) async fn get_leak_test(
+    State(api): Shared,
+    Path(id): Path<String>,
+) -> Result<Json<LeakTest>, ApiError> {
+    api.control
+        .leak_tests()?
+        .get(&id)
+        .map(Json)
+        .ok_or_else(|| ApiError::not_found("no such leak test; tests are kept for an hour"))
+}
+
 /// Every route that needs authentication.
 pub(crate) fn routes() -> Router<Arc<Api>> {
     Router::new()
@@ -602,6 +740,10 @@ pub(crate) fn routes() -> Router<Arc<Api>> {
         )
         .route("/api/v1/lists", get(list_lists).post(create_list))
         .route("/api/v1/lists/refresh", post(refresh_lists))
+        .route("/api/v1/lists/recommended", get(recommended_lists))
+        .route("/api/v1/lists/recommended/sizes", get(recommended_sizes))
+        .route("/api/v1/lists/directory", get(get_directory))
+        .route("/api/v1/lists/directory/{id}", get(get_directory_list))
         .route(
             "/api/v1/lists/{id}",
             get(get_list).put(update_list).delete(delete_list),
@@ -616,6 +758,12 @@ pub(crate) fn routes() -> Router<Arc<Api>> {
             "/api/v1/groups/{id}",
             get(get_group).put(update_group).delete(delete_group),
         )
+        .route("/api/v1/services", get(get_services))
+        .route(
+            "/api/v1/leak-tests",
+            get(list_leak_tests).post(create_leak_test),
+        )
+        .route("/api/v1/leak-tests/{id}", get(get_leak_test))
         .route("/api/v1/clients", get(list_clients).post(create_client))
         .route(
             "/api/v1/clients/{id}",

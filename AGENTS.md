@@ -94,7 +94,7 @@ Shared by the web UI and (where possible) the TUI.
 - Thick borders (3px, ink color), hard offset shadows with no blur (`6px 6px 0 ink`), no gradients, little or no rounding, buttons that "press" (shadow shrinks, element shifts).
 - Type: Space Grotesk (headings/UI), JetBrains Mono (domains, IPs, numbers). Self-host fonts — no CDNs at runtime.
 - Palette (light): bg `#F2ECE1`, panel `#FFFDF8`, ink `#111111`, accent ochre `#E8A33D`, blocked rust `#A63D22`, ok teal `#1D6B5F`, cached `#F6DFA8`.
-- Palette (dark): bg `#15120E`, panel `#211C16`, ink `#F2ECE1`, rust `#E06A4B`, teal `#5CC2B0`.
+- The web UI has one theme, light. Palette (dark), for the website only: bg `#15120E`, panel `#211C16`, ink `#F2ECE1`, rust `#E06A4B`, teal `#5CC2B0`.
 - Accessibility: 4.5:1 text contrast, visible focus states, never rely on color alone (blocked/allowed always carry a text label).
 
 ## Roadmap (respect the order)

@@ -1,5 +1,5 @@
-//! Keys and certificates read from files: the API's TLS certificate and
-//! the cluster's.
+//! Keys and certificates read from files: the API's TLS certificate, the
+//! one for DNS over TLS and HTTPS, and the cluster's.
 //!
 //! They are read before privileges are dropped, so the files may be
 //! readable by root only, and kept in memory: on an upgrade, the new
@@ -38,6 +38,9 @@ pub struct ClusterPem {
 pub struct Secrets {
     /// The API's TLS certificate, if it serves HTTPS.
     pub api_tls: Option<CertAndKey>,
+    /// The certificate for DNS over TLS and HTTPS, if they are served.
+    #[serde(default)]
+    pub dns_tls: Option<CertAndKey>,
     /// The cluster's certificates, if the node is in a cluster.
     pub cluster: Option<ClusterPem>,
 }
@@ -46,6 +49,7 @@ impl std::fmt::Debug for Secrets {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Secrets")
             .field("api_tls", &self.api_tls.is_some())
+            .field("dns_tls", &self.dns_tls.is_some())
             .field("cluster", &self.cluster.is_some())
             .finish()
     }
@@ -69,6 +73,13 @@ impl Secrets {
             }),
             _ => None,
         };
+        let dns_tls = match &config.server.tls {
+            Some(tls) => Some(CertAndKey {
+                cert: read(&tls.cert, "the DNS certificate")?,
+                key: read(&tls.key, "the DNS key")?,
+            }),
+            None => None,
+        };
         let cluster = match &config.cluster {
             Some(cluster) => Some(ClusterPem {
                 ca: read(&cluster.ca, "the cluster CA")?,
@@ -79,7 +90,11 @@ impl Secrets {
             }),
             None => None,
         };
-        Ok(Self { api_tls, cluster })
+        Ok(Self {
+            api_tls,
+            dns_tls,
+            cluster,
+        })
     }
 
     /// Reads the files if this process can (picking up renewed

@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use arc_swap::ArcSwapOption;
 use goethite_api::Api;
+use goethite_api::leak::LeakTests;
 use goethite_resolver::{PolicyState, Resolver, TlsRoots, tls_client_config};
 use goethite_server::ServerStats;
 use goethite_store::{QueryLog, Store};
@@ -21,12 +22,15 @@ use tokio::sync::watch;
 use tokio::task::JoinSet;
 use tracing::{error, info, warn};
 
+use crate::certs::Served;
 use crate::cluster::{self, Cluster};
 use crate::config::{Config, OnFailure};
 use crate::control::Control;
+use crate::filterlists::FilterLists;
 use crate::lists::ListStore;
 use crate::metrics::Metrics;
 use crate::secrets::Secrets;
+use crate::sizes::ListSizes;
 use crate::sockets::Sockets;
 use crate::{download, filters, node};
 
@@ -45,8 +49,12 @@ pub struct DataPlane {
     pub server: Arc<ServerStats>,
     /// The query log the DNS server writes to, while there is one.
     pub log: Arc<ArcSwapOption<QueryLog>>,
+    /// The certificate for DNS over TLS and HTTPS, if they are served.
+    pub dns_cert: Option<Arc<Served>>,
     /// When goethite started.
     pub started: Timestamp,
+    /// DNS leak tests, which the DNS server feeds.
+    pub leak: Arc<LeakTests>,
 }
 
 /// The running control plane.
@@ -97,6 +105,7 @@ impl ControlPlane {
             Arc::clone(&store),
             Arc::clone(&data.state),
             ListStore::new(config.lists_dir()),
+            config.filter.services_from(),
         );
         // Filter from the first query on, with the lists already on disk.
         if !control.rebuild_filter().await {
@@ -112,7 +121,14 @@ impl ControlPlane {
         if first && !control.store().config().settings.spec.protection {
             info!("filtering is turned off in the settings");
         }
-        crate::reload_on_hangup(Arc::clone(&control), &mut tasks, stopped.clone())?;
+        let api_cert = api_cert(config, secrets)?;
+        let reloadable = api_cert.iter().chain(&data.dns_cert).cloned().collect();
+        crate::reload_on_hangup(
+            Arc::clone(&control),
+            reloadable,
+            &mut tasks,
+            stopped.clone(),
+        )?;
         let cluster = match (&config.cluster, &secrets.cluster) {
             (Some(section), Some(pem)) => {
                 let listeners = sockets
@@ -131,6 +147,7 @@ impl ControlPlane {
             (None, _) => None,
         };
         let tls = tls_client_config(&TlsRoots::Bundled, &[b"h2", b"http/1.1"])?;
+        let (filterlists, sizes) = lookups(config, data, &tls).unzip();
         let downloader =
             download::Downloader::new(Arc::clone(&data.resolver), tls, filters::MAX_LIST_LEN);
         control.spawn(downloader, &mut tasks, &stopped);
@@ -144,11 +161,14 @@ impl ControlPlane {
             started: data.started,
             store_problem,
             cluster: cluster.clone(),
+            encrypted: encrypted_status(config),
+            filterlists,
+            sizes,
+            leak: Arc::clone(&data.leak),
         };
-        let api_tls = secrets
-            .api_tls
+        let api_tls = api_cert
             .as_ref()
-            .map(|pem| crate::load_tls(&pem.cert, &pem.key))
+            .map(|cert| cert.server_config(&[b"h2", b"http/1.1"]))
             .transpose()?;
         // The API exists even when it is not served: the primary runs the
         // replica's forwarded changes through it.
@@ -156,15 +176,7 @@ impl ControlPlane {
         if let Some(cluster) = &cluster {
             cluster.set_api(Arc::clone(&api));
         }
-        if let Some(listeners) = sockets.api_listeners()? {
-            let api = Arc::clone(&api);
-            let until = crate::until(stopped.clone());
-            tasks.spawn(async move {
-                if let Err(err) = goethite_api::serve(listeners, api, until).await {
-                    error!(%err, "the API failed");
-                }
-            });
-        }
+        serve_api(sockets, &api, &mut tasks, &stopped)?;
         Ok(Self {
             stop,
             tasks,
@@ -220,4 +232,71 @@ impl ControlPlane {
         }
         Ok(())
     }
+}
+
+/// The API's certificate, if it serves HTTPS.
+fn api_cert(config: &Config, secrets: &Secrets) -> Result<Option<Arc<Served>>> {
+    secrets
+        .api_tls
+        .as_ref()
+        .map(|pem| {
+            let files = config.api.tls_cert.clone().zip(config.api.tls_key.clone());
+            Served::new("API certificate", pem, files)
+        })
+        .transpose()
+}
+
+/// Serves the API on its sockets, if it has any, until `stopped`.
+fn serve_api(
+    sockets: &Sockets,
+    api: &Arc<Api>,
+    tasks: &mut JoinSet<()>,
+    stopped: &watch::Receiver<bool>,
+) -> Result<()> {
+    if let Some(listeners) = sockets.api_listeners()? {
+        let api = Arc::clone(api);
+        let until = crate::until(stopped.clone());
+        tasks.spawn(async move {
+            if let Err(err) = goethite_api::serve(listeners, api, until).await {
+                error!(%err, "the API failed");
+            }
+        });
+    }
+    Ok(())
+}
+
+/// How clients reach this node over DNS over TLS, HTTPS and QUIC, for the
+/// API.
+fn encrypted_status(config: &Config) -> Option<goethite_api::EncryptedStatus> {
+    let server = config.server_config();
+    config
+        .server
+        .tls
+        .as_ref()
+        .map(|_| goethite_api::EncryptedStatus {
+            server_name: server.server_name,
+            dot: server.dot.iter().map(ToString::to_string).collect(),
+            doh: server.doh.iter().map(ToString::to_string).collect(),
+            doq: server.doq.iter().map(ToString::to_string).collect(),
+            odoh: server.odoh,
+        })
+}
+
+/// What the node looks up for the Lists page, the FilterLists directory
+/// and the recommended lists' sizes, unless `[filter] directory` turns it
+/// off.
+fn lookups(
+    config: &Config,
+    data: &DataPlane,
+    tls: &Arc<rustls::ClientConfig>,
+) -> Option<(Arc<FilterLists>, Arc<ListSizes>)> {
+    config.filter.directory.then(|| {
+        (
+            Arc::new(FilterLists::new(
+                Arc::clone(&data.resolver),
+                Arc::clone(tls),
+            )),
+            Arc::new(ListSizes::new(Arc::clone(&data.resolver), Arc::clone(tls))),
+        )
+    })
 }

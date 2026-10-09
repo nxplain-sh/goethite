@@ -1,3 +1,5 @@
+import type { QueryEntry } from './api/client'
+
 const integer = new Intl.NumberFormat()
 
 /** 12,345 */
@@ -28,6 +30,22 @@ export function clock(iso: string): string {
 	return new Date(iso).toLocaleTimeString([], { hour12: false })
 }
 
+/** 14:03:59 today, Oct 6, 14:03:59 on other days. */
+export function moment(iso: string): string {
+	const date = new Date(iso)
+	if (date.toDateString() === new Date().toDateString()) {
+		return clock(iso)
+	}
+	return date.toLocaleString([], {
+		month: 'short',
+		day: 'numeric',
+		hour: '2-digit',
+		minute: '2-digit',
+		second: '2-digit',
+		hour12: false,
+	})
+}
+
 /** Oct 8, 14:03 */
 export function dateTime(iso: string): string {
 	return new Date(iso).toLocaleString([], {
@@ -37,4 +55,14 @@ export function dateTime(iso: string): string {
 		minute: '2-digit',
 		hour12: false,
 	})
+}
+
+/** How a query arrived, as people call it. */
+export const PROTOCOL_LABEL: Record<QueryEntry['protocol'], string> = {
+	udp: 'UDP',
+	tcp: 'TCP',
+	dot: 'DoT',
+	doh: 'DoH',
+	doq: 'DoQ',
+	odoh: 'ODoH',
 }

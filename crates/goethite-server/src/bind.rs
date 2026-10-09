@@ -10,7 +10,10 @@
 //! datagrams over them by source address and port, so receiving scales with
 //! the cores instead of funnelling through one socket. Other platforms get a
 //! single UDP socket per address. IPv6 sockets are IPv6-only, so `0.0.0.0`
-//! and `[::]` can be listened on side by side.
+//! and `[::]` can be listened on side by side. DNS over TLS and HTTPS get a
+//! TCP listener per address of their own, and DNS over QUIC one UDP socket
+//! per address: QUIC connections cannot be spread over sockets by address
+//! and port.
 
 use std::io;
 use std::net::{SocketAddr, TcpListener, UdpSocket};
@@ -52,12 +55,18 @@ pub(crate) struct Bound {
 #[derive(Debug)]
 pub struct Listeners {
     pub(crate) addresses: Vec<Bound>,
+    pub(crate) dot: Vec<TcpListener>,
+    pub(crate) doh: Vec<TcpListener>,
+    pub(crate) doq: Vec<UdpSocket>,
 }
 
 impl Listeners {
     /// Binds a TCP listener and [`ServerConfig::udp_sockets`] UDP sockets
     /// (one on platforms other than Linux) on each address in
-    /// [`ServerConfig::listen`]. Does not need an async runtime.
+    /// [`ServerConfig::listen`], a TCP listener on each address in
+    /// [`ServerConfig::dot`] and [`ServerConfig::doh`], and a UDP socket on
+    /// each address in [`ServerConfig::doq`]. Does not need an async
+    /// runtime.
     ///
     /// # Errors
     ///
@@ -68,8 +77,10 @@ impl Listeners {
         if config.listen.is_empty() {
             return Err(ServerError::NoListenAddresses);
         }
-        if config.listen.len() > MAX_LISTEN_ADDRESSES {
-            return Err(ServerError::TooManyListenAddresses(config.listen.len()));
+        for list in [&config.listen, &config.dot, &config.doh, &config.doq] {
+            if list.len() > MAX_LISTEN_ADDRESSES {
+                return Err(ServerError::TooManyListenAddresses(list.len()));
+            }
         }
         let udp_sockets = if cfg!(target_os = "linux") {
             config.udp_sockets.clamp(1, MAX_UDP_SOCKETS)
@@ -81,24 +92,76 @@ impl Listeners {
             .iter()
             .map(|&addr| bind_address(addr, udp_sockets, config.freebind.contains(&addr.ip())))
             .collect::<Result<_, _>>()?;
-        Ok(Self { addresses })
+        let listen = |addresses: &[SocketAddr], transport| {
+            addresses
+                .iter()
+                .map(|&addr| {
+                    tcp_listener(addr, config.freebind.contains(&addr.ip())).map_err(|source| {
+                        ServerError::Bind {
+                            transport,
+                            addr,
+                            source,
+                        }
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()
+        };
+        let doq = config
+            .doq
+            .iter()
+            .map(|&addr| {
+                udp_socket(addr, false, config.freebind.contains(&addr.ip())).map_err(|source| {
+                    ServerError::Bind {
+                        transport: Transport::Quic,
+                        addr,
+                        source,
+                    }
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Self {
+            addresses,
+            dot: listen(&config.dot, Transport::Tls)?,
+            doh: listen(&config.doh, Transport::Https)?,
+            doq,
+        })
     }
 
     /// Listeners from sockets bound before, by an earlier goethite process
     /// or by systemd: for each listen address, its UDP sockets and its TCP
-    /// listener. The caller has checked what they are; they are made
+    /// listener; the DNS over TLS and HTTPS listeners; and the DNS over QUIC
+    /// sockets. The caller has checked what they are; they are made
     /// non-blocking here.
     ///
     /// # Errors
     ///
     /// If there are no addresses, too many, an address without UDP sockets
     /// or with too many, or a socket refuses to become non-blocking.
-    pub fn from_sockets(addresses: Vec<(Vec<UdpSocket>, TcpListener)>) -> io::Result<Self> {
+    pub fn from_sockets(
+        addresses: Vec<(Vec<UdpSocket>, TcpListener)>,
+        dot: Vec<TcpListener>,
+        doh: Vec<TcpListener>,
+        doq: Vec<UdpSocket>,
+    ) -> io::Result<Self> {
         if addresses.is_empty() || addresses.len() > MAX_LISTEN_ADDRESSES {
             return Err(io::Error::other(format!(
                 "{} listen addresses; 1 to {MAX_LISTEN_ADDRESSES} are supported",
                 addresses.len()
             )));
+        }
+        if [dot.len(), doh.len(), doq.len()]
+            .iter()
+            .any(|len| *len > MAX_LISTEN_ADDRESSES)
+        {
+            return Err(io::Error::other(format!(
+                "at most {MAX_LISTEN_ADDRESSES} DNS over TLS, HTTPS or QUIC sockets are supported"
+            )));
+        }
+        for listener in dot.iter().chain(&doh) {
+            listener.set_nonblocking(true)?;
+        }
+        for socket in &doq {
+            socket.set_nonblocking(true)?;
         }
         let mut bound = Vec::with_capacity(addresses.len());
         for (udp, tcp) in addresses {
@@ -114,7 +177,12 @@ impl Listeners {
             tcp.set_nonblocking(true)?;
             bound.push(Bound { udp, tcp });
         }
-        Ok(Self { addresses: bound })
+        Ok(Self {
+            addresses: bound,
+            dot,
+            doh,
+            doq,
+        })
     }
 
     /// For each listen address, its UDP sockets and its TCP listener.
@@ -122,6 +190,21 @@ impl Listeners {
         self.addresses
             .iter()
             .map(|bound| (bound.udp.as_slice(), &bound.tcp))
+    }
+
+    /// The DNS over TLS listeners, in the order of [`ServerConfig::dot`].
+    pub fn dot(&self) -> &[TcpListener] {
+        &self.dot
+    }
+
+    /// The DNS over HTTPS listeners, in the order of [`ServerConfig::doh`].
+    pub fn doh(&self) -> &[TcpListener] {
+        &self.doh
+    }
+
+    /// The DNS over QUIC sockets, in the order of [`ServerConfig::doq`].
+    pub fn doq(&self) -> &[UdpSocket] {
+        &self.doq
     }
 
     /// The local address of each listen address's UDP sockets.

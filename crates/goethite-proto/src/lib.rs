@@ -15,6 +15,7 @@
 #![forbid(unsafe_code)]
 
 mod codec;
+pub mod dnssec;
 mod hickory_codec;
 mod message;
 mod name;
@@ -23,7 +24,8 @@ mod types;
 pub use codec::{DecodeError, DnsCodec, EncodeError, ErrorContext, ResponseError, WireError};
 pub use hickory_codec::HickoryCodec;
 pub use message::{
-    Edns, HEADER_LEN, MAX_UDP_PAYLOAD, MIN_UDP_PAYLOAD, Query, Question, Record, Response,
+    Edns, HEADER_LEN, MAX_UDP_PAYLOAD, MIN_UDP_PAYLOAD, QUERY_PADDING_BLOCK, Query, Question,
+    RESPONSE_PADDING_BLOCK, Record, Response,
 };
 pub use name::{Name, NameError};
 pub use types::{Opcode, RecordClass, RecordType, ResponseCode};

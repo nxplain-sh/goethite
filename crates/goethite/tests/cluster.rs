@@ -65,6 +65,11 @@ listen = "127.0.0.1:0"
 [[upstream]]
 address = "192.0.2.1"
 
+[filter]
+# Offline: no default list or services catalog to download.
+default_lists = false
+services = false
+
 [api]
 listen = "127.0.0.1:0"
 

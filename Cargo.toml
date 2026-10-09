@@ -5,7 +5,7 @@ members = ["crates/*"]
 exclude = ["fuzz"]
 
 [workspace.package]
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 rust-version = "1.99"
 license = "MIT OR Apache-2.0"
@@ -32,12 +32,14 @@ axum = { version = "0.8.9", default-features = false, features = ["http1", "http
 clap = { version = "4.6.7", features = ["derive"] }
 fst = { version = "0.4.7", default-features = false }
 criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
-hickory-proto = { version = "0.26.3", default-features = false, features = ["std"] }
+hickory-proto = { version = "0.26.3", default-features = false, features = ["std", "dnssec-ring"] }
+hpke = { version = "0.14.1", default-features = false, features = ["alloc", "aes", "x25519"] }
 http-body-util = "0.1.5"
 hyper = { version = "1.12.0", default-features = false, features = ["client", "http1", "http2"] }
 hyper-util = { version = "0.1.21", default-features = false, features = ["tokio"] }
 jiff = { version = "0.2.38", features = ["serde"] }
 proptest = "1.11.0"
+quinn = { version = "0.11.12", default-features = false, features = ["runtime-tokio", "rustls-ring"] }
 ratatui = { version = "0.30.2", default-features = false, features = ["crossterm_0_29", "layout-cache"] }
 rand = { version = "0.10.3", default-features = false, features = ["std", "thread_rng"] }
 rcgen = { version = "0.14.10", default-features = false, features = ["ring", "pem"] }

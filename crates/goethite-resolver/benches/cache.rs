@@ -43,6 +43,7 @@ fn query(name: &str) -> Query {
         edns: Some(Edns {
             udp_payload_size: 1232,
             dnssec_ok: false,
+            padding: false,
         }),
     }
 }
@@ -108,6 +109,7 @@ fn policy() -> Policy {
         .map(|i| ClientPolicy {
             id: format!("client{i}").into(),
             addresses: vec![IpAddr::from(Ipv4Addr::new(192, 168, 1, i)).into_cidr()],
+            ids: Vec::new(),
             group: usize::from(i % 2),
         })
         .collect();
@@ -122,6 +124,7 @@ fn policy() -> Policy {
         block_response: BlockResponse::NullIp,
         blocked_ttl: 10,
         protection: true,
+        services: Arc::new(goethite_resolver::ServiceFilter::empty()),
     })
     .unwrap()
 }

@@ -18,11 +18,16 @@
 #![forbid(unsafe_code)]
 
 mod auth;
+pub mod catalog;
 mod cluster;
+mod docs;
 mod error;
 mod handlers;
+pub mod leak;
 mod openapi;
+pub mod recommended;
 mod serve;
+pub mod services;
 mod web;
 
 use std::future::Future;
@@ -49,6 +54,7 @@ pub use cluster::{
     ClusterRole, ClusterStatus, Forwarded, ForwardedAnswer, PeerStatus, RoleChange, SyncStatus,
     Writes, execute,
 };
+pub use docs::{EmbeddedDocs, SCALAR as DOCS_SCALAR};
 pub use error::{ApiError, ErrorBody, ErrorDetail};
 pub use openapi::{openapi, openapi_json};
 pub use serve::{ApiListeners, MAX_CONNECTIONS, Serving, serve, serve_router};
@@ -74,6 +80,9 @@ pub struct ApiConfig {
     pub tls: Option<Arc<rustls::ServerConfig>>,
     /// The web UI's files; no web UI without them.
     pub web: Option<Arc<dyn WebAssets>>,
+    /// The API reference's files (see [`EmbeddedDocs`]): served at
+    /// `/api/docs` to loopback clients only. Off without them.
+    pub docs: Option<Arc<dyn WebAssets>>,
 }
 
 /// What changed in the store, so the data plane knows what to recompile.
@@ -111,6 +120,42 @@ pub trait Control: Send + Sync + 'static {
         None
     }
 
+    /// The FilterLists directory, as far as goethite can use it.
+    fn directory(&self) -> BoxResult<'_, catalog::Directory> {
+        Box::pin(async { Err(directory_off()) })
+    }
+
+    /// A list's details from the FilterLists directory.
+    fn directory_list(&self, id: u64) -> BoxResult<'_, catalog::DirectoryList> {
+        let _ = id;
+        Box::pin(async { Err(directory_off()) })
+    }
+
+    /// How big the recommended lists say they are.
+    fn recommended_sizes(&self) -> BoxResult<'_, recommended::RecommendedSizes> {
+        Box::pin(async { Err(directory_off()) })
+    }
+
+    /// The services groups can block.
+    ///
+    /// # Errors
+    ///
+    /// [`services_off`] when this node does not use the catalog.
+    fn services(&self) -> Result<services::Services, ApiError> {
+        Err(services_off())
+    }
+
+    /// This node's DNS leak tests.
+    ///
+    /// # Errors
+    ///
+    /// When this node does not run them.
+    fn leak_tests(&self) -> Result<&leak::LeakTests, ApiError> {
+        Err(ApiError::unavailable(
+            "this node does not run DNS leak tests",
+        ))
+    }
+
     /// Where configuration changes made through this node go.
     fn writes(&self) -> Writes {
         Writes::Local
@@ -141,6 +186,20 @@ pub trait Control: Send + Sync + 'static {
     }
 }
 
+/// The answer when this node does not use the FilterLists directory.
+pub fn directory_off() -> ApiError {
+    ApiError::unavailable(
+        "looking lists up is turned off on this node ([filter] directory in its config file)",
+    )
+}
+
+/// The answer when this node does not use the services catalog.
+pub fn services_off() -> ApiError {
+    ApiError::unavailable(
+        "blocked services are turned off on this node ([filter] services in its config file)",
+    )
+}
+
 /// How the node is doing.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct Status {
@@ -157,8 +216,11 @@ pub struct Status {
     pub filter: FilterStatus,
     /// Each list, by ID.
     pub lists: Vec<ListStatus>,
-    /// The upstreams, in configured order.
+    /// The upstreams, in configured order; none with recursion.
     pub upstreams: Vec<UpstreamStatus>,
+    /// Recursive resolution, when it is on instead of upstreams.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recursion: Option<RecursionStatus>,
     /// The cache, if there is one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache: Option<CacheStatus>,
@@ -167,6 +229,13 @@ pub struct Status {
     /// This node's cluster, if it is in one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cluster: Option<ClusterStatus>,
+    /// DNS over TLS, HTTPS and QUIC, if this node serves them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encrypted: Option<EncryptedStatus>,
+    /// Whether this node serves its API reference at `/api/docs` (to
+    /// loopback clients only).
+    #[serde(default)]
+    pub api_docs: bool,
     /// What is wrong with this node, in words, such as filtering running
     /// without its store. Empty when all is well.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -234,6 +303,63 @@ pub struct CacheStatus {
     pub misses: u64,
 }
 
+/// How clients reach this node over DNS over TLS, HTTPS and QUIC.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct EncryptedStatus {
+    /// The name clients reach it by, such as `dns.example`, if configured:
+    /// a client ID goes in front of it, as in `anna-phone.dns.example`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_name: Option<String>,
+    /// The addresses DNS over TLS is served on.
+    pub dot: Vec<String>,
+    /// The addresses DNS over HTTPS is served on, at the path `/dns-query`
+    /// (or `/dns-query/<client ID>`).
+    pub doh: Vec<String>,
+    /// The addresses DNS over QUIC is served on.
+    pub doq: Vec<String>,
+    /// Whether the DNS over HTTPS addresses are also an Oblivious DoH
+    /// target (RFC 9230): queries at `/dns-query`, keys at
+    /// `/.well-known/odohconfigs`.
+    #[serde(default)]
+    pub odoh: bool,
+}
+
+/// Recursive resolution: from the root servers down, instead of asking
+/// upstream resolvers.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct RecursionStatus {
+    /// Whether servers are shown only as much of a name as they need
+    /// (QNAME minimisation, RFC 9156).
+    pub qname_minimisation: bool,
+    /// Whether servers are asked over IPv6 too.
+    pub ipv6: bool,
+    /// Whether answers are validated with DNSSEC.
+    #[serde(default)]
+    pub dnssec: bool,
+    /// Queries sent to authoritative servers since start.
+    pub sent: u64,
+    /// Of them, over TCP.
+    pub tcp: u64,
+    /// Queries no server answered in time.
+    pub timeouts: u64,
+    /// Client queries that could not be resolved (SERVFAIL), bogus ones
+    /// included.
+    pub failures: u64,
+    /// Answers DNSSEC proved authentic (the AD bit).
+    #[serde(default)]
+    pub secure: u64,
+    /// Answers from unsigned zones.
+    #[serde(default)]
+    pub insecure: u64,
+    /// Answers whose signatures or proofs failed, refused with SERVFAIL.
+    #[serde(default)]
+    pub bogus: u64,
+    /// Zone cuts known.
+    pub zones: u64,
+    /// Authoritative servers with statistics.
+    pub servers: u64,
+}
+
 /// The query log.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct QueryLogStatus {
@@ -283,6 +409,11 @@ pub fn router(api: &Arc<Api>) -> Router {
         ));
     Router::new()
         .route("/api/v1/health", axum::routing::get(handlers::health))
+        // Off unless configured, and loopback only: see `docs`.
+        .route("/api/docs", axum::routing::get(docs::page))
+        .route("/api/docs/scalar.js", axum::routing::get(docs::scalar))
+        .route("/api/docs/start.js", axum::routing::get(docs::start))
+        .route("/api/docs/openapi.json", axum::routing::get(docs::document))
         .merge(protected)
         .fallback(web::serve)
         .with_state(Arc::clone(api))
@@ -301,17 +432,23 @@ async fn limit_time(request: Request<axum::body::Body>, next: Next) -> Result<Re
 
 /// Headers every response gets: a strict Content Security Policy, and no
 /// framing, sniffing or referrers. Responses are not cached unless they say
-/// otherwise (only the web UI's files do).
+/// otherwise (only the web UI's files do). Images may also come from the
+/// DNS leak test's names (`*.leak.goethite.test`), which only goethite
+/// answers and only with NXDOMAIN: loading them makes the browser look the
+/// names up.
 async fn security_headers(request: Request<axum::body::Body>, next: Next) -> Response {
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
+    // A page may tighten its own policy with a nonce (the API reference).
+    headers
+        .entry(CONTENT_SECURITY_POLICY)
+        .or_insert(HeaderValue::from_static(
+            "default-src 'self'; script-src 'self'; style-src 'self'; \
+         img-src 'self' data: http://*.leak.goethite.test https://*.leak.goethite.test; \
+         font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; \
+         form-action 'self'; frame-ancestors 'none'",
+        ));
     for (name, value) in [
-        (
-            CONTENT_SECURITY_POLICY,
-            "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; \
-             font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; \
-             form-action 'self'; frame-ancestors 'none'",
-        ),
         (X_CONTENT_TYPE_OPTIONS, "nosniff"),
         (X_FRAME_OPTIONS, "DENY"),
         (REFERRER_POLICY, "no-referrer"),

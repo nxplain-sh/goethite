@@ -174,6 +174,52 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/leak-tests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The DNS leak tests this node keeps, newest first, with the lookups
+         *     that reached it.
+         */
+        get: operations["list_leak_tests"];
+        put?: never;
+        /**
+         * Starts a DNS leak test: names under `leak.goethite.test` that only
+         *     goethite answers, for the device being tested to look up. The lookups
+         *     that reach this node are recorded for an hour; names that never arrive
+         *     were asked of another resolver. Tests live in memory, on this node.
+         */
+        post: operations["create_leak_test"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/leak-tests/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A DNS leak test: which of its names reached this node, from where, how
+         *     and as which client.
+         */
+        get: operations["get_leak_test"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/lists": {
         parameters: {
             query?: never;
@@ -186,6 +232,93 @@ export interface paths {
         put?: never;
         /** Creates a filter list. */
         post: operations["create_list"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lists/directory": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The FilterLists directory (filterlists.com): the lists goethite can
+         *     read, allowlists left out. The node fetches it when asked, and keeps it
+         *     for a day.
+         */
+        get: operations["get_directory"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lists/directory/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A list's details from the FilterLists directory, with its `https://`
+         *     addresses. Licenses and descriptions are FilterLists' and may be out of
+         *     date.
+         */
+        get: operations["get_directory_list"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lists/recommended": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The filter lists goethite recommends, each checked to download and read
+         *     cleanly, by category: one base list against ads and trackers, security
+         *     lists to stack on it, optional lists by topic, and legacy lists the base
+         *     lists include. Lists that do the same job name each other in `excludes`.
+         *     Presets are sets of them for a group; the `default` one is what a new
+         *     node starts with.
+         */
+        get: operations["recommended_lists"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lists/recommended/sizes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * How big the recommended lists say they are, read from the start of each
+         *     list by the node when asked, and kept for a day. Lists whose header
+         *     states no size are left out.
+         */
+        get: operations["recommended_sizes"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -364,6 +497,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/services": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The services groups can block (`blocked_services`), such as TikTok or
+         *     YouTube, with the rules that block them. The catalog is AdGuard's
+         *     HostlistsRegistry (GPL-3.0), which the node downloads and refreshes with
+         *     the filter lists.
+         */
+        get: operations["get_services"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/settings": {
         parameters: {
             query?: never;
@@ -485,6 +640,19 @@ export interface components {
          * @enum {string}
          */
         BlockResponseKind: "null_ip" | "nxdomain" | "refused";
+        /** @description A service a group blocks, always or while a schedule is active. */
+        BlockedService: {
+            /**
+             * @description The schedule's ID: the service is blocked only while the schedule is
+             *     active. Without one it is always blocked.
+             */
+            schedule?: string | null;
+            /**
+             * @description The service's ID in the services catalog (`GET /api/v1/services`),
+             *     such as `tiktok`. An ID the catalog does not have blocks nothing.
+             */
+            service: string;
+        };
         /** @description The cache. */
         CacheStatus: {
             /**
@@ -503,6 +671,11 @@ export interface components {
              */
             misses: number;
         };
+        /**
+         * @description What a recommended list is for.
+         * @enum {string}
+         */
+        Category: "base" | "security" | "optional" | "legacy";
         /** @description A stored client. */
         Client: {
             /**
@@ -525,18 +698,27 @@ export interface components {
              */
             updated_at: string;
         };
-        /** @description A device or network, identified by its addresses. */
+        /** @description A device or network, identified by its addresses or its client IDs. */
         ClientSpec: {
             /**
              * @description IP addresses or networks in CIDR notation, such as `192.168.1.23`
              *     or `192.168.1.0/24`. The longest network containing a query's source
-             *     address decides which client asked.
+             *     address decides which client asked. May be empty for a client known
+             *     by its client IDs only.
              */
             addresses: string[];
             /** @description Free text. */
             comment?: string;
             /** @description The group's ID. */
             group?: string;
+            /**
+             * @description Client IDs, such as `anna-phone`: over DNS over TLS, HTTPS or QUIC a
+             *     device can name itself, in the server name (`anna-phone.dns.example`)
+             *     or the DNS over HTTPS path (`/dns-query/anna-phone`), wherever it is.
+             *     A known ID decides which client asked before the address does. 1 to
+             *     63 lowercase letters, digits and hyphens, not at either end.
+             */
+            ids?: string[];
             /** @description Who manages the client. */
             managed_by?: components["schemas"]["ManagedBy"];
             /** @description A name for people. */
@@ -639,6 +821,78 @@ export interface components {
              */
             safe_search: number;
         };
+        /** @description The FilterLists directory, as far as goethite can use it. */
+        Directory: {
+            /**
+             * Format: date-time
+             * @description When this node fetched it.
+             */
+            fetched_at: string;
+            /** @description Lists in syntaxes goethite reads, allowlists left out, by name. */
+            lists: components["schemas"]["DirectoryEntry"][];
+        };
+        /** @description A list in the FilterLists directory that goethite can use. */
+        DirectoryEntry: {
+            /** @description What it is for. */
+            description: string;
+            /**
+             * Format: int64
+             * @description Its FilterLists ID.
+             */
+            id: number;
+            /** @description Its license, as FilterLists records it. */
+            license?: string | null;
+            /** @description Its name. */
+            name: string;
+            /** @description Its formats, such as `Domains`. */
+            syntaxes: string[];
+            /** @description Topics, such as `ads` or `malware`. */
+            tags: string[];
+        };
+        /** @description A list's details from the directory, with its addresses. */
+        DirectoryList: components["schemas"]["DirectoryEntry"] & {
+            /** @description Its home page. */
+            homepage?: string | null;
+            /** @description Its `https://` addresses: main ones first, mirrors after. */
+            urls: components["schemas"]["DirectoryUrl"][];
+            /** @description Whether goethite can use it: a readable syntax, not an allowlist. */
+            usable: boolean;
+        };
+        /** @description One address of a list. */
+        DirectoryUrl: {
+            /** @description Whether it is a mirror of another address. */
+            mirror: boolean;
+            /**
+             * Format: int32
+             * @description Which part of the list it is, for lists in several parts (from 1).
+             */
+            segment: number;
+            /** @description The address; always `https://`. */
+            url: string;
+        };
+        /** @description How clients reach this node over DNS over TLS, HTTPS and QUIC. */
+        EncryptedStatus: {
+            /**
+             * @description The addresses DNS over HTTPS is served on, at the path `/dns-query`
+             *     (or `/dns-query/<client ID>`).
+             */
+            doh: string[];
+            /** @description The addresses DNS over QUIC is served on. */
+            doq: string[];
+            /** @description The addresses DNS over TLS is served on. */
+            dot: string[];
+            /**
+             * @description Whether the DNS over HTTPS addresses are also an Oblivious DoH
+             *     target (RFC 9230): queries at `/dns-query`, keys at
+             *     `/.well-known/odohconfigs`.
+             */
+            odoh?: boolean;
+            /**
+             * @description The name clients reach it by, such as `dns.example`, if configured:
+             *     a client ID goes in front of it, as in `anna-phone.dns.example`.
+             */
+            server_name?: string | null;
+        };
         /** @description The body of every error response. */
         ErrorBody: {
             /** @description What went wrong. */
@@ -702,6 +956,12 @@ export interface components {
         };
         /** @description A group of clients with the same filtering. */
         GroupSpec: {
+            /**
+             * @description The services the group blocks, such as TikTok or YouTube: every name
+             *     the service uses, whatever the lists say. They apply while filtering
+             *     is on.
+             */
+            blocked_services?: components["schemas"]["BlockedService"][];
             /** @description Free text. */
             comment?: string;
             /** @description Whether the group's clients are filtered at all. */
@@ -732,6 +992,68 @@ export interface components {
              * @description When the hour starts.
              */
             start: string;
+        };
+        /** @description A lookup of a test name that reached goethite. */
+        LeakLookup: {
+            /** @description The address it came from. */
+            address: string;
+            /** @description The known client it was identified as. */
+            client?: string | null;
+            /**
+             * @description Whether that client's queries are filtered: its group filters and
+             *     protection is on and not paused.
+             */
+            filtering: boolean;
+            /** @description The group whose filtering applies to it. */
+            group?: string | null;
+            /**
+             * Format: int32
+             * @description Which of the test's names, from 1.
+             */
+            probe: number;
+            /** @description How it arrived. */
+            protocol: components["schemas"]["Protocol"];
+            /** @description The type asked for, such as `A` or `AAAA`. */
+            qtype: string;
+            /**
+             * Format: date-time
+             * @description When it arrived.
+             */
+            time: string;
+        };
+        /** @description A test: the names to look up, and the lookups that reached goethite. */
+        LeakTest: {
+            /**
+             * Format: date-time
+             * @description When the test was made.
+             */
+            created_at: string;
+            /**
+             * Format: date-time
+             * @description Until when the test is kept and lookups for it are recorded.
+             */
+            expires_at: string;
+            /** @description The test's ID. */
+            id: string;
+            /** @description The lookups that reached goethite, oldest first; at most 64. */
+            lookups: components["schemas"]["LeakLookup"][];
+            /** @description The names to look up, in order. */
+            names: string[];
+            /**
+             * Format: int32
+             * @description How many of the names reached goethite.
+             */
+            reached: number;
+            /**
+             * @description The address the test was made from, as the API saw it: the device
+             *     being tested, when the web UI runs the test in its browser.
+             */
+            requested_by?: string | null;
+        };
+        /** @description The tests this node has, newest first. */
+        LeakTestList: {
+            /** @description The tests. */
+            tests: components["schemas"]["LeakTest"][];
         };
         /** @description A stored filter list. */
         List: {
@@ -849,11 +1171,24 @@ export interface components {
             /** @description Its goethite version, when last reached. */
             version?: string | null;
         };
+        /** @description A set of recommended lists for a group, in one step. */
+        Preset: {
+            /** @description Whether a new node starts with it. */
+            default: boolean;
+            /** @description Who it is for. */
+            description: string;
+            /** @description A stable identifier, such as `balanced`. */
+            id: string;
+            /** @description Its lists, by ID. */
+            lists: string[];
+            /** @description Its name. */
+            name: string;
+        };
         /**
          * @description How a query reached goethite.
          * @enum {string}
          */
-        Protocol: "udp" | "tcp";
+        Protocol: "udp" | "tcp" | "dot" | "doh" | "doq" | "odoh";
         /** @description One logged query, as the API shows it. */
         QueryEntry: {
             /** @description The client's address (shortened if the log anonymizes clients). */
@@ -926,6 +1261,118 @@ export interface components {
              * @description Pass as `before` for the next page; absent at the end of the log.
              */
             next?: number | null;
+        };
+        /** @description The recommended lists and presets. */
+        Recommended: {
+            /** @description The lists, by category. */
+            lists: components["schemas"]["RecommendedList"][];
+            /** @description The presets. */
+            presets: components["schemas"]["Preset"][];
+        };
+        /** @description A filter list goethite recommends. */
+        RecommendedList: {
+            /** @description A short label, such as `Minimal` or `Compatibility`. */
+            badge?: string | null;
+            /** @description Its category. */
+            category: components["schemas"]["Category"];
+            /** @description Whether a new node starts with it. */
+            default: boolean;
+            /** @description What it blocks. */
+            description: string;
+            /**
+             * @description Lists not to use with it: one includes the other, or they do the
+             *     same job. Switch instead of stacking.
+             */
+            excludes: string[];
+            /** @description Its home page. */
+            homepage: string;
+            /** @description A stable identifier, such as `hagezi-normal`. */
+            id: string;
+            /** @description Its license, as the project states it. */
+            license: string;
+            /** @description Who maintains it. */
+            maintainer: string;
+            /** @description Its name. */
+            name: string;
+            /** @description When to choose it, or what to know first. */
+            note?: string | null;
+            /** @description One of the lists goethite recommends most in its category. */
+            recommended: boolean;
+            /** @description For optional lists, their topic, such as `Family`. */
+            topic?: string | null;
+            /** @description Where goethite downloads it. */
+            url: string;
+        };
+        /** @description How big recommended lists say they are, from their headers. */
+        RecommendedSizes: {
+            /**
+             * Format: date-time
+             * @description When this node read them.
+             */
+            fetched_at: string;
+            /** @description The lists whose header states a size; others are left out. */
+            lists: components["schemas"]["StatedSize"][];
+        };
+        /**
+         * @description Recursive resolution: from the root servers down, instead of asking
+         *     upstream resolvers.
+         */
+        RecursionStatus: {
+            /**
+             * Format: int64
+             * @description Answers whose signatures or proofs failed, refused with SERVFAIL.
+             */
+            bogus?: number;
+            /** @description Whether answers are validated with DNSSEC. */
+            dnssec?: boolean;
+            /**
+             * Format: int64
+             * @description Client queries that could not be resolved (SERVFAIL), bogus ones
+             *     included.
+             */
+            failures: number;
+            /**
+             * Format: int64
+             * @description Answers from unsigned zones.
+             */
+            insecure?: number;
+            /** @description Whether servers are asked over IPv6 too. */
+            ipv6: boolean;
+            /**
+             * @description Whether servers are shown only as much of a name as they need
+             *     (QNAME minimisation, RFC 9156).
+             */
+            qname_minimisation: boolean;
+            /**
+             * Format: int64
+             * @description Answers DNSSEC proved authentic (the AD bit).
+             */
+            secure?: number;
+            /**
+             * Format: int64
+             * @description Queries sent to authoritative servers since start.
+             */
+            sent: number;
+            /**
+             * Format: int64
+             * @description Authoritative servers with statistics.
+             */
+            servers: number;
+            /**
+             * Format: int64
+             * @description Of them, over TCP.
+             */
+            tcp: number;
+            /**
+             * Format: int64
+             * @description Queries no server answered in time.
+             */
+            timeouts: number;
+            /**
+             * Format: int64
+             * @description Zone cuts known.
+             */
+            zones: number;
         };
         /** @description How to change a node's role. */
         RoleChange: {
@@ -1003,6 +1450,39 @@ export interface components {
             /** @description The windows. */
             windows: components["schemas"]["Window"][];
         };
+        /** @description A service a group can block. */
+        Service: {
+            /** @description What kind of service it is, such as `social_network` or `gaming`. */
+            group: string;
+            /** @description Its ID, such as `tiktok`: what groups' `blocked_services` name. */
+            id: string;
+            /** @description Its name, such as `TikTok`. */
+            name: string;
+            /**
+             * @description The rules that block it, in adblock-style syntax. Rules goethite
+             *     cannot read are left out.
+             */
+            rules: string[];
+        };
+        /** @description The services groups can block, and how the catalog is doing. */
+        Services: {
+            /**
+             * Format: date-time
+             * @description When this node saved its copy; `None` until it has one.
+             */
+            downloaded_at?: string | null;
+            /**
+             * @description Why the last download or read failed, if it did; the last good copy
+             *     stays in use.
+             */
+            error?: string | null;
+            /** @description The catalog's license. */
+            license: string;
+            /** @description The services, by name. */
+            services: components["schemas"]["Service"][];
+            /** @description Where the catalog comes from. */
+            source: string;
+        };
         /** @description The settings, with their revision. */
         Settings: {
             /**
@@ -1034,6 +1514,16 @@ export interface components {
             list_update_hours?: number;
             /** @description The master switch: when off, nothing is filtered for anyone. */
             protection?: boolean;
+        };
+        /** @description How many entries a list says it has. */
+        StatedSize: {
+            /**
+             * Format: int64
+             * @description The number its header gives.
+             */
+            entries: number;
+            /** @description The list's ID. */
+            id: string;
         };
         /** @description Statistics over a time range. */
         StatsReport: {
@@ -1067,8 +1557,14 @@ export interface components {
         };
         /** @description How the node is doing. */
         Status: {
+            /**
+             * @description Whether this node serves its API reference at `/api/docs` (to
+             *     loopback clients only).
+             */
+            api_docs?: boolean;
             cache?: components["schemas"]["CacheStatus"] | null;
             cluster?: components["schemas"]["ClusterStatus"] | null;
+            encrypted?: components["schemas"]["EncryptedStatus"] | null;
             /** @description The compiled filter. */
             filter: components["schemas"]["FilterStatus"];
             /** @description Each list, by ID. */
@@ -1087,12 +1583,13 @@ export interface components {
             protection: boolean;
             /** @description The query log. */
             query_log: components["schemas"]["QueryLogStatus"];
+            recursion?: components["schemas"]["RecursionStatus"] | null;
             /**
              * Format: date-time
              * @description When goethite started.
              */
             started_at: string;
-            /** @description The upstreams, in configured order. */
+            /** @description The upstreams, in configured order; none with recursion. */
             upstreams: components["schemas"]["UpstreamStatus"][];
             /** @description The running version. */
             version: string;
@@ -1760,6 +2257,105 @@ export interface operations {
             };
         };
     };
+    list_leak_tests: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The tests */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LeakTestList"];
+                };
+            };
+            /** @description Not run on this node */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    create_leak_test: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The test, with the names to look up */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LeakTest"];
+                };
+            };
+            /** @description Not run on this node */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    get_leak_test: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The test's ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The test */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LeakTest"];
+                };
+            };
+            /** @description No such test, or it expired */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not run on this node */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
     list_lists: {
         parameters: {
             query?: never;
@@ -1822,6 +2418,116 @@ export interface operations {
             };
             /** @description It is not valid */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    get_directory: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The directory */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Directory"];
+                };
+            };
+            /** @description Turned off on this node, or FilterLists cannot be reached */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    get_directory_list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The list's FilterLists ID */
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The list */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DirectoryList"];
+                };
+            };
+            /** @description Turned off on this node, or FilterLists cannot be reached */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    recommended_lists: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Recommended lists and presets */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Recommended"];
+                };
+            };
+        };
+    };
+    recommended_sizes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The sizes */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecommendedSizes"];
+                };
+            };
+            /** @description Turned off on this node */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -2106,6 +2812,8 @@ export interface operations {
                 outcome?: components["schemas"]["QueryOutcome"];
                 /** @description Only entries at or after this time (RFC 3339). */
                 since?: string;
+                /** @description Only entries before this time (RFC 3339). */
+                until?: string;
             };
             header?: never;
             path?: never;
@@ -2555,6 +3263,35 @@ export interface operations {
             };
             /** @description It changed since that revision */
             412: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    get_services: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The services */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Services"];
+                };
+            };
+            /** @description Turned off on this node */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

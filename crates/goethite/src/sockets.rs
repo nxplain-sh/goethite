@@ -8,6 +8,8 @@
 //!
 //! - `dns-udp-<n>-<i>` and `dns-tcp-<n>` for the `n`th `[server] listen`
 //!   address;
+//! - `dns-dot-<n>`, `dns-doh-<n>` and `dns-doq-<n>` for the `n`th
+//!   `[server.tls] dot`, `doh` and `doq` address;
 //! - `api-<n>` for the `n`th `[api] listen` address;
 //! - `cluster` for the cluster listener.
 //!
@@ -94,6 +96,26 @@ impl Sockets {
                 TcpListener::from(checked(take(&format!("dns-tcp-{n}"))?, Type::STREAM, addr)?);
             addresses.push((udp, tcp));
         }
+        let mut encrypted = |prefix: &str, list: &[SocketAddr]| -> Result<Vec<TcpListener>> {
+            list.iter()
+                .enumerate()
+                .map(|(n, &addr)| {
+                    let fd = take(&format!("{prefix}-{n}"))?;
+                    Ok(TcpListener::from(checked(fd, Type::STREAM, addr)?))
+                })
+                .collect()
+        };
+        let dot = encrypted("dns-dot", &server.dot)?;
+        let doh = encrypted("dns-doh", &server.doh)?;
+        let doq = server
+            .doq
+            .iter()
+            .enumerate()
+            .map(|(n, &addr)| {
+                let fd = take(&format!("dns-doq-{n}"))?;
+                Ok(UdpSocket::from(checked(fd, Type::DGRAM, addr)?))
+            })
+            .collect::<Result<Vec<_>>>()?;
         let mut api = Vec::new();
         if config.api.enabled {
             for (n, &addr) in config.api.listen.iter().enumerate() {
@@ -115,7 +137,8 @@ impl Sockets {
                 "a socket handed over is not in the config file any more; closing it"
             );
         }
-        let dns = Listeners::from_sockets(addresses).context("the DNS sockets handed over")?;
+        let dns = Listeners::from_sockets(addresses, dot, doh, doq)
+            .context("the DNS sockets handed over")?;
         Self::new(dns, api, cluster)
     }
 
@@ -126,6 +149,15 @@ impl Sockets {
                 named.push((format!("dns-udp-{n}-{i}"), duplicate(socket)?));
             }
             named.push((format!("dns-tcp-{n}"), duplicate(tcp)?));
+        }
+        for (n, listener) in dns.dot().iter().enumerate() {
+            named.push((format!("dns-dot-{n}"), duplicate(listener)?));
+        }
+        for (n, listener) in dns.doh().iter().enumerate() {
+            named.push((format!("dns-doh-{n}"), duplicate(listener)?));
+        }
+        for (n, socket) in dns.doq().iter().enumerate() {
+            named.push((format!("dns-doq-{n}"), duplicate(socket)?));
         }
         for (n, listener) in api.iter().enumerate() {
             named.push((format!("api-{n}"), duplicate(listener)?));
@@ -324,5 +356,48 @@ mod tests {
             .err()
             .unwrap();
         assert!(format!("{err:#}").contains("dns-tcp-0"), "{err:#}");
+    }
+
+    #[test]
+    fn encrypted_listeners_are_named_and_taken_back() {
+        let config: Config = toml::from_str(
+            "[server]\nlisten = \"127.0.0.1:0\"\nudp_sockets = 1\n\
+             [server.tls]\ncert = \"c\"\nkey = \"k\"\n\
+             dot = \"127.0.0.1:0\"\ndoh = [\"127.0.0.1:0\", \"127.0.0.1:0\"]\ndoq = \"127.0.0.1:0\"\n\
+             [[upstream]]\naddress = \"192.0.2.1\"\n[api]\nenabled = false\n",
+        )
+        .unwrap();
+        let bound = Sockets::bind(&config).unwrap();
+        let names: Vec<&str> = bound.named().map(|(name, _)| name).collect();
+        assert_eq!(
+            names,
+            [
+                "dns-udp-0-0",
+                "dns-tcp-0",
+                "dns-dot-0",
+                "dns-doh-0",
+                "dns-doh-1",
+                "dns-doq-0"
+            ]
+        );
+        let given = bound
+            .named()
+            .map(|(name, fd)| (name.to_owned(), fd.try_clone_to_owned().unwrap()))
+            .collect();
+        let mut adopted = Sockets::adopt(&config, given).unwrap();
+        let dns = adopted.take_dns().unwrap();
+        assert_eq!(
+            (dns.dot().len(), dns.doh().len(), dns.doq().len()),
+            (1, 2, 1)
+        );
+
+        // A DNS over HTTPS listener gone missing needs a restart.
+        let given = bound
+            .named()
+            .filter(|(name, _)| *name != "dns-doh-1")
+            .map(|(name, fd)| (name.to_owned(), fd.try_clone_to_owned().unwrap()))
+            .collect();
+        let err = Sockets::adopt(&config, given).err().unwrap();
+        assert!(format!("{err:#}").contains("dns-doh-1"), "{err:#}");
     }
 }

@@ -1,6 +1,7 @@
 //! The TUI's state and how keys change it.
 
 use goethite_api::Status;
+use goethite_api::leak::LeakTest;
 use goethite_store::{Client, Group, List, ManagedBy, QueryEntry, QueryOutcome, StatsReport};
 use jiff::Timestamp;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -18,16 +19,19 @@ pub enum Tab {
     Clients,
     /// Groups.
     Groups,
+    /// DNS leak tests: from any device, or this machine's.
+    LeakTests,
 }
 
 impl Tab {
     /// In display order.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Dashboard,
         Self::QueryLog,
         Self::Lists,
         Self::Clients,
         Self::Groups,
+        Self::LeakTests,
     ];
 
     /// The tab's title.
@@ -38,6 +42,7 @@ impl Tab {
             Self::Lists => "Lists",
             Self::Clients => "Clients",
             Self::Groups => "Groups",
+            Self::LeakTests => "Leak tests",
         }
     }
 
@@ -71,6 +76,8 @@ pub struct Data {
     pub clients: Vec<Client>,
     /// The groups.
     pub groups: Vec<Group>,
+    /// The node's DNS leak tests, newest first.
+    pub leak_tests: Vec<LeakTest>,
 }
 
 /// Fresh data from the API, or an error.
@@ -88,6 +95,8 @@ pub enum Update {
     Clients(Vec<Client>),
     /// Groups.
     Groups(Vec<Group>),
+    /// DNS leak tests.
+    LeakTests(Vec<LeakTest>),
     /// Something to tell the user; `true` for an error.
     Message(String, bool),
 }
@@ -109,6 +118,8 @@ pub enum Action {
     Pause(u32),
     /// Resume filtering.
     Resume,
+    /// Run a DNS leak test from this machine.
+    RunLeakTest,
 }
 
 /// The TUI's state.
@@ -163,6 +174,7 @@ impl App {
             Tab::Lists => self.data.lists.len(),
             Tab::Clients => self.data.clients.len(),
             Tab::Groups => self.data.groups.len(),
+            Tab::LeakTests => self.data.leak_tests.len(),
         }
     }
 
@@ -175,6 +187,7 @@ impl App {
             Update::Lists(lists) => self.data.lists = lists,
             Update::Clients(clients) => self.data.clients = clients,
             Update::Groups(groups) => self.data.groups = groups,
+            Update::LeakTests(tests) => self.data.leak_tests = tests,
             Update::Message(text, error) => {
                 self.message = Some((text, error));
                 return;
@@ -212,7 +225,7 @@ impl App {
             KeyCode::Char('q') | KeyCode::Esc => Action::Quit,
             KeyCode::Tab | KeyCode::Right => self.switch(self.tab.step(true)),
             KeyCode::BackTab | KeyCode::Left => self.switch(self.tab.step(false)),
-            KeyCode::Char(digit @ '1'..='5') => {
+            KeyCode::Char(digit @ '1'..='6') => {
                 let index = usize::from(u8::try_from(digit).unwrap_or(b'1').saturating_sub(b'1'));
                 Tab::ALL
                     .get(index)
@@ -243,6 +256,7 @@ impl App {
             }
             KeyCode::Char('r') if self.tab == Tab::Lists => Action::RefreshLists,
             KeyCode::Char(' ' | 'e') if self.tab == Tab::Lists => self.toggle_selected_list(),
+            KeyCode::Char('t') if self.tab == Tab::LeakTests => Action::RunLeakTest,
             _ => Action::None,
         }
     }
@@ -314,7 +328,11 @@ mod tests {
         assert_eq!(app.tab, Tab::QueryLog);
         assert_eq!(app.on_key(key(KeyCode::BackTab)), Action::Refresh);
         assert_eq!(app.on_key(key(KeyCode::BackTab)), Action::Refresh);
-        assert_eq!(app.tab, Tab::Groups, "wraps around");
+        assert_eq!(app.tab, Tab::LeakTests, "wraps around");
+        assert_eq!(app.on_key(key(KeyCode::Char('t'))), Action::RunLeakTest);
+        assert_eq!(app.on_key(key(KeyCode::Char('5'))), Action::Refresh);
+        assert_eq!(app.tab, Tab::Groups);
+        assert_eq!(app.on_key(key(KeyCode::Char('t'))), Action::None);
         assert_eq!(app.on_key(key(KeyCode::Char('3'))), Action::Refresh);
         assert_eq!(app.tab, Tab::Lists);
         assert_eq!(app.on_key(key(KeyCode::Char('3'))), Action::None);

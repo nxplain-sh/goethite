@@ -209,6 +209,20 @@ pub enum Downloaded {
 /// Downloads `url` into `lists` if it changed, validating it before it
 /// replaces the last good copy.
 pub async fn download(url: &str, lists: &ListStore, downloader: &Downloader) -> Downloaded {
+    download_checked(url, lists, downloader, |bytes| {
+        validate(bytes).map(|stats| stats.rules)
+    })
+    .await
+}
+
+/// Downloads `url` into `lists` if it changed, keeping it only if `check`
+/// accepts it; `check` says how many rules or entries it holds.
+pub async fn download_checked(
+    url: &str,
+    lists: &ListStore,
+    downloader: &Downloader,
+    check: fn(&[u8]) -> Result<usize>,
+) -> Downloaded {
     let validators = lists.validators(url);
     match downloader.fetch(url, &validators).await {
         Ok(Fetched::NotModified) => {
@@ -219,14 +233,14 @@ pub async fn download(url: &str, lists: &ListStore, downloader: &Downloader) -> 
             let lists = lists.clone();
             let owned = url.to_owned();
             let saved = tokio::task::spawn_blocking(move || {
-                let stats = validate(&bytes)?;
+                let count = check(&bytes)?;
                 lists.save(&owned, &bytes, &validators)?;
-                Ok::<_, anyhow::Error>(stats)
+                Ok::<_, anyhow::Error>(count)
             })
             .await;
             match saved {
-                Ok(Ok(stats)) => {
-                    info!(list = %url, rules = stats.rules, "list downloaded");
+                Ok(Ok(count)) => {
+                    info!(list = %url, entries = count, "list downloaded");
                     Downloaded::Changed
                 }
                 Ok(Err(err)) => {
@@ -371,7 +385,7 @@ mod update_tests {
     use goethite_store::{ListSpec, ManagedBy};
     use http_body_util::Full;
     use hyper::body::{Bytes, Incoming};
-    use hyper::header::{ETAG, IF_NONE_MATCH, LOCATION};
+    use hyper::header::{CONTENT_RANGE, ETAG, IF_NONE_MATCH, LOCATION, RANGE};
     use hyper::service::service_fn;
     use hyper::{Request, Response, StatusCode};
     use hyper_util::rt::{TokioExecutor, TokioIo};
@@ -395,8 +409,10 @@ mod update_tests {
     }
 
     /// An HTTPS server for `dns.goethite.test` serving `/list` (with ETag
-    /// revalidation), `/moved` (a redirect to it) and `/downgrade` (a
-    /// redirect to http://). `alpn` picks HTTP/1.1 or HTTP/2.
+    /// revalidation, ignoring ranges), `/moved` (a redirect to it),
+    /// `/downgrade` (a redirect to http://), `/ranged` (the list, honoring
+    /// ranges) and `/no-ranges` (refusing them). `alpn` picks HTTP/1.1 or
+    /// HTTP/2.
     async fn server(list: Arc<Mutex<Served>>, alpn: &'static [u8]) -> SocketAddr {
         let certs = vec![CertificateDer::from_pem_slice(CERT).unwrap()];
         let key = PrivateKeyDer::from_pem_slice(KEY).unwrap();
@@ -467,6 +483,27 @@ mod update_tests {
             "/list" => builder
                 .header(ETAG, list.etag.as_str())
                 .body(Full::new(Bytes::from(list.body.clone()))),
+            "/ranged" => match request.headers().get(RANGE) {
+                Some(range) => {
+                    let end: usize = range
+                        .to_str()
+                        .unwrap()
+                        .strip_prefix("bytes=0-")
+                        .unwrap()
+                        .parse()
+                        .unwrap();
+                    let part = list.body[..=end.min(list.body.len() - 1)].to_vec();
+                    builder
+                        .status(StatusCode::PARTIAL_CONTENT)
+                        .header(CONTENT_RANGE, format!("bytes 0-{end}/{}", list.body.len()))
+                        .body(Full::new(Bytes::from(part)))
+                }
+                None => builder.body(Full::new(Bytes::from(list.body.clone()))),
+            },
+            "/no-ranges" if request.headers().contains_key(RANGE) => builder
+                .status(StatusCode::RANGE_NOT_SATISFIABLE)
+                .body(Full::default()),
+            "/no-ranges" => builder.body(Full::new(Bytes::from(list.body.clone()))),
             _ => builder.status(StatusCode::NOT_FOUND).body(Full::default()),
         };
         response.unwrap()
@@ -586,6 +623,34 @@ mod update_tests {
         ));
 
         std::fs::remove_dir_all(&cache_dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn reads_just_the_start_of_a_list() {
+        for alpn in [&b"http/1.1"[..], b"h2"] {
+            let body: Vec<u8> = (0..20_000_u32)
+                .map(|i| b'a' + u8::try_from(i % 26).unwrap())
+                .collect();
+            let served = Arc::new(Mutex::new(Served {
+                body: body.clone(),
+                etag: "\"1\"".into(),
+                requests: 0,
+                not_modified: 0,
+            }));
+            let addr = server(Arc::clone(&served), alpn).await;
+            let downloader = downloader(1024);
+            for path in ["ranged", "list", "no-ranges", "moved"] {
+                let url = format!("https://dns.goethite.test:{}/{path}", addr.port());
+                let start = downloader.fetch_start(&url, 100).await.unwrap();
+                assert_eq!(start, body[..100], "{path}");
+            }
+            // A list shorter than asked for: all of it.
+            let url = format!("https://dns.goethite.test:{}/list", addr.port());
+            assert_eq!(
+                downloader.fetch_start(&url, 50_000).await.unwrap().len(),
+                20_000
+            );
+        }
     }
 
     #[tokio::test]

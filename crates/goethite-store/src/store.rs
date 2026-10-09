@@ -1460,6 +1460,7 @@ mod tests {
                         list: ads.id.clone(),
                         schedule: None,
                     }],
+                    blocked_services: Vec::new(),
                     comment: String::new(),
                     managed_by: ManagedBy::Terraform,
                 },
@@ -1471,6 +1472,7 @@ mod tests {
                 ClientSpec {
                     name: "Tablet".into(),
                     addresses: vec!["192.168.1.23".into()],
+                    ids: Vec::new(),
                     group: kids.id.clone(),
                     comment: String::new(),
                     managed_by: ManagedBy::Api,

@@ -42,6 +42,24 @@ ipv4_prefix = 32       # clients in the same /32 share a limit (each address)
 ipv6_prefix = 64       # clients in the same /64 share a limit
 max_clients = 65536    # client networks tracked at once
 
+# DNS over TLS, HTTPS and QUIC for clients, with a certificate for the name
+# devices use (and *.<that name>, for client IDs in the server name). Read at
+# startup and again on SIGHUP. Encrypted connections count against the TCP
+# connection limits above. See the site's "Encrypted DNS" page.
+# [server.tls]
+# cert = "/etc/goethite/tls/fullchain.pem"
+# key = "/etc/goethite/tls/privkey.pem"
+# server_name = "dns.example"   # anna-phone.dns.example carries a client ID
+# dot = ["0.0.0.0:853", "[::]:853"]
+# doh = ["0.0.0.0:443", "[::]:443"]   # https://dns.example/dns-query
+# doq = ["0.0.0.0:853", "[::]:853"]   # UDP; quic://dns.example
+# Reachable from the internet? Answer encrypted queries only with a known
+# client ID, so goethite is no open resolver.
+# require_client_id = true
+# Also an Oblivious DoH target (RFC 9230) on the doh addresses, for clients
+# that ask through a proxy: https://dns.example/.well-known/odohconfigs
+# odoh = true
+
 # Upstream resolvers, tried in this order with failover. At least one is
 # required: goethite does not pick a resolver on your behalf.
 #
@@ -84,6 +102,19 @@ tls_name = "dns.quad9.net"
 # [[upstream]]
 # address = "9.9.9.9"
 
+# Or ask no upstream at all: resolve every name from the root servers down,
+# as Unbound does. Remove the [[upstream]] tables above to use it. Each
+# server sees only as much of a name as it needs (QNAME minimisation);
+# servers are asked over IPv6 too when this host has an IPv6 route. Answers
+# are validated with DNSSEC: signed ones get the AD flag, and ones whose
+# signatures fail are refused with SERVFAIL.
+#
+# [recursion]
+# enabled = true
+# qname_minimisation = true
+# ipv6 = true
+# dnssec = true
+
 [cache]
 # Answers from the upstreams are cached until their TTL runs out. These are
 # the defaults.
@@ -123,6 +154,24 @@ rules = [
 # state directory (see [store]).
 cache_dir = "lists"
 update_hours = 24            # how often url lists are refreshed (1 to 168)
+
+# A new node with no [[filter.list]] below starts with goethite's default
+# list, HaGeZi Multi Normal, in the default group. Set this to false to start
+# with none. Only the first start of a new store looks at it.
+default_lists = true
+
+# The web UI can search the FilterLists directory (filterlists.com) for more
+# lists: this node fetches it, only when someone browses it. false turns it
+# off.
+directory = true
+
+# Groups can block whole services (TikTok, YouTube, Roblox…): this node
+# downloads AdGuard's services catalog (GPL-3.0) with the lists. false turns
+# it off; services_file reads the catalog from a file instead, for nodes
+# without internet access.
+services = true
+# services_file = "/etc/goethite/services.json"
+
 # What to do when filtering fails (a broken store or filter): "open" keeps
 # resolving, unfiltered if need be, and reports it; "closed" refuses to
 # start or answers SERVFAIL.
@@ -176,6 +225,8 @@ listen = "127.0.0.1:8053"
 # tls_cert = "/etc/goethite/api.crt"
 # tls_key = "/etc/goethite/api.key"
 web_ui = true
+# The API reference at /api/docs, for loopback clients only.
+docs = false
 
 # [cluster]
 # Two goethite nodes sharing one configuration: the primary owns it, the

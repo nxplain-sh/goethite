@@ -144,3 +144,23 @@ looks out for the health-check name:
 
 No query was lost. The two versions are within each other's noise (the first round at 50,000
 q/s ran while the host was busiest), and the p99 stays under a millisecond at 100,000 q/s.
+
+2026-10-09, v0.4.0 against v0.3.0 (commit `6c3a4d8`), release builds, same VM, image and command,
+each with its own example config, interleaved in the same session, alternating which goes first.
+v0.4.0's example config starts with the recommended lists (414,791 rules where v0.3.0's has one),
+and every query also passes the DNS leak test's name check and the EDNS padding decision. The Mac
+was much busier than in earlier runs (load average 16 to 22, an antivirus scan taking over three
+cores), which shows in both versions:
+
+| Offered load | Version | p50 | p90 | p99 | p99.9 |
+| --- | --- | --- | --- | --- | --- |
+| 50,000 q/s, 3 rounds | v0.3.0 | 40–58 µs | 119–479 µs | 1.02–2.17 ms | 2.6–7.3 ms |
+| | v0.4.0 | 45–63 µs | 151–415 µs | 1.01–1.92 ms | 3.1–6.1 ms |
+| 100,000 q/s, 2 rounds | v0.3.0 | 121–139 µs | 415–527 µs | 1.25–1.38 ms | 2.3–2.7 ms |
+| | v0.4.0 | 151–179 µs | 511–607 µs | 1.25–1.50 ms | 2.6–3.1 ms |
+
+Flat out (`-T 4`), v0.4.0 answered 144,274 q/s and v0.3.0 131,498 q/s. No query was lost.
+
+The two versions overlap in every column, so v0.4.0 shows no regression. On this busy host
+neither kept the p99 under a millisecond, where v0.3.0 did the day before; the sub-millisecond
+target needs a rerun on a quiet machine before it can be claimed for v0.4.0.

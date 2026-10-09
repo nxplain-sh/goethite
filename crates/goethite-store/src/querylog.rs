@@ -8,7 +8,7 @@
 //! writes the log in batches of up to a second, encoding each record in a
 //! compact binary form. It also enforces the retention limits.
 
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, TryRecvError, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -93,6 +93,62 @@ pub enum Protocol {
     Udp,
     /// DNS over TCP.
     Tcp,
+    /// DNS over TLS (RFC 7858).
+    Dot,
+    /// DNS over HTTPS (RFC 8484).
+    Doh,
+    /// DNS over QUIC (RFC 9250).
+    Doq,
+    /// Oblivious DNS over HTTPS (RFC 9230), through a proxy: the client's
+    /// address is the proxy's.
+    Odoh,
+}
+
+impl Protocol {
+    /// Every protocol, for metrics.
+    pub const ALL: [Self; 6] = [
+        Self::Udp,
+        Self::Tcp,
+        Self::Dot,
+        Self::Doh,
+        Self::Doq,
+        Self::Odoh,
+    ];
+
+    fn code(self) -> u8 {
+        match self {
+            Self::Udp => 0,
+            Self::Tcp => 1,
+            Self::Dot => 2,
+            Self::Doh => 3,
+            Self::Doq => 4,
+            Self::Odoh => 5,
+        }
+    }
+
+    fn from_code(code: u8) -> Option<Self> {
+        Some(match code {
+            0 => Self::Udp,
+            1 => Self::Tcp,
+            2 => Self::Dot,
+            3 => Self::Doh,
+            4 => Self::Doq,
+            5 => Self::Odoh,
+            _ => return None,
+        })
+    }
+
+    /// The name in the API and in metrics, such as `doh`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Udp => "udp",
+            Self::Tcp => "tcp",
+            Self::Dot => "dot",
+            Self::Doh => "doh",
+            Self::Doq => "doq",
+            Self::Odoh => "odoh",
+        }
+    }
 }
 
 /// How an answer came about.
@@ -249,8 +305,8 @@ pub struct LogEvent {
     pub rcode: u16,
     /// How the answer came about.
     pub outcome: QueryOutcome,
-    /// For a forwarded answer, the upstream's index.
-    pub upstream: Option<usize>,
+    /// For a forwarded or recursively resolved answer, who gave it.
+    pub upstream: Option<LogUpstream>,
     /// The filter rule that applied.
     pub rule: Option<RuleHit>,
     /// The known client's ID.
@@ -374,6 +430,8 @@ pub struct Search {
     pub outcome: Option<QueryOutcome>,
     /// Only entries at or after this time.
     pub since: Option<Timestamp>,
+    /// Only entries before this time.
+    pub until: Option<Timestamp>,
 }
 
 /// A page of search results.
@@ -504,10 +562,15 @@ impl Store {
         let limit = search.limit.clamp(1, MAX_PAGE);
         let name = search.name.as_ref().map(|name| name.to_ascii_lowercase());
         let since = search.since.map(key_floor);
+        // Keys sort by time, so a time is a bound on keys too.
+        let upper = search
+            .before
+            .unwrap_or(u64::MAX)
+            .min(search.until.map_or(u64::MAX, key_floor));
         let mut entries = Vec::new();
         let mut scanned = 0_usize;
         let mut last = None;
-        for row in table.range(..search.before.unwrap_or(u64::MAX))?.rev() {
+        for row in table.range(..upper)?.rev() {
             let (key, value) = row?;
             let id = key.value();
             if since.is_some_and(|since| id < since) {
@@ -665,6 +728,16 @@ fn next_key(last: &mut u64, time: Timestamp) -> u64 {
     key
 }
 
+/// Who gave an answer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LogUpstream {
+    /// The configured upstream with this index.
+    Index(usize),
+    /// The authoritative server at this address, for a recursively
+    /// resolved answer.
+    Address(SocketAddr),
+}
+
 /// What gets stored for an event.
 fn stored(event: LogEvent, upstreams: &[String]) -> StoredQuery {
     let name = event.name.name();
@@ -682,9 +755,10 @@ fn stored(event: LogEvent, upstreams: &[String]) -> StoredQuery {
         qtype: event.qtype,
         rcode: event.rcode,
         outcome: event.outcome,
-        upstream: event
-            .upstream
-            .and_then(|index| upstreams.get(index).cloned()),
+        upstream: event.upstream.and_then(|upstream| match upstream {
+            LogUpstream::Index(index) => upstreams.get(index).cloned(),
+            LogUpstream::Address(address) => Some(address.to_string()),
+        }),
         rule,
         list: event
             .rule
@@ -761,10 +835,7 @@ pub fn encode(query: &StoredQuery) -> Vec<u8> {
             out.extend_from_slice(&v6.octets());
         }
     }
-    out.push(match query.protocol {
-        Protocol::Udp => 0,
-        Protocol::Tcp => 1,
-    });
+    out.push(query.protocol.code());
     out.extend_from_slice(&query.qtype.to_le_bytes());
     out.extend_from_slice(&query.rcode.to_le_bytes());
     out.push(query.outcome.code());
@@ -846,11 +917,7 @@ pub fn decode(bytes: &[u8]) -> Option<StoredQuery> {
         6 => IpAddr::from(<[u8; 16]>::try_from(reader.take(16)?).ok()?),
         _ => return None,
     };
-    let protocol = match reader.u8()? {
-        0 => Protocol::Udp,
-        1 => Protocol::Tcp,
-        _ => return None,
-    };
+    let protocol = Protocol::from_code(reader.u8()?)?;
     let qtype = reader.u16()?;
     let rcode = reader.u16()?;
     let outcome = QueryOutcome::from_code(reader.u8()?)?;
@@ -929,6 +996,16 @@ mod tests {
         for stored in [query("ads.example."), forwarded] {
             assert_eq!(decode(&encode(&stored)), Some(stored));
         }
+        for protocol in Protocol::ALL {
+            let mut stored = query("ads.example.");
+            stored.protocol = protocol;
+            assert_eq!(decode(&encode(&stored)), Some(stored));
+            assert_eq!(Protocol::from_code(protocol.code()), Some(protocol));
+            assert_eq!(
+                serde_json::to_value(protocol).unwrap(),
+                serde_json::Value::from(protocol.as_str())
+            );
+        }
         let entry = query("ads.example.").entry(9);
         assert_eq!(
             (entry.qtype.as_str(), entry.rcode.as_str()),
@@ -1006,7 +1083,7 @@ mod tests {
             qtype: 1,
             rcode: 0,
             outcome: QueryOutcome::Forwarded,
-            upstream: Some(0),
+            upstream: Some(LogUpstream::Index(0)),
             rule: Some(RuleHit {
                 action: Action::Allow,
                 matched: Match {

@@ -32,7 +32,7 @@ pub fn query() -> impl Strategy<Value = Query> {
         name(),
         any::<u16>(),
         any::<u16>(),
-        prop::option::of((512..=u16::MAX, any::<bool>())),
+        prop::option::of((512..=u16::MAX, any::<bool>(), any::<bool>())),
     )
         .prop_map(|(id, (rd, cd, ad), name, qtype, qclass, edns)| Query {
             id,
@@ -44,9 +44,10 @@ pub fn query() -> impl Strategy<Value = Query> {
                 qtype: RecordType(qtype),
                 qclass: RecordClass(qclass),
             },
-            edns: edns.map(|(udp_payload_size, dnssec_ok)| Edns {
+            edns: edns.map(|(udp_payload_size, dnssec_ok, padding)| Edns {
                 udp_payload_size,
                 dnssec_ok,
+                padding,
             }),
         })
 }

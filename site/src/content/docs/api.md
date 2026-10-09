@@ -98,7 +98,8 @@ Specs reject unknown fields. Errors are JSON with a stable code:
 | 422 | `invalid` | A value is not valid, or a field is unknown. |
 
 Resources with `"managed_by": "terraform"` are read-only in the web UI and the TUI, so they do not
-drift from their Terraform definition. The API itself accepts changes to them.
+drift from their Terraform definition (see [Terraform](../terraform/)). The API itself accepts
+changes to them.
 
 ## Pausing filtering
 
@@ -109,6 +110,21 @@ api -X DELETE http://127.0.0.1:8053/api/v1/pause                      # resume n
 
 A pause ends by itself, and on a restart. The settings' `protection` switch turns filtering off
 for good.
+
+## DNS leak tests
+
+A [DNS leak test](../leak-test/) is a set of names only goethite answers. `POST` makes one; the
+device being tested looks its names up; `GET` shows which reached this node, from where, over
+which protocol and as which client:
+
+```sh
+api -X POST http://127.0.0.1:8053/api/v1/leak-tests      # {"id": "…", "names": [8 names], …}
+api http://127.0.0.1:8053/api/v1/leak-tests/<id>         # {"reached": 8, "lookups": [...], …}
+api http://127.0.0.1:8053/api/v1/leak-tests              # every test of the last hour
+```
+
+Tests are kept in memory on the node that made them for an hour, and are not configuration: a
+replica does not forward them to the primary, and the audit log does not list them.
 
 ## Query log and statistics
 
@@ -134,8 +150,9 @@ api 'http://127.0.0.1:8053/api/v1/audit?limit=20'
 
 ## Metrics
 
-`/metrics` serves Prometheus metrics: queries by outcome and protocol, a latency histogram,
-rate-limited and refused queries, the cache, upstream health, the filter and the query log. It
+`/metrics` serves Prometheus metrics: queries by outcome and protocol (`udp`, `tcp`, `dot`,
+`doh`, `doq`), a latency histogram, rate-limited and refused queries, failed TLS handshakes and rejected
+DNS over HTTPS requests, the cache, upstream health, the filter and the query log. It
 needs the token once one is configured:
 
 ```yaml

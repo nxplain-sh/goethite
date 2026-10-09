@@ -190,7 +190,15 @@ the size budget. Release builds of goethite embed `web/dist`; debug builds read 
 cd web
 npm ci --ignore-scripts
 npm run build      # or `npm run dev` against a node on 127.0.0.1:8053
+npm test           # Vitest: the forms' logic
+npx playwright install chromium
+npm run e2e        # Playwright: Chromium against a real goethite
 ```
+
+`npm run build` also builds the API reference (`web/dist-docs`), which goethite serves at
+`/api/docs` when `[api] docs` is on. The end-to-end tests start goethite themselves
+(`web/e2e/serve.mjs`), from the workspace's debug build unless `GOETHITE_BIN` names another;
+build goethite after `npm run build`, since release builds embed the files.
 
 The page runs under a strict CSP: no inline scripts or styles, no `eval`, nothing from CDNs.
 

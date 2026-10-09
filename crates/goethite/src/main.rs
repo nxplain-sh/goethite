@@ -1,9 +1,11 @@
 //! The goethite binary: command-line interface, configuration and wiring.
 
+mod certs;
 mod cluster;
 mod config;
 mod control;
 mod download;
+mod filterlists;
 mod filters;
 mod handoff;
 mod lists;
@@ -14,6 +16,8 @@ mod observe;
 mod plane;
 mod privileges;
 mod secrets;
+mod services;
+mod sizes;
 mod sockets;
 mod vrrp;
 
@@ -26,12 +30,16 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use arc_swap::ArcSwapOption;
 use clap::{Parser, Subcommand};
-use goethite_api::{Api, ApiConfig, EmbeddedWeb, WebAssets};
+use goethite_api::leak::LeakTests;
+use goethite_api::{Api, ApiConfig, EmbeddedDocs, EmbeddedWeb, WebAssets};
 use goethite_resolver::{
-    Cache, Forwarder, ForwarderConfig, Policy, PolicyState, Resolver, health_record, test_record,
+    Cache, Forwarder, ForwarderConfig, Policy, PolicyState, Recursor, Resolver, health_record,
+    test_record,
 };
 use goethite_server::Server;
-use goethite_store::{Actor, Import, Store};
+use goethite_store::{
+    Actor, DEFAULT_GROUP, Group, GroupList, Import, List, ListSpec, ManagedBy, Store,
+};
 use jiff::Timestamp;
 use tokio::sync::watch;
 use tracing::{error, info, warn};
@@ -300,21 +308,22 @@ fn sockets_from(
 
 /// The resolver for `config`, steered by `state`.
 fn resolver(config: &Config, state: &Arc<PolicyState>) -> Result<Resolver> {
-    let upstreams: Vec<_> = config
-        .upstream
-        .iter()
-        .map(config::UpstreamSection::to_upstream)
-        .collect();
-    for upstream in &upstreams {
-        info!(address = %upstream.address, transport = ?upstream.transport, "upstream");
-    }
-    let forwarder = Forwarder::new(ForwarderConfig::new(upstreams))
-        .context("invalid [[upstream]] configuration")?;
     let cache = Cache::new(config.cache.to_cache_config());
     info!(max_entries = config.cache.max_entries, "cache");
-    let mut resolver = Resolver::new(vec![test_record()?, health_record()?])
-        .with_cache(cache)
-        .with_forwarder(forwarder)
+    let mut resolver = Resolver::new(vec![test_record()?, health_record()?]).with_cache(cache);
+    if config.recursion.enabled {
+        let recursion = config.recursion.to_recursor_config(has_ipv6_route);
+        info!(
+            qname_minimisation = recursion.qname_minimisation,
+            ipv6 = recursion.ipv6,
+            dnssec = recursion.dnssec,
+            "resolving from the root servers"
+        );
+        resolver = resolver.with_recursor(Recursor::new(recursion));
+    } else {
+        resolver = resolver.with_forwarder(forwarder(config)?);
+    }
+    let mut resolver = resolver
         .with_policy(Arc::clone(state))
         .with_fail_mode(config.filter.on_failure.mode());
     if let Some(protection) = config.security.rebinding_protection()? {
@@ -323,6 +332,27 @@ fn resolver(config: &Config, state: &Arc<PolicyState>) -> Result<Resolver> {
         info!("DNS rebinding protection is turned off");
     }
     Ok(resolver)
+}
+
+/// The forwarder for `config`'s `[[upstream]]` tables.
+fn forwarder(config: &Config) -> Result<Forwarder> {
+    let upstreams: Vec<_> = config
+        .upstream
+        .iter()
+        .map(config::UpstreamSection::to_upstream)
+        .collect();
+    for upstream in &upstreams {
+        info!(address = %upstream.address, transport = ?upstream.transport, "upstream");
+    }
+    Forwarder::new(ForwarderConfig::new(upstreams)).context("invalid [[upstream]] configuration")
+}
+
+/// Whether this host has a route to the IPv6 internet: a UDP socket can be
+/// connected to a root server's IPv6 address. Nothing is sent.
+fn has_ipv6_route() -> bool {
+    std::net::UdpSocket::bind("[::]:0")
+        .and_then(|socket| socket.connect("[2001:503:ba3e::2:30]:53"))
+        .is_ok()
 }
 
 /// Runs the DNS server (the data plane) and the control plane until a
@@ -349,7 +379,8 @@ async fn serve(
     let resolver = Arc::new(resolver(config, &state)?);
     let metrics = Arc::new(metrics::Metrics::default());
     let observer_log = Arc::new(ArcSwapOption::empty());
-    let server = Server::new(
+    let leak = Arc::new(LeakTests::new());
+    let mut server = Server::new(
         sockets.take_dns().context("the DNS sockets are missing")?,
         config.server_config(),
         Arc::clone(&resolver),
@@ -357,14 +388,28 @@ async fn serve(
     .with_observer(Arc::new(observe::Observer::new(
         Arc::clone(&observer_log),
         Arc::clone(&metrics),
+        Arc::clone(&leak),
     )?));
+    let dns_cert = match (&config.server.tls, &secrets.dns_tls) {
+        (Some(tls), Some(pem)) => {
+            let files = Some((tls.cert.clone(), tls.key.clone()));
+            let cert = certs::Served::new("DNS certificate", pem, files)?;
+            // Each listener offers its own ALPN protocols.
+            server = server.with_tls(cert.server_config(&[])?);
+            Some(cert)
+        }
+        (Some(_), None) => anyhow::bail!("the DNS certificate is missing"),
+        (None, _) => None,
+    };
     let data = plane::DataPlane {
         resolver,
         state,
         metrics,
         server: server.stats(),
         log: observer_log,
+        dns_cert,
         started: Timestamp::now(),
+        leak,
     };
     let mut plane = Some(
         plane::ControlPlane::start(config, config_path, &sockets, secrets, &data, true).await?,
@@ -559,31 +604,28 @@ fn api(
     } else {
         None
     };
+    let docs = if config.api.docs {
+        let docs = EmbeddedDocs::get();
+        if docs.is_none() {
+            warn!(
+                "[api] docs is on, but this build has no API reference: build web/ before goethite"
+            );
+        }
+        docs.map(|docs| Arc::new(docs) as Arc<dyn WebAssets>)
+    } else {
+        None
+    };
     Arc::new(Api {
         store: Arc::clone(control.store()),
         log: Arc::clone(log),
         control: Arc::new(node),
-        config: ApiConfig { token, tls, web },
+        config: ApiConfig {
+            token,
+            tls,
+            web,
+            docs,
+        },
     })
-}
-
-/// The TLS settings for the API from PEM text.
-fn load_tls(cert: &str, key: &str) -> Result<Arc<rustls::ServerConfig>> {
-    use rustls::pki_types::pem::PemObject;
-    use rustls::pki_types::{CertificateDer, PrivateKeyDer};
-
-    let chain = CertificateDer::pem_slice_iter(cert.as_bytes())
-        .collect::<Result<Vec<_>, _>>()
-        .context("cannot read the API certificate")?;
-    let key = PrivateKeyDer::from_pem_slice(key.as_bytes()).context("cannot read the API key")?;
-    let provider = Arc::new(rustls::crypto::ring::default_provider());
-    let mut tls = rustls::ServerConfig::builder_with_provider(provider)
-        .with_safe_default_protocol_versions()?
-        .with_no_client_auth()
-        .with_single_cert(chain, key)
-        .context("the API certificate and key do not fit together")?;
-    tls.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
-    Ok(Arc::new(tls))
 }
 
 fn tui(api: Option<String>, token_file: Option<&Path>, ca_file: Option<&Path>) -> Result<()> {
@@ -643,14 +685,27 @@ fn check_config(config_path: &Path) -> Result<()> {
     if let Some(user) = &config.server.user {
         privileges::lookup(user)?;
     }
-    let upstreams = config
-        .upstream
-        .iter()
-        .map(config::UpstreamSection::to_upstream)
-        .collect();
-    Forwarder::new(ForwarderConfig::new(upstreams))
-        .context("invalid [[upstream]] configuration")?;
+    if !config.recursion.enabled {
+        forwarder(&config)?;
+    }
     filters::check(&config.filter, &ListStore::new(config.lists_dir()))?;
+    if let Some(services::ServicesFrom::File(path)) = config.filter.services_from() {
+        match services::read(&path, None)? {
+            services::Read::Changed(catalog) => {
+                info!(services = catalog.services.len(), "services catalog ready");
+            }
+            services::Read::Missing | services::Read::Unchanged => {
+                anyhow::bail!("filter.services_file: {} does not exist", path.display());
+            }
+        }
+    }
+    let secrets = Secrets::read(&config)?;
+    if let Some(pem) = &secrets.api_tls {
+        certs::Served::new("API certificate", pem, None)?;
+    }
+    if let Some(pem) = &secrets.dns_tls {
+        certs::Served::new("DNS certificate", pem, None)?;
+    }
     info!(config = %config_path.display(), "configuration is valid");
     Ok(())
 }
@@ -722,6 +777,9 @@ fn seed(store: &Store, config: &Config, config_path: &Path) -> Result<()> {
             let summary = store
                 .import(import, &Actor::system())
                 .context("cannot import [filter] into the store")?;
+            if config.filter.default_lists && config.filter.list.is_empty() {
+                add_default_lists(store)?;
+            }
             store.set_meta(IMPORTED_FILTER, &print)?;
             info!(
                 lists = summary.lists_added,
@@ -736,6 +794,49 @@ fn seed(store: &Store, config: &Config, config_path: &Path) -> Result<()> {
         ),
         Some(_) => {}
     }
+    Ok(())
+}
+
+/// Adds goethite's default lists (the default preset's) to a new store,
+/// used by the default group. They are ordinary lists: the API, the UIs or
+/// Terraform may change or remove them, and `goethite import` leaves them
+/// alone.
+fn add_default_lists(store: &Store) -> Result<()> {
+    let actor = Actor::system();
+    let mut ids = Vec::new();
+    for default in goethite_api::recommended::default_lists() {
+        let list = store.create::<List>(
+            ListSpec {
+                name: default.name.to_owned(),
+                url: Some(default.url.to_owned()),
+                path: None,
+                enabled: true,
+                comment: format!(
+                    "One of goethite's default lists ({}): keep it, replace it or add others.",
+                    default.license
+                ),
+                managed_by: ManagedBy::Api,
+            },
+            &actor,
+        )?;
+        info!(
+            list = default.name,
+            "a new store: filtering with a default list"
+        );
+        ids.push(list.id);
+    }
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let group = store
+        .get::<Group>(DEFAULT_GROUP)
+        .context("the default group is missing")?;
+    let mut spec = group.spec;
+    spec.lists.extend(ids.into_iter().map(|list| GroupList {
+        list,
+        schedule: None,
+    }));
+    store.update::<Group>(DEFAULT_GROUP, spec, Some(group.revision), &actor)?;
     Ok(())
 }
 
@@ -763,6 +864,7 @@ fn import(config_path: &Path) -> Result<()> {
 #[cfg(unix)]
 fn reload_on_hangup(
     control: Arc<Control>,
+    certs: Vec<Arc<certs::Served>>,
     tasks: &mut tokio::task::JoinSet<()>,
     stopped: watch::Receiver<bool>,
 ) -> Result<()> {
@@ -776,7 +878,10 @@ fn reload_on_hangup(
                     if received.is_none() {
                         return;
                     }
-                    info!("received SIGHUP, reloading filter lists");
+                    info!("received SIGHUP, reloading filter lists and certificates");
+                    for cert in &certs {
+                        cert.reload_and_log();
+                    }
                     control.rebuild_filter().await;
                 }
                 () = until(stopped.clone()) => return,
@@ -794,6 +899,7 @@ fn reload_on_hangup(
 )]
 fn reload_on_hangup(
     _control: Arc<Control>,
+    _certs: Vec<Arc<certs::Served>>,
     _tasks: &mut tokio::task::JoinSet<()>,
     _stopped: watch::Receiver<bool>,
 ) -> Result<()> {

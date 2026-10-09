@@ -13,13 +13,13 @@ pub mod stats;
 mod store;
 
 pub use model::{
-    BlockResponseKind, Client, ClientSpec, ConfigSnapshot, DEFAULT_GROUP, Group, GroupList,
-    GroupSpec, List, ListSpec, ManagedBy, Rule, RuleSpec, Schedule, ScheduleSpec, Settings,
-    SettingsSpec, ValidationError, Weekday, Window,
+    BlockResponseKind, BlockedService, Client, ClientSpec, ConfigSnapshot, DEFAULT_GROUP, Group,
+    GroupList, GroupSpec, List, ListSpec, ManagedBy, Rule, RuleSpec, Schedule, ScheduleSpec,
+    Settings, SettingsSpec, ValidationError, Weekday, Window,
 };
 pub use querylog::{
-    LogEvent, NameBuf, Protocol, QueryEntry, QueryLog, QueryLogConfig, QueryOutcome, QueryPage,
-    RuleHit, Search, StoredQuery,
+    LogEvent, LogUpstream, NameBuf, Protocol, QueryEntry, QueryLog, QueryLogConfig, QueryOutcome,
+    QueryPage, RuleHit, Search, StoredQuery,
 };
 pub use stats::{Counters, HourPoint, StatsReport, TopEntry};
 pub use store::{

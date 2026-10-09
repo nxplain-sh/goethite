@@ -435,6 +435,7 @@ mod tests {
         for (method, path) in [
             (Method::GET, "/api/v1/lists"),
             (Method::POST, "/api/v1/lists/refresh"),
+            (Method::POST, "/api/v1/leak-tests"),
             (Method::PUT, "/api/v1/pause"),
             (Method::POST, "/api/v1/cluster/promote"),
             (Method::POST, "/api/v2/lists"),

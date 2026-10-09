@@ -3,13 +3,15 @@
 //! This is the only module that touches hickory-proto's message types.
 
 use hickory_proto::op::{self, Message, MessageType, OpCode};
+use hickory_proto::rr::rdata::opt::{EdnsCode, EdnsOption};
 use hickory_proto::rr::{self, DNSClass};
 use hickory_proto::serialize::binary::{BinDecodable, BinDecoder, BinEncodable, BinEncoder};
 
 use crate::codec::RawHeader;
 use crate::{
-    DecodeError, DnsCodec, Edns, EncodeError, Name, Opcode, Query, Question, Record, RecordClass,
-    RecordType, Response, ResponseCode, ResponseError, WireError,
+    DecodeError, DnsCodec, Edns, EncodeError, Name, Opcode, QUERY_PADDING_BLOCK, Query, Question,
+    RESPONSE_PADDING_BLOCK, Record, RecordClass, RecordType, Response, ResponseCode, ResponseError,
+    WireError,
 };
 
 /// The default [`DnsCodec`], backed by hickory-proto.
@@ -41,10 +43,7 @@ impl DnsCodec for HickoryCodec {
                     version: edns.version(),
                 });
             }
-            Some(edns) => Some(Edns {
-                udp_payload_size: edns.max_payload(),
-                dnssec_ok: edns.flags().dnssec_ok,
-            }),
+            Some(edns) => Some(edns_from_hickory(edns)),
         };
 
         Ok(Query {
@@ -90,10 +89,7 @@ impl DnsCodec for HickoryCodec {
                 .into_iter()
                 .map(record_from_hickory)
                 .collect(),
-            edns: message.edns.map(|edns| Edns {
-                udp_payload_size: edns.max_payload(),
-                dnssec_ok: edns.flags().dnssec_ok,
-            }),
+            edns: message.edns.as_ref().map(edns_from_hickory),
         })
     }
 
@@ -106,7 +102,16 @@ impl DnsCodec for HickoryCodec {
         if let Some(edns) = query.edns {
             message.set_edns(edns_to_hickory(edns));
         }
-        emit(&message, out)
+        emit(&message, out)?;
+        if query.edns.is_some_and(|edns| edns.padding) {
+            pad(
+                &mut message,
+                QUERY_PADDING_BLOCK,
+                usize::from(u16::MAX),
+                out,
+            )?;
+        }
+        Ok(())
     }
 
     fn encode_response(
@@ -117,8 +122,12 @@ impl DnsCodec for HickoryCodec {
     ) -> Result<(), EncodeError> {
         out.clear();
         check_representable(response)?;
-        emit(&response_to_hickory(response, true), out)?;
+        let mut message = response_to_hickory(response, true);
+        emit(&message, out)?;
         if out.len() <= max_len {
+            if response.edns.is_some_and(|edns| edns.padding) {
+                pad(&mut message, RESPONSE_PADDING_BLOCK, max_len, out)?;
+            }
             return Ok(());
         }
 
@@ -261,6 +270,33 @@ fn check_representable(response: &Response) -> Result<(), EncodeError> {
     Err(EncodeError::Unrepresentable { reason })
 }
 
+/// Bytes the Padding option adds before its padding: code and length.
+const OPTION_HEADER_LEN: usize = 4;
+
+/// Pads `message`, already encoded in `out` with an OPT record, to the next
+/// multiple of `block` bytes with a Padding option (RFC 7830), or as close
+/// as `max_len` allows; leaves it unpadded when not even an empty option
+/// fits. Padding is zeros, as RFC 7830 3 asks.
+fn pad(
+    message: &mut Message,
+    block: usize,
+    max_len: usize,
+    out: &mut Vec<u8>,
+) -> Result<(), EncodeError> {
+    let Some(minimum) = out.len().checked_add(OPTION_HEADER_LEN) else {
+        return Ok(());
+    };
+    let target = minimum.next_multiple_of(block).min(max_len);
+    let (Some(padding), Some(edns)) = (target.checked_sub(minimum), message.edns.as_mut()) else {
+        return Ok(());
+    };
+    edns.options_mut().insert(EdnsOption::Unknown(
+        EdnsCode::Padding.into(),
+        vec![0; padding],
+    ));
+    emit(message, out)
+}
+
 fn emit(message: &Message, out: &mut Vec<u8>) -> Result<(), EncodeError> {
     out.clear();
     let mut encoder = BinEncoder::new(out);
@@ -282,6 +318,14 @@ fn question_to_hickory(question: &Question) -> op::Query {
     let mut query = op::Query::query(question.name.0.clone(), question.qtype.0.into());
     query.set_query_class(question.qclass.0.into());
     query
+}
+
+fn edns_from_hickory(edns: &op::Edns) -> Edns {
+    Edns {
+        udp_payload_size: edns.max_payload(),
+        dnssec_ok: edns.flags().dnssec_ok,
+        padding: edns.options().get(EdnsCode::Padding).is_some(),
+    }
 }
 
 fn edns_to_hickory(edns: Edns) -> op::Edns {
@@ -362,6 +406,7 @@ mod tests {
             edns: Some(Edns {
                 udp_payload_size: 1232,
                 dnssec_ok: true,
+                padding: false,
             }),
         }
     }
@@ -526,6 +571,129 @@ mod tests {
         // Well-formed options of unknown codes are fine.
         let unknown = [option(65_001, b"abc"), option(65_002, b"")].concat();
         assert!(HickoryCodec.decode_query(&with_options(&unknown)).is_ok());
+    }
+
+    /// The Padding options in the OPT record at the end of `wire`, which
+    /// has no other options: their lengths and whether they are all zeros.
+    fn padding_in(wire: &[u8]) -> Vec<(usize, bool)> {
+        let message = Message::from_vec(wire).unwrap();
+        let edns = message.edns.unwrap();
+        edns.options()
+            .get_all(EdnsCode::Padding)
+            .into_iter()
+            .map(|option| match option {
+                EdnsOption::Unknown(_, data) => (data.len(), data.iter().all(|&b| b == 0)),
+                _ => panic!("padding read as something else"),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn padding_is_read_from_queries() {
+        let padded = with_options(&option(12, &[0; 20]));
+        assert!(
+            HickoryCodec
+                .decode_query(&padded)
+                .unwrap()
+                .edns
+                .unwrap()
+                .padding
+        );
+        let empty = with_options(&option(12, &[]));
+        assert!(
+            HickoryCodec
+                .decode_query(&empty)
+                .unwrap()
+                .edns
+                .unwrap()
+                .padding
+        );
+        let other = with_options(&option(65_001, b"abc"));
+        assert!(
+            !HickoryCodec
+                .decode_query(&other)
+                .unwrap()
+                .edns
+                .unwrap()
+                .padding
+        );
+    }
+
+    #[test]
+    fn padded_queries_fill_128_byte_blocks() {
+        for name in [
+            "a.",
+            "goethite.test.",
+            &format!("{0}.{0}.example.", "x".repeat(60)),
+        ] {
+            let mut query = sample_query();
+            query.question.name = name.parse().unwrap();
+            let plain = encode(&query);
+            query.edns = query.edns.map(|edns| Edns {
+                padding: true,
+                ..edns
+            });
+            let padded = encode(&query);
+            assert_eq!(padded.len() % QUERY_PADDING_BLOCK, 0, "{name}");
+            assert!(padded.len() >= plain.len() + OPTION_HEADER_LEN);
+            assert!(padded.len() < plain.len() + OPTION_HEADER_LEN + QUERY_PADDING_BLOCK);
+            assert_eq!(padding_in(&padded).len(), 1);
+            assert!(padding_in(&padded)[0].1, "zeros");
+            let decoded = HickoryCodec.decode_query(&padded).unwrap();
+            assert!(decoded.edns.unwrap().padding);
+            assert_eq!(decoded.question, query.question);
+        }
+        // Without EDNS there is nowhere to put padding.
+        let mut bare = sample_query();
+        bare.edns = None;
+        assert_eq!(
+            encode(&bare),
+            encode(&Query {
+                edns: None,
+                ..sample_query()
+            })
+        );
+    }
+
+    #[test]
+    fn padded_responses_fill_468_byte_blocks_within_the_limit() {
+        let query = sample_query();
+        let mut response = Response::for_query(&query, ResponseCode::NO_ERROR);
+        response.answers = (0..3)
+            .map(|i| Record::a(query.question.name.clone(), 60, Ipv4Addr::new(192, 0, 2, i)))
+            .collect();
+        let mut plain = Vec::new();
+        HickoryCodec
+            .encode_response(&response, 65_535, &mut plain)
+            .unwrap();
+        response.edns = response.edns.map(|edns| Edns {
+            padding: true,
+            ..edns
+        });
+        let mut out = Vec::new();
+        HickoryCodec
+            .encode_response(&response, 65_535, &mut out)
+            .unwrap();
+        assert_eq!(out.len(), RESPONSE_PADDING_BLOCK);
+        assert_eq!(
+            padding_in(&out),
+            vec![(RESPONSE_PADDING_BLOCK - plain.len() - 4, true)]
+        );
+        let back = HickoryCodec.decode_response(&out).unwrap();
+        assert_eq!(back.answers, response.answers);
+        assert!(back.edns.unwrap().padding);
+
+        // A limit below the block: padded up to the limit.
+        HickoryCodec
+            .encode_response(&response, plain.len() + 10, &mut out)
+            .unwrap();
+        assert_eq!(out.len(), plain.len() + 10);
+        // No room even for the option: sent as is.
+        HickoryCodec
+            .encode_response(&response, plain.len() + 3, &mut out)
+            .unwrap();
+        assert_eq!(out, plain);
+        assert_eq!(padding_in(&out), vec![]);
     }
 
     #[test]

@@ -7,7 +7,7 @@ use std::fmt::Write as _;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use goethite_resolver::{CacheStats, Transport, UpstreamStatus};
+use goethite_resolver::{CacheStats, RecursorStats, Transport, UpstreamStatus};
 use goethite_server::ServerStats;
 use goethite_store::{Protocol, QueryOutcome};
 
@@ -17,7 +17,7 @@ const BUCKETS_US: [u64; 14] = [
     1_000_000, 2_500_000,
 ];
 
-const PROTOCOLS: [Protocol; 2] = [Protocol::Udp, Protocol::Tcp];
+const PROTOCOLS: [Protocol; Protocol::ALL.len()] = Protocol::ALL;
 
 /// Per-query counters.
 #[derive(Debug)]
@@ -76,6 +76,8 @@ pub struct Sources<'a> {
     pub cache: Option<(CacheStats, usize)>,
     /// The upstreams and how they are doing.
     pub upstreams: &'a [UpstreamStatus],
+    /// Recursion's counters, when it is on.
+    pub recursion: Option<RecursorStats>,
     /// Rules in the compiled filter.
     pub filter_rules: usize,
     /// Lists in the store, and how many are enabled.
@@ -161,8 +163,60 @@ pub fn render(sources: &Sources<'_>) -> String {
             upstream.consecutive_failures,
         );
     }
+    if let Some(recursion) = &sources.recursion {
+        recursion_metrics(&mut out, recursion);
+    }
     state(&mut out, sources);
     out.0
+}
+
+fn recursion_metrics(out: &mut Out, stats: &RecursorStats) {
+    out.family(
+        "goethite_recursion_queries_total",
+        "counter",
+        "Queries sent to authoritative servers, by protocol.",
+    );
+    let udp = stats.sent.saturating_sub(stats.tcp);
+    out.sample("goethite_recursion_queries_total", "protocol=\"udp\"", udp);
+    out.sample(
+        "goethite_recursion_queries_total",
+        "protocol=\"tcp\"",
+        stats.tcp,
+    );
+    out.single(
+        "goethite_recursion_timeouts_total",
+        "counter",
+        "Queries to authoritative servers that got no answer in time.",
+        stats.timeouts,
+    );
+    out.single(
+        "goethite_recursion_failures_total",
+        "counter",
+        "Client queries recursion could not resolve (SERVFAIL).",
+        stats.failures,
+    );
+    out.family(
+        "goethite_recursion_dnssec_total",
+        "counter",
+        "Answers DNSSEC validation found secure, insecure or bogus (bogus ones are SERVFAIL).",
+    );
+    for (result, count) in [
+        ("secure", stats.secure),
+        ("insecure", stats.insecure),
+        ("bogus", stats.bogus),
+    ] {
+        out.sample(
+            "goethite_recursion_dnssec_total",
+            &format!("result=\"{result}\""),
+            count,
+        );
+    }
+    out.single(
+        "goethite_recursion_zones",
+        "gauge",
+        "Zone cuts recursion knows.",
+        stats.zones,
+    );
 }
 
 fn queries(out: &mut Out, m: &Metrics) {
@@ -173,10 +227,7 @@ fn queries(out: &mut Out, m: &Metrics) {
     );
     for (outcome, row) in QueryOutcome::ALL.iter().zip(&m.queries) {
         for (protocol, counter) in PROTOCOLS.iter().zip(row) {
-            let protocol = match protocol {
-                Protocol::Udp => "udp",
-                Protocol::Tcp => "tcp",
-            };
+            let protocol = protocol.as_str();
             out.sample(
                 "goethite_queries_total",
                 &format!("outcome=\"{}\",protocol=\"{protocol}\"", outcome.as_str()),
@@ -225,6 +276,16 @@ fn turned_away(out: &mut Out, server: &ServerStats) {
             "goethite_udp_oversized_total",
             "UDP datagrams too large to be a query.",
             &server.udp_oversized,
+        ),
+        (
+            "goethite_tls_handshake_failures_total",
+            "DNS over TLS and HTTPS connections whose TLS handshake failed or took too long.",
+            &server.tls_handshake_failures,
+        ),
+        (
+            "goethite_https_rejected_total",
+            "DNS over HTTPS requests answered with an HTTP error.",
+            &server.https_rejected,
         ),
     ] {
         out.single(name, "counter", help, counter.load(Ordering::Relaxed));
@@ -368,8 +429,14 @@ mod tests {
             Protocol::Tcp,
             Duration::from_secs(9),
         );
+        metrics.observe(
+            QueryOutcome::Cached,
+            Protocol::Doh,
+            Duration::from_micros(80),
+        );
         let server = ServerStats::default();
         server.rate_limited.store(4, Ordering::Relaxed);
+        server.tls_handshake_failures.store(2, Ordering::Relaxed);
         let upstreams = [UpstreamStatus {
             config: UpstreamConfig::udp("9.9.9.9:53".parse().unwrap()),
             healthy: false,
@@ -380,6 +447,12 @@ mod tests {
             server: &server,
             cache: Some((CacheStats { hits: 5, misses: 2 }, 7)),
             upstreams: &upstreams,
+            recursion: Some(RecursorStats {
+                sent: 10,
+                tcp: 1,
+                bogus: 3,
+                ..RecursorStats::default()
+            }),
             filter_rules: 1234,
             lists: (3, 2),
             protection: (true, false),
@@ -390,15 +463,21 @@ mod tests {
         for line in [
             "goethite_queries_total{outcome=\"blocked\",protocol=\"udp\"} 1",
             "goethite_queries_total{outcome=\"forwarded\",protocol=\"tcp\"} 2",
-            "goethite_query_duration_seconds_bucket{le=\"0.0001\"} 1",
-            "goethite_query_duration_seconds_bucket{le=\"0.05\"} 2",
-            "goethite_query_duration_seconds_bucket{le=\"2.5\"} 2",
-            "goethite_query_duration_seconds_bucket{le=\"+Inf\"} 3",
-            "goethite_query_duration_seconds_count 3",
-            "goethite_query_duration_seconds_sum 9.03008",
+            "goethite_queries_total{outcome=\"cached\",protocol=\"doh\"} 1",
+            "goethite_queries_total{outcome=\"cached\",protocol=\"dot\"} 0",
+            "goethite_query_duration_seconds_bucket{le=\"0.0001\"} 2",
+            "goethite_query_duration_seconds_bucket{le=\"0.05\"} 3",
+            "goethite_query_duration_seconds_bucket{le=\"2.5\"} 3",
+            "goethite_query_duration_seconds_bucket{le=\"+Inf\"} 4",
+            "goethite_query_duration_seconds_count 4",
+            "goethite_query_duration_seconds_sum 9.03016",
             "goethite_rate_limited_total 4",
+            "goethite_tls_handshake_failures_total 2",
             "goethite_cache_lookups_total{result=\"hit\"} 5",
             "goethite_upstream_up{upstream=\"9.9.9.9:53\",protocol=\"udp\"} 0",
+            "goethite_recursion_queries_total{protocol=\"udp\"} 9",
+            "goethite_recursion_queries_total{protocol=\"tcp\"} 1",
+            "goethite_recursion_dnssec_total{result=\"bogus\"} 3",
             "goethite_filter_rules 1234",
             "goethite_filter_lists{state=\"disabled\"} 1",
             "# TYPE goethite_query_duration_seconds histogram",

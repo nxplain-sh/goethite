@@ -9,8 +9,9 @@ to a default. Run `goethite check-config --config <path>` to check a file. The c
 [example config](https://github.com/nxplain-sh/goethite/blob/main/config/goethite.example.toml)
 is a good starting point.
 
-The file is read at startup. `SIGHUP` (`systemctl reload goethite`) re-reads the filter lists but
-not the file itself; restart goethite after changing it. Files over 1 MiB are refused.
+The file is read at startup. `SIGHUP` (`systemctl reload goethite`) re-reads the filter lists and
+the TLS certificates but not the file itself; restart goethite after changing it. Files over 1 MiB
+are refused.
 
 ## `[server]`
 
@@ -40,10 +41,30 @@ UDP queries per client network; see [rate limiting](../security/#rate-limiting).
 
 Loopback clients are never limited.
 
+### `[server.tls]`
+
+DNS over TLS, HTTPS and QUIC for clients; see [Encrypted DNS](../encrypted-dns/). Without this
+table, none is served.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `cert`, `key` | required | PEM files: the certificate chain and its private key. Read before goethite drops its privileges, and again on `SIGHUP`. Relative paths are relative to the config file. |
+| `dot` | none | Addresses for DNS over TLS, usually port 853: one or a list, at most 16. |
+| `doh` | none | Addresses for DNS over HTTPS, usually port 443: one or a list, at most 16. Queries go to `/dns-query`. |
+| `doq` | none | Addresses for DNS over QUIC, usually UDP port 853: one or a list, at most 16. |
+| `server_name` | unset | The name devices use, such as `"dns.example"`. With it, a TLS server name one label below it (`anna-phone.dns.example`) carries a client ID over DoT and DoQ; the certificate should then cover `*.dns.example` too. |
+| `require_client_id` | `false` | Answer only DoT, DoH, DoQ and ODoH queries that carry a known client ID; others get `REFUSED`. Turn it on when the listeners are reachable from the internet. |
+| `odoh` | `false` | Make the `doh` addresses an [Oblivious DoH](../encrypted-dns/#oblivious-doh) target too: encrypted queries at `/dns-query`, the public key at `/.well-known/odohconfigs`. Needs `doh`. |
+
+At least one of `dot`, `doh` and `doq` is required. No TCP address may be used twice across
+`[server]`, `[server.tls]`, `[api]` and `[cluster]`, nor a UDP address across `[server] listen`
+and `doq`. Encrypted connections, QUIC ones included, count against `max_tcp_connections` and
+`max_tcp_connections_per_client`.
+
 ## `[[upstream]]`
 
 The resolvers goethite forwards to, tried in the order they appear, with failover. At least one
-is required, and at most 16 are allowed. An upstream that fails three times in a row is skipped
+is required, unless [`[recursion]`](#recursion) is enabled instead, and at most 16 are allowed. An upstream that fails three times in a row is skipped
 for 30 seconds.
 
 | Key | Default | Meaning |
@@ -55,7 +76,21 @@ for 30 seconds.
 | `randomize_case` | `true` | 0x20 case randomization of query names, a defense against spoofed answers. Turn it off only for an upstream that does not preserve case. |
 
 Certificates are checked against the Mozilla root certificates built into goethite, not the
-operating system's store. Each query has 2 seconds per upstream and 4 seconds in total.
+operating system's store. Each query has 2 seconds per upstream and 4 seconds in total. Queries to
+`tls` and `https` upstreams are [padded](../encrypted-dns/#padding) so their size says less
+about the name.
+
+## `[recursion]`
+
+Resolve every name from the root servers down instead of asking `[[upstream]]` resolvers; see
+[Recursion](../recursion/). A config file has one or the other.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | `false` | Resolve recursively. With it, there must be no `[[upstream]]` tables. |
+| `qname_minimisation` | `true` | Show each server only as much of a name as it needs (RFC 9156). |
+| `ipv6` | unset | Ask servers over IPv6 too. Unset: when this host has an IPv6 route. |
+| `dnssec` | `true` | Validate answers with DNSSEC: AD for secure ones, SERVFAIL for bogus ones. See [DNSSEC](../recursion/#dnssec). |
 
 ## `[cache]`
 
@@ -85,6 +120,10 @@ API.
 | `rules` | `[]` | Rules written into the config, at most 10,000. Each must be a supported rule; anything else is an error. |
 | `cache_dir` | `lists` in the state directory | Where downloaded lists are kept. Relative paths are relative to the config file. This one is read on every start. |
 | `update_hours` | `24` | How often downloaded lists are refreshed, 1 to 168 hours, with up to 10% random delay. |
+| `default_lists` | `true` | Whether a new node with no `[[filter.list]]` starts with goethite's [Balanced preset](../filtering/#recommended-lists-and-presets) (HaGeZi Multi Normal, TIF Mini and Fake) in the default group. Only the first start of a new store looks at it. |
+| `directory` | `true` | Whether the node looks lists up for the web UI, only when someone browses them: the [FilterLists directory](../filtering/#finding-more-lists), and the sizes the [recommended lists](../filtering/#recommended-lists-and-presets) state. A node setting, never copied into the store. |
+| `services` | `true` | Whether groups can [block services](../groups/#blocked-services): the node downloads AdGuard's services catalog with the lists. A node setting, never copied into the store. |
+| `services_file` | none | Reads the services catalog from this file instead of downloading it, for nodes without internet access (re-read on reload). Relative paths are relative to the config file. |
 | `on_failure` | `"open"` | What to do when filtering fails: `"open"` keeps resolving (unfiltered if need be) and reports it, `"closed"` refuses to start or answers SERVFAIL. A node setting, never copied into the store. See [Security](../security/#when-filtering-fails). |
 
 ### `[[filter.list]]`
@@ -117,6 +156,7 @@ readable by goethite's user only, and only one goethite process can open it at a
 | `token_sha256` | unset | The SHA-256 hash of the admin token, as printed by `goethite token`. Without it, only loopback clients are answered, without authentication. |
 | `tls_cert`, `tls_key` | unset | PEM files to serve HTTPS. Read before goethite drops its privileges, so they may be readable by root only. |
 | `web_ui` | `true` | Whether the [web UI](../web-ui/) is served at `/` on the same addresses. |
+| `docs` | `false` | Whether the [API reference](../web-ui/#api-reference) is served at `/api/docs`, to loopback clients only. |
 
 See [REST API](../api/) for how to use it.
 

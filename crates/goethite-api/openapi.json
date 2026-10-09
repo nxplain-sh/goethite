@@ -10,7 +10,7 @@
       "name": "MIT OR Apache-2.0",
       "identifier": "MIT OR Apache-2.0"
     },
-    "version": "0.3.0"
+    "version": "0.4.0"
   },
   "paths": {
     "/api/v1/audit": {
@@ -848,6 +848,133 @@
         }
       }
     },
+    "/api/v1/leak-tests": {
+      "get": {
+        "tags": [
+          "node"
+        ],
+        "summary": "The DNS leak tests this node keeps, newest first, with the lookups\nthat reached it.",
+        "operationId": "list_leak_tests",
+        "responses": {
+          "200": {
+            "description": "The tests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeakTestList"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Not run on this node",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "node"
+        ],
+        "summary": "Starts a DNS leak test: names under `leak.goethite.test` that only\ngoethite answers, for the device being tested to look up. The lookups\nthat reach this node are recorded for an hour; names that never arrive\nwere asked of another resolver. Tests live in memory, on this node.",
+        "operationId": "create_leak_test",
+        "responses": {
+          "201": {
+            "description": "The test, with the names to look up",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeakTest"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Not run on this node",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/leak-tests/{id}": {
+      "get": {
+        "tags": [
+          "node"
+        ],
+        "summary": "A DNS leak test: which of its names reached this node, from where, how\nand as which client.",
+        "operationId": "get_leak_test",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The test's ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The test",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeakTest"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such test, or it expired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Not run on this node",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      }
+    },
     "/api/v1/lists": {
       "get": {
         "tags": [
@@ -925,6 +1052,153 @@
           },
           "422": {
             "description": "It is not valid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/lists/directory": {
+      "get": {
+        "tags": [
+          "lists"
+        ],
+        "summary": "The FilterLists directory (filterlists.com): the lists goethite can\nread, allowlists left out. The node fetches it when asked, and keeps it\nfor a day.",
+        "operationId": "get_directory",
+        "responses": {
+          "200": {
+            "description": "The directory",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Directory"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Turned off on this node, or FilterLists cannot be reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/lists/directory/{id}": {
+      "get": {
+        "tags": [
+          "lists"
+        ],
+        "summary": "A list's details from the FilterLists directory, with its `https://`\naddresses. Licenses and descriptions are FilterLists' and may be out of\ndate.",
+        "operationId": "get_directory_list",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The list's FilterLists ID",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DirectoryList"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Turned off on this node, or FilterLists cannot be reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/lists/recommended": {
+      "get": {
+        "tags": [
+          "lists"
+        ],
+        "summary": "The filter lists goethite recommends, each checked to download and read\ncleanly, by category: one base list against ads and trackers, security\nlists to stack on it, optional lists by topic, and legacy lists the base\nlists include. Lists that do the same job name each other in `excludes`.\nPresets are sets of them for a group; the `default` one is what a new\nnode starts with.",
+        "operationId": "recommended_lists",
+        "responses": {
+          "200": {
+            "description": "Recommended lists and presets",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Recommended"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/lists/recommended/sizes": {
+      "get": {
+        "tags": [
+          "lists"
+        ],
+        "summary": "How big the recommended lists say they are, read from the start of each\nlist by the node when asked, and kept for a day. Lists whose header\nstates no size are left out.",
+        "operationId": "recommended_sizes",
+        "responses": {
+          "200": {
+            "description": "The sizes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecommendedSizes"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Turned off on this node",
             "content": {
               "application/json": {
                 "schema": {
@@ -1350,6 +1624,16 @@
             "name": "since",
             "in": "query",
             "description": "Only entries at or after this time (RFC 3339).",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "until",
+            "in": "query",
+            "description": "Only entries before this time (RFC 3339).",
             "required": false,
             "schema": {
               "type": "string",
@@ -1990,6 +2274,42 @@
         ]
       }
     },
+    "/api/v1/services": {
+      "get": {
+        "tags": [
+          "groups"
+        ],
+        "summary": "The services groups can block (`blocked_services`), such as TikTok or\nYouTube, with the rules that block them. The catalog is AdGuard's\nHostlistsRegistry (GPL-3.0), which the node downloads and refreshes with\nthe filter lists.",
+        "operationId": "get_services",
+        "responses": {
+          "200": {
+            "description": "The services",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Services"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Turned off on this node",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      }
+    },
     "/api/v1/settings": {
       "get": {
         "tags": [
@@ -2317,6 +2637,27 @@
           "refused"
         ]
       },
+      "BlockedService": {
+        "type": "object",
+        "description": "A service a group blocks, always or while a schedule is active.",
+        "required": [
+          "service"
+        ],
+        "properties": {
+          "schedule": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The schedule's ID: the service is blocked only while the schedule is\nactive. Without one it is always blocked."
+          },
+          "service": {
+            "type": "string",
+            "description": "The service's ID in the services catalog (`GET /api/v1/services`),\nsuch as `tiktok`. An ID the catalog does not have blocks nothing."
+          }
+        },
+        "additionalProperties": false
+      },
       "CacheStatus": {
         "type": "object",
         "description": "The cache.",
@@ -2345,6 +2686,16 @@
             "minimum": 0
           }
         }
+      },
+      "Category": {
+        "type": "string",
+        "description": "What a recommended list is for.",
+        "enum": [
+          "base",
+          "security",
+          "optional",
+          "legacy"
+        ]
       },
       "Client": {
         "type": "object",
@@ -2385,7 +2736,7 @@
       },
       "ClientSpec": {
         "type": "object",
-        "description": "A device or network, identified by its addresses.",
+        "description": "A device or network, identified by its addresses or its client IDs.",
         "required": [
           "name",
           "addresses"
@@ -2396,7 +2747,7 @@
             "items": {
               "type": "string"
             },
-            "description": "IP addresses or networks in CIDR notation, such as `192.168.1.23`\nor `192.168.1.0/24`. The longest network containing a query's source\naddress decides which client asked."
+            "description": "IP addresses or networks in CIDR notation, such as `192.168.1.23`\nor `192.168.1.0/24`. The longest network containing a query's source\naddress decides which client asked. May be empty for a client known\nby its client IDs only."
           },
           "comment": {
             "type": "string",
@@ -2405,6 +2756,13 @@
           "group": {
             "type": "string",
             "description": "The group's ID."
+          },
+          "ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Client IDs, such as `anna-phone`: over DNS over TLS, HTTPS or QUIC a\ndevice can name itself, in the server name (`anna-phone.dns.example`)\nor the DNS over HTTPS path (`/dns-query/anna-phone`), wherever it is.\nA known ID decides which client asked before the address does. 1 to\n63 lowercase letters, digits and hyphens, not at either end."
           },
           "managed_by": {
             "$ref": "#/components/schemas/ManagedBy",
@@ -2570,6 +2928,180 @@
           }
         }
       },
+      "Directory": {
+        "type": "object",
+        "description": "The FilterLists directory, as far as goethite can use it.",
+        "required": [
+          "fetched_at",
+          "lists"
+        ],
+        "properties": {
+          "fetched_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When this node fetched it."
+          },
+          "lists": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DirectoryEntry"
+            },
+            "description": "Lists in syntaxes goethite reads, allowlists left out, by name."
+          }
+        }
+      },
+      "DirectoryEntry": {
+        "type": "object",
+        "description": "A list in the FilterLists directory that goethite can use.",
+        "required": [
+          "id",
+          "name",
+          "description",
+          "tags",
+          "syntaxes"
+        ],
+        "properties": {
+          "description": {
+            "type": "string",
+            "description": "What it is for."
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Its FilterLists ID.",
+            "minimum": 0
+          },
+          "license": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its license, as FilterLists records it."
+          },
+          "name": {
+            "type": "string",
+            "description": "Its name."
+          },
+          "syntaxes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Its formats, such as `Domains`."
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Topics, such as `ads` or `malware`."
+          }
+        }
+      },
+      "DirectoryList": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/DirectoryEntry",
+            "description": "The list."
+          },
+          {
+            "type": "object",
+            "required": [
+              "urls",
+              "usable"
+            ],
+            "properties": {
+              "homepage": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Its home page."
+              },
+              "urls": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/DirectoryUrl"
+                },
+                "description": "Its `https://` addresses: main ones first, mirrors after."
+              },
+              "usable": {
+                "type": "boolean",
+                "description": "Whether goethite can use it: a readable syntax, not an allowlist."
+              }
+            }
+          }
+        ],
+        "description": "A list's details from the directory, with its addresses."
+      },
+      "DirectoryUrl": {
+        "type": "object",
+        "description": "One address of a list.",
+        "required": [
+          "url",
+          "segment",
+          "mirror"
+        ],
+        "properties": {
+          "mirror": {
+            "type": "boolean",
+            "description": "Whether it is a mirror of another address."
+          },
+          "segment": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Which part of the list it is, for lists in several parts (from 1).",
+            "minimum": 0
+          },
+          "url": {
+            "type": "string",
+            "description": "The address; always `https://`."
+          }
+        }
+      },
+      "EncryptedStatus": {
+        "type": "object",
+        "description": "How clients reach this node over DNS over TLS, HTTPS and QUIC.",
+        "required": [
+          "dot",
+          "doh",
+          "doq"
+        ],
+        "properties": {
+          "doh": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The addresses DNS over HTTPS is served on, at the path `/dns-query`\n(or `/dns-query/<client ID>`)."
+          },
+          "doq": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The addresses DNS over QUIC is served on."
+          },
+          "dot": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The addresses DNS over TLS is served on."
+          },
+          "odoh": {
+            "type": "boolean",
+            "description": "Whether the DNS over HTTPS addresses are also an Oblivious DoH\ntarget (RFC 9230): queries at `/dns-query`, keys at\n`/.well-known/odohconfigs`."
+          },
+          "server_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The name clients reach it by, such as `dns.example`, if configured:\na client ID goes in front of it, as in `anna-phone.dns.example`."
+          }
+        }
+      },
       "ErrorBody": {
         "type": "object",
         "description": "The body of every error response.",
@@ -2688,6 +3220,13 @@
           "name"
         ],
         "properties": {
+          "blocked_services": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BlockedService"
+            },
+            "description": "The services the group blocks, such as TikTok or YouTube: every name\nthe service uses, whatever the lists say. They apply while filtering\nis on."
+          },
           "comment": {
             "type": "string",
             "description": "Free text."
@@ -2747,6 +3286,132 @@
             "type": "string",
             "format": "date-time",
             "description": "When the hour starts."
+          }
+        }
+      },
+      "LeakLookup": {
+        "type": "object",
+        "description": "A lookup of a test name that reached goethite.",
+        "required": [
+          "probe",
+          "time",
+          "address",
+          "protocol",
+          "qtype",
+          "filtering"
+        ],
+        "properties": {
+          "address": {
+            "type": "string",
+            "description": "The address it came from."
+          },
+          "client": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The known client it was identified as."
+          },
+          "filtering": {
+            "type": "boolean",
+            "description": "Whether that client's queries are filtered: its group filters and\nprotection is on and not paused."
+          },
+          "group": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The group whose filtering applies to it."
+          },
+          "probe": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Which of the test's names, from 1.",
+            "minimum": 0
+          },
+          "protocol": {
+            "$ref": "#/components/schemas/Protocol",
+            "description": "How it arrived."
+          },
+          "qtype": {
+            "type": "string",
+            "description": "The type asked for, such as `A` or `AAAA`."
+          },
+          "time": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it arrived."
+          }
+        }
+      },
+      "LeakTest": {
+        "type": "object",
+        "description": "A test: the names to look up, and the lookups that reached goethite.",
+        "required": [
+          "id",
+          "names",
+          "created_at",
+          "expires_at",
+          "reached",
+          "lookups"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the test was made."
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Until when the test is kept and lookups for it are recorded."
+          },
+          "id": {
+            "type": "string",
+            "description": "The test's ID."
+          },
+          "lookups": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LeakLookup"
+            },
+            "description": "The lookups that reached goethite, oldest first; at most 64."
+          },
+          "names": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The names to look up, in order."
+          },
+          "reached": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many of the names reached goethite.",
+            "minimum": 0
+          },
+          "requested_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The address the test was made from, as the API saw it: the device\nbeing tested, when the web UI runs the test in its browser."
+          }
+        }
+      },
+      "LeakTestList": {
+        "type": "object",
+        "description": "The tests this node has, newest first.",
+        "required": [
+          "tests"
+        ],
+        "properties": {
+          "tests": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LeakTest"
+            },
+            "description": "The tests."
           }
         }
       },
@@ -3003,12 +3668,52 @@
           }
         }
       },
+      "Preset": {
+        "type": "object",
+        "description": "A set of recommended lists for a group, in one step.",
+        "required": [
+          "id",
+          "name",
+          "description",
+          "lists",
+          "default"
+        ],
+        "properties": {
+          "default": {
+            "type": "boolean",
+            "description": "Whether a new node starts with it."
+          },
+          "description": {
+            "type": "string",
+            "description": "Who it is for."
+          },
+          "id": {
+            "type": "string",
+            "description": "A stable identifier, such as `balanced`."
+          },
+          "lists": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Its lists, by ID."
+          },
+          "name": {
+            "type": "string",
+            "description": "Its name."
+          }
+        }
+      },
       "Protocol": {
         "type": "string",
         "description": "How a query reached goethite.",
         "enum": [
           "udp",
-          "tcp"
+          "tcp",
+          "dot",
+          "doh",
+          "doq",
+          "odoh"
         ]
       },
       "QueryEntry": {
@@ -3176,6 +3881,221 @@
           }
         }
       },
+      "Recommended": {
+        "type": "object",
+        "description": "The recommended lists and presets.",
+        "required": [
+          "lists",
+          "presets"
+        ],
+        "properties": {
+          "lists": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RecommendedList"
+            },
+            "description": "The lists, by category."
+          },
+          "presets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Preset"
+            },
+            "description": "The presets."
+          }
+        }
+      },
+      "RecommendedList": {
+        "type": "object",
+        "description": "A filter list goethite recommends.",
+        "required": [
+          "id",
+          "name",
+          "maintainer",
+          "description",
+          "url",
+          "homepage",
+          "license",
+          "category",
+          "recommended",
+          "default",
+          "excludes"
+        ],
+        "properties": {
+          "badge": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A short label, such as `Minimal` or `Compatibility`."
+          },
+          "category": {
+            "$ref": "#/components/schemas/Category",
+            "description": "Its category."
+          },
+          "default": {
+            "type": "boolean",
+            "description": "Whether a new node starts with it."
+          },
+          "description": {
+            "type": "string",
+            "description": "What it blocks."
+          },
+          "excludes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Lists not to use with it: one includes the other, or they do the\nsame job. Switch instead of stacking."
+          },
+          "homepage": {
+            "type": "string",
+            "description": "Its home page."
+          },
+          "id": {
+            "type": "string",
+            "description": "A stable identifier, such as `hagezi-normal`."
+          },
+          "license": {
+            "type": "string",
+            "description": "Its license, as the project states it."
+          },
+          "maintainer": {
+            "type": "string",
+            "description": "Who maintains it."
+          },
+          "name": {
+            "type": "string",
+            "description": "Its name."
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When to choose it, or what to know first."
+          },
+          "recommended": {
+            "type": "boolean",
+            "description": "One of the lists goethite recommends most in its category."
+          },
+          "topic": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For optional lists, their topic, such as `Family`."
+          },
+          "url": {
+            "type": "string",
+            "description": "Where goethite downloads it."
+          }
+        }
+      },
+      "RecommendedSizes": {
+        "type": "object",
+        "description": "How big recommended lists say they are, from their headers.",
+        "required": [
+          "fetched_at",
+          "lists"
+        ],
+        "properties": {
+          "fetched_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When this node read them."
+          },
+          "lists": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatedSize"
+            },
+            "description": "The lists whose header states a size; others are left out."
+          }
+        }
+      },
+      "RecursionStatus": {
+        "type": "object",
+        "description": "Recursive resolution: from the root servers down, instead of asking\nupstream resolvers.",
+        "required": [
+          "qname_minimisation",
+          "ipv6",
+          "sent",
+          "tcp",
+          "timeouts",
+          "failures",
+          "zones",
+          "servers"
+        ],
+        "properties": {
+          "bogus": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Answers whose signatures or proofs failed, refused with SERVFAIL.",
+            "minimum": 0
+          },
+          "dnssec": {
+            "type": "boolean",
+            "description": "Whether answers are validated with DNSSEC."
+          },
+          "failures": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Client queries that could not be resolved (SERVFAIL), bogus ones\nincluded.",
+            "minimum": 0
+          },
+          "insecure": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Answers from unsigned zones.",
+            "minimum": 0
+          },
+          "ipv6": {
+            "type": "boolean",
+            "description": "Whether servers are asked over IPv6 too."
+          },
+          "qname_minimisation": {
+            "type": "boolean",
+            "description": "Whether servers are shown only as much of a name as they need\n(QNAME minimisation, RFC 9156)."
+          },
+          "secure": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Answers DNSSEC proved authentic (the AD bit).",
+            "minimum": 0
+          },
+          "sent": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Queries sent to authoritative servers since start.",
+            "minimum": 0
+          },
+          "servers": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Authoritative servers with statistics.",
+            "minimum": 0
+          },
+          "tcp": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Of them, over TCP.",
+            "minimum": 0
+          },
+          "timeouts": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Queries no server answered in time.",
+            "minimum": 0
+          },
+          "zones": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Zone cuts known.",
+            "minimum": 0
+          }
+        }
+      },
       "RoleChange": {
         "type": "object",
         "description": "How to change a node's role.",
@@ -3321,6 +4241,78 @@
         },
         "additionalProperties": false
       },
+      "Service": {
+        "type": "object",
+        "description": "A service a group can block.",
+        "required": [
+          "id",
+          "name",
+          "group",
+          "rules"
+        ],
+        "properties": {
+          "group": {
+            "type": "string",
+            "description": "What kind of service it is, such as `social_network` or `gaming`."
+          },
+          "id": {
+            "type": "string",
+            "description": "Its ID, such as `tiktok`: what groups' `blocked_services` name."
+          },
+          "name": {
+            "type": "string",
+            "description": "Its name, such as `TikTok`."
+          },
+          "rules": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The rules that block it, in adblock-style syntax. Rules goethite\ncannot read are left out."
+          }
+        }
+      },
+      "Services": {
+        "type": "object",
+        "description": "The services groups can block, and how the catalog is doing.",
+        "required": [
+          "source",
+          "license",
+          "services"
+        ],
+        "properties": {
+          "downloaded_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When this node saved its copy; `None` until it has one."
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the last download or read failed, if it did; the last good copy\nstays in use."
+          },
+          "license": {
+            "type": "string",
+            "description": "The catalog's license."
+          },
+          "services": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Service"
+            },
+            "description": "The services, by name."
+          },
+          "source": {
+            "type": "string",
+            "description": "Where the catalog comes from."
+          }
+        }
+      },
       "Settings": {
         "type": "object",
         "description": "The settings, with their revision.",
@@ -3373,6 +4365,26 @@
           }
         },
         "additionalProperties": false
+      },
+      "StatedSize": {
+        "type": "object",
+        "description": "How many entries a list says it has.",
+        "required": [
+          "id",
+          "entries"
+        ],
+        "properties": {
+          "entries": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The number its header gives.",
+            "minimum": 0
+          },
+          "id": {
+            "type": "string",
+            "description": "The list's ID."
+          }
+        }
       },
       "StatsReport": {
         "type": "object",
@@ -3458,6 +4470,10 @@
           "query_log"
         ],
         "properties": {
+          "api_docs": {
+            "type": "boolean",
+            "description": "Whether this node serves its API reference at `/api/docs` (to\nloopback clients only)."
+          },
           "cache": {
             "oneOf": [
               {
@@ -3474,6 +4490,17 @@
               {
                 "$ref": "#/components/schemas/ClusterStatus",
                 "description": "This node's cluster, if it is in one."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "encrypted": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/EncryptedStatus",
+                "description": "DNS over TLS, HTTPS and QUIC, if this node serves them."
               },
               {
                 "type": "null"
@@ -3514,6 +4541,17 @@
             "$ref": "#/components/schemas/QueryLogStatus",
             "description": "The query log."
           },
+          "recursion": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RecursionStatus",
+                "description": "Recursive resolution, when it is on instead of upstreams."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "started_at": {
             "type": "string",
             "format": "date-time",
@@ -3524,7 +4562,7 @@
             "items": {
               "$ref": "#/components/schemas/UpstreamStatus"
             },
-            "description": "The upstreams, in configured order."
+            "description": "The upstreams, in configured order; none with recursion."
           },
           "version": {
             "type": "string",
