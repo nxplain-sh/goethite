@@ -73,7 +73,7 @@ fn find_account(passwd: &str, name: &str) -> Option<Account> {
 /// sets `no_new_privs`. Call it after binding the sockets and before
 /// starting any thread.
 #[cfg(target_os = "linux")]
-pub fn drop_privileges(account: Option<&Account>) -> Result<()> {
+pub(crate) fn drop_privileges(account: Option<&Account>) -> Result<()> {
     use rustix::process::{Gid, Uid, getegid, geteuid, getgid, getuid};
     use rustix::thread::{
         CapabilitySet, CapabilitySets, capabilities, set_capabilities, set_no_new_privs,
@@ -146,7 +146,7 @@ pub fn drop_privileges(account: Option<&Account>) -> Result<()> {
 /// Keeps only `CAP_NET_ADMIN`, for `goethite vrrp` once its sockets are
 /// open, and sets `no_new_privs`. Call it before starting any thread.
 #[cfg(target_os = "linux")]
-pub fn keep_net_admin() -> Result<()> {
+pub(crate) fn keep_net_admin() -> Result<()> {
     use rustix::process::geteuid;
     use rustix::thread::{
         CapabilitySet, CapabilitySets, capabilities, set_capabilities, set_no_new_privs,

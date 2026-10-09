@@ -37,7 +37,7 @@ use crate::sockets::Sockets;
 pub(crate) const ENV: &str = "GOETHITE_HANDOFF";
 
 #[cfg(target_os = "linux")]
-pub use linux::{Child, Parent};
+pub(crate) use linux::{Child, Parent};
 
 #[cfg(target_os = "linux")]
 mod linux {
@@ -157,7 +157,7 @@ mod linux {
     }
 
     /// The running goethite's side.
-    pub struct Parent {
+    pub(crate) struct Parent {
         socket: OwnedFd,
         child: std::process::Child,
     }
@@ -170,7 +170,7 @@ mod linux {
         ///
         /// If it cannot start, does not connect in time, or another
         /// process connects.
-        pub fn spawn(binary: &Path, config: &Path, dir: &Path) -> Result<Self> {
+        pub(crate) fn spawn(binary: &Path, config: &Path, dir: &Path) -> Result<Self> {
             let path = dir.join(format!("handoff-{}.sock", std::process::id()));
             let _ = std::fs::remove_file(&path);
             let listener = socket_with(
@@ -243,7 +243,7 @@ mod linux {
         /// # Errors
         ///
         /// If sending fails.
-        pub fn send_sockets(&self, sockets: &Sockets, secrets: &Secrets) -> Result<()> {
+        pub(crate) fn send_sockets(&self, sockets: &Sockets, secrets: &Secrets) -> Result<()> {
             let all: Vec<(&str, BorrowedFd<'_>)> = sockets.named().collect();
             let chunks: Vec<_> = all.chunks(FDS_PER_MESSAGE).collect();
             let last = chunks.len().saturating_sub(1);
@@ -264,7 +264,7 @@ mod linux {
         /// # Errors
         ///
         /// If it failed or went away.
-        pub fn wait_adopted(&mut self) -> Result<()> {
+        pub(crate) fn wait_adopted(&mut self) -> Result<()> {
             self.expect("taking the sockets", |message| {
                 matches!(message, Message::Adopted)
             })
@@ -275,7 +275,7 @@ mod linux {
         /// # Errors
         ///
         /// If it went away.
-        pub fn store_released(&self) -> Result<()> {
+        pub(crate) fn store_released(&self) -> Result<()> {
             send(&self.socket, &Message::StoreReleased, &[])
         }
 
@@ -284,7 +284,7 @@ mod linux {
         /// # Errors
         ///
         /// If it failed or went away.
-        pub fn wait_serving(&mut self) -> Result<()> {
+        pub(crate) fn wait_serving(&mut self) -> Result<()> {
             self.expect("starting up", |message| matches!(message, Message::Serving))
         }
 
@@ -300,7 +300,7 @@ mod linux {
         }
 
         /// Gives up: stops the child.
-        pub fn abandon(&mut self) {
+        pub(crate) fn abandon(&mut self) {
             let _ = self.child.kill();
             let _ = self.child.wait();
         }
@@ -316,7 +316,7 @@ mod linux {
     }
 
     /// The new goethite's side.
-    pub struct Child {
+    pub(crate) struct Child {
         socket: OwnedFd,
     }
 
@@ -326,7 +326,7 @@ mod linux {
         /// # Errors
         ///
         /// If `GOETHITE_HANDOFF` is set but its socket cannot be reached.
-        pub fn from_env() -> Result<Option<Self>> {
+        pub(crate) fn from_env() -> Result<Option<Self>> {
             let Some(path) = std::env::var_os(ENV) else {
                 return Ok(None);
             };
@@ -355,7 +355,7 @@ mod linux {
         /// # Errors
         ///
         /// If the parent sends something else or goes away.
-        pub fn receive(&self) -> Result<(Vec<(String, OwnedFd)>, Secrets)> {
+        pub(crate) fn receive(&self) -> Result<(Vec<(String, OwnedFd)>, Secrets)> {
             let mut sockets = Vec::new();
             let mut keys = None;
             loop {
@@ -390,7 +390,7 @@ mod linux {
         /// # Errors
         ///
         /// If the parent goes away.
-        pub fn adopted(&self) -> Result<()> {
+        pub(crate) fn adopted(&self) -> Result<()> {
             send(&self.socket, &Message::Adopted, &[])?;
             match receive(&self.socket)? {
                 (Message::StoreReleased, _) => Ok(()),
@@ -403,12 +403,12 @@ mod linux {
         /// # Errors
         ///
         /// If the parent went away.
-        pub fn serving(&self) -> Result<()> {
+        pub(crate) fn serving(&self) -> Result<()> {
             send(&self.socket, &Message::Serving, &[])
         }
 
         /// Tells the parent this process gave up.
-        pub fn failed(&self, reason: &str) {
+        pub(crate) fn failed(&self, reason: &str) {
             let _ = send(
                 &self.socket,
                 &Message::Failed {
