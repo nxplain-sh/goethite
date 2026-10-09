@@ -40,7 +40,14 @@ attested with GitHub's keyless Sigstore attestations.**
   SBOM of the npm packages in the web UI. The binary also carries its dependency list in a
   `.dep-v0` section (cargo-auditable), which `cargo audit bin` and other scanners read. npm's
   random serial number is dropped and its timestamp set to the commit time, so the SBOMs are
-  reproducible too.
+  reproducible too. The web UI's SBOM covers every npm package that is not development-only,
+  which is why the API reference (Scalar), whose bundle ships in the binary, is a runtime
+  dependency of `web/`.
+- **Licence notices.** Most of what the binary bundles is under licences that ask for their
+  notices to go with it. `THIRD-PARTY-LICENSES.txt`, in the tarball, the packages and the image,
+  holds the crates' notices, which cargo-about collects from their sources as `Cargo.lock` pins
+  them, and the npm packages' notices, which `web/scripts/licenses.mjs` collects from
+  `node_modules` after `npm ci`. Both are sorted, so the file is reproducible.
 - **glibc.** The image has glibc 2.36, but `dist` fails if the binary needs a symbol newer than
   glibc 2.34, so releases run on RHEL 9, Ubuntu 22.04, Debian 12 and anything newer.
 - **Checked reproducibility.** The release workflow builds each architecture twice on separate

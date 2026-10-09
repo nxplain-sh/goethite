@@ -14,7 +14,7 @@ agents alike.
 - `dig` (from bind-utils / dnsutils) for manual checks
 - Optional: [shellcheck](https://www.shellcheck.net) for the shell scripts (CI runs it)
 - Node.js 22.19 or newer, only if you work on the web UI in `web/` or the website in `site/`
-  (CI uses Node 24)
+  (CI and release builds use the version in `web/.node-version`)
 
 ## Build, test, lint
 
@@ -227,7 +227,10 @@ npm run e2e        # Playwright: Chromium against a real goethite
 ```
 
 `npm run build` also builds the API reference (`web/dist-docs`), which goethite serves at
-`/api/docs` when `[api] docs` is on. The end-to-end tests start goethite themselves
+`/api/docs` when `[api] docs` is on. Both ship in the binary, so every package they bundle is a
+runtime dependency (`dependencies`, not `devDependencies`): release builds list those in the web
+UI's SBOM and put their licence notices, which `npm run licenses` prints, in
+`THIRD-PARTY-LICENSES.txt`. The end-to-end tests start goethite themselves
 (`web/e2e/serve.mjs`), from the workspace's debug build unless `GOETHITE_BIN` names another;
 build goethite after `npm run build`, since release builds embed the files.
 

@@ -28,8 +28,8 @@ Packages:
   tarballs. The SBOMs are attested for them too.
 - **Contents:** `/usr/bin/goethite`, both units in `/usr/lib/systemd/system`, the server config
   `deploy/goethite.toml` as `/etc/goethite/goethite.toml` (a conffile, `config(noreplace)` in the
-  .rpm), the example config and docs, and the licences where each format expects them. The
-  tarball ships the same server config.
+  .rpm), the example config and docs, the third-party licence notices, and the licences where
+  each format expects them. The tarball ships the same server config.
 - **Dependencies:** glibc 2.34 or newer (what `dist` enforces) and libgcc for unwinding.
 - **Scripts:** a first install does not start goethite; it prints how to check the config and
   start it. An upgrade, if goethite runs, sends SIGUSR2: the running process starts the new
