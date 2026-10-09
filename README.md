@@ -10,17 +10,23 @@ zero-downtime upgrades. It is named after the iron-oxide mineral that is a main 
 
 ## Status
 
-**Pre-alpha, v0.3.0.** goethite forwards queries to the upstream resolvers you
-configure, over DNS over TLS, DNS over HTTPS or plain DNS, with failover; caches the answers; and
-blocks names from hosts files, domain lists and AdGuard-style rules, from local files or downloaded
-and refreshed over HTTPS. Clients can be put in groups with their own lists, schedules and safe
-search, and blocking sees through CNAME cloaking. It keeps a query log and statistics, exports
-Prometheus metrics, and is managed through a REST API (with an OpenAPI description), a terminal
-UI and the start of a web UI; every change is audit-logged. Two nodes can share one configuration
-over mutual TLS and one floating IP over VRRP, and goethite upgrades without dropping a query. It
-protects against DNS rebinding, rate limits clients, drops its privileges after binding port 53,
-and ships hardened systemd units ([`dist/systemd/`](dist/systemd/)). See the
-[changelog](CHANGELOG.md) and the roadmap in [`AGENTS.md`](AGENTS.md#roadmap-respect-the-order).
+**Pre-alpha, v0.4.0.** goethite forwards queries to the upstream resolvers you configure, over
+DNS over TLS, DNS over HTTPS or plain DNS, with failover, or resolves every name itself from the
+root servers down, with QNAME minimisation and DNSSEC validation. It caches the answers and
+blocks names from hosts files, domain lists and AdGuard-style rules, from local files or
+downloaded and refreshed over HTTPS; a new node starts with a recommended set of lists, and a
+whole service (TikTok, YouTube, ...) can be blocked per group. Clients can reach it over DNS over
+TLS, HTTPS and QUIC, or Oblivious DNS over HTTPS, and be known by a client ID wherever they are.
+Clients can be put in groups with their own lists, schedules and safe search, and blocking sees
+through CNAME cloaking. It keeps a query log and statistics, exports Prometheus metrics, and is
+managed through a REST API (with an OpenAPI description), a terminal UI, a web UI and a
+[Terraform provider](https://github.com/nxplain-sh/terraform-provider-goethite); every change
+is audit-logged, and a DNS leak test shows whether a device's lookups reach it. Two nodes can
+share one configuration over mutual TLS and one floating IP over VRRP, and goethite upgrades
+without dropping a query. It protects against DNS rebinding, rate limits clients, pads encrypted
+messages, drops its privileges after binding port 53, and ships hardened systemd units
+([`dist/systemd/`](dist/systemd/)). See the [changelog](CHANGELOG.md) and the roadmap in
+[`AGENTS.md`](AGENTS.md#roadmap-respect-the-order).
 
 ## Quick start (development)
 

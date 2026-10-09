@@ -7,6 +7,12 @@ configuration format.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-08
+
+Phase 4, v0.4: the full web UI, DNS over TLS, HTTPS and QUIC and Oblivious DoH for clients,
+recursion with DNSSEC validation, recommended lists and blocked services, the DNS leak test and
+EDNS padding.
+
 ### Added
 
 - **DNS over TLS and DNS over HTTPS for clients** (RFC 7858, RFC 8484), configured in
@@ -101,6 +107,9 @@ configuration format.
   ([nxplain-sh/terraform-provider-goethite](https://github.com/nxplain-sh/terraform-provider-goethite)):
   lists, rules, groups, clients, schedules and settings, generated from goethite's OpenAPI
   document. A new guide on the website explains how to use it.
+
+- Fuzz targets `parse_doh`, `parse_doq`, `parse_odoh`, `classify_response`, `check_dnssec`,
+  `parse_filterlists`, `parse_services` and `parse_leak_probe`.
 
 ### Changed
 
@@ -272,7 +281,8 @@ production on Linux. It is pre-alpha software: try it, but do not rely on it yet
   criterion benchmarks, a dnsperf script, and CI with clippy, tests on amd64 and arm64,
   cargo-deny and cargo-audit.
 
-[Unreleased]: https://github.com/nxplain-sh/goethite/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/nxplain-sh/goethite/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/nxplain-sh/goethite/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/nxplain-sh/goethite/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/nxplain-sh/goethite/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/nxplain-sh/goethite/releases/tag/v0.1.0
