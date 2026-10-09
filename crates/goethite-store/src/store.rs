@@ -805,7 +805,8 @@ impl Store {
 
     /// Makes the lists and rules managed by the config file, and the
     /// settings, match `import`. Lists and rules from the API or Terraform
-    /// stay. New lists are added to the default group; removed ones are
+    /// stay, and so do the access lists, which the config file does not
+    /// hold. New lists are added to the default group; removed ones are
     /// removed from every group.
     ///
     /// # Errors
@@ -816,12 +817,16 @@ impl Store {
         self.transact(actor, |config, now, batch| {
             import_lists(config, now, batch, import.lists, &mut summary)?;
             import_rules(config, now, batch, import.rules, &mut summary)?;
-            if config.settings.spec != import.settings {
+            let spec = SettingsSpec {
+                access: config.settings.spec.access.clone(),
+                ..import.settings
+            };
+            if config.settings.spec != spec {
                 let before = config.settings.clone();
                 config.settings = Settings {
                     revision: before.revision.saturating_add(1),
                     updated_at: now,
-                    spec: import.settings,
+                    spec,
                 };
                 batch.writes.push(Write::Settings(
                     serde_json::to_vec(&config.settings).map_err(StoreError::Encode)?,
@@ -1388,7 +1393,7 @@ fn decode<T: DeserializeOwned>(what: &str, bytes: &[u8]) -> Result<T, StoreError
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{ClientSpec, GroupSpec, ScheduleSpec, Weekday, Window};
+    use crate::model::{AccessSpec, ClientSpec, GroupSpec, ScheduleSpec, Weekday, Window};
 
     struct TempStore {
         store: Option<Store>,
@@ -1607,6 +1612,41 @@ mod tests {
     }
 
     #[test]
+    fn access_lists_are_checked() {
+        let store = TempStore::new("access");
+        let with = |allowed: &[&str], blocked: &[&str]| {
+            let mut spec = store.config().settings.spec.clone();
+            spec.access = AccessSpec {
+                allowed: allowed.iter().map(|entry| (*entry).to_owned()).collect(),
+                blocked: blocked.iter().map(|entry| (*entry).to_owned()).collect(),
+            };
+            store.update_settings(spec, None, &api())
+        };
+        with(
+            &["192.168.1.0/24", "2001:db8::/48", "anna-phone"],
+            &["192.168.1.66", "guest"],
+        )
+        .unwrap();
+        for (allowed, blocked, field) in [
+            (&["192.168.1.5/24"][..], &[][..], "allowed[0]"),
+            (&["Anna Phone"][..], &[][..], "allowed[0]"),
+            (&[][..], &["guest", "10.0.0.1", "guest"][..], "blocked[2]"),
+            (&[][..], &["10.0.0.1", "10.0.0.1/32"][..], "blocked[1]"),
+        ] {
+            let Err(StoreError::Invalid(error)) = with(allowed, blocked) else {
+                panic!("{allowed:?} {blocked:?} were accepted");
+            };
+            assert_eq!(error.field, format!("settings.access.{field}"));
+        }
+        let too_many: Vec<String> = (0..=goethite_resolver::MAX_ACCESS_ENTRIES)
+            .map(|index| format!("client-{index}"))
+            .collect();
+        let mut spec = store.config().settings.spec.clone();
+        spec.access.blocked = too_many;
+        assert!(store.update_settings(spec, None, &api()).is_err());
+    }
+
+    #[test]
     fn imports_are_idempotent_and_keep_api_resources() {
         let store = TempStore::new("import");
         let mine = store
@@ -1657,6 +1697,27 @@ mod tests {
         let audit = store.audit(None, 1).unwrap();
         assert_eq!(audit[0].action, AuditAction::Import);
         assert_eq!(audit[0].actor, Actor::cli());
+    }
+
+    #[test]
+    fn imports_keep_the_access_lists() {
+        let store = TempStore::new("import-access");
+        let mut spec = store.config().settings.spec.clone();
+        spec.access.blocked = vec!["guest".into()];
+        store.update_settings(spec, None, &api()).unwrap();
+        let import = Import {
+            settings: SettingsSpec {
+                blocked_ttl: 60,
+                ..SettingsSpec::default()
+            },
+            lists: Vec::new(),
+            rules: Vec::new(),
+        };
+        let summary = store.import(import, &Actor::system()).unwrap();
+        assert!(summary.settings_changed);
+        let settings = store.config().settings.spec.clone();
+        assert_eq!(settings.blocked_ttl, 60);
+        assert_eq!(settings.access.blocked, vec!["guest".to_owned()]);
     }
 
     #[cfg(unix)]

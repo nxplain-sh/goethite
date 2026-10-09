@@ -13,10 +13,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use goethite_filter::Sources;
 use goethite_resolver::{
-    BlockResponse, Cidr, ClientPolicy, GroupPolicy, Policy, PolicyError, PolicyParts, PolicyState,
-    ScheduledServices, ScheduledSources, ServiceFilter, ServiceMask,
+    Access, BlockResponse, Cidr, ClientPolicy, GroupPolicy, Policy, PolicyError, PolicyParts,
+    PolicyState, ScheduledServices, ScheduledSources, ServiceFilter, ServiceMask,
 };
-use goethite_store::{BlockResponseKind, ConfigSnapshot, Store};
+use goethite_store::{AccessSpec, BlockResponseKind, ConfigSnapshot, Store};
 use jiff::Timestamp;
 use tokio::sync::{Notify, watch};
 use tokio::task::JoinSet;
@@ -531,6 +531,10 @@ pub(crate) fn build_policy(
         blocked_ttl: settings.blocked_ttl,
         protection: settings.protection,
         services: Arc::clone(catalog),
+        access: Access::new(
+            &AccessSpec::list(&settings.access.allowed),
+            &AccessSpec::list(&settings.access.blocked),
+        ),
     })
 }
 

@@ -8,7 +8,9 @@
 use std::collections::HashSet;
 
 use goethite_filter::{LineKind, parse_line};
-use goethite_resolver::{Cidr, MAX_SCHEDULES, MAX_SERVICES, is_client_id, is_service_id};
+use goethite_resolver::{
+    AccessList, Cidr, MAX_ACCESS_ENTRIES, MAX_SCHEDULES, MAX_SERVICES, is_client_id, is_service_id,
+};
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use serde::{Deserialize, Serialize};
@@ -86,6 +88,9 @@ pub struct SettingsSpec {
     /// How often downloaded lists are refreshed, in hours, 1 to 168.
     #[serde(default = "default_update_hours")]
     pub list_update_hours: u32,
+    /// Which clients are answered at all; by default, everyone.
+    #[serde(default)]
+    pub access: AccessSpec,
 }
 
 impl Default for SettingsSpec {
@@ -95,7 +100,85 @@ impl Default for SettingsSpec {
             block_response: BlockResponseKind::default(),
             blocked_ttl: default_blocked_ttl(),
             list_update_hours: default_update_hours(),
+            access: AccessSpec::default(),
         }
+    }
+}
+
+/// Which clients are answered, over every transport. An entry is an IP
+/// address, a network in CIDR notation (`192.168.1.0/24`) or a client ID. A
+/// query is answered when its client is on `allowed`, or `allowed` is
+/// empty, and is not on `blocked`. Loopback addresses always pass, but a
+/// blocked client ID is refused even there. Refused UDP queries get no
+/// answer; refused connections are closed before their TLS handshake; a
+/// client ID refused after it is known gets `REFUSED`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AccessSpec {
+    /// When not empty, only these clients are answered. At most 10,000
+    /// entries.
+    #[serde(default)]
+    pub allowed: Vec<String>,
+    /// These clients are never answered. At most 10,000 entries.
+    #[serde(default)]
+    pub blocked: Vec<String>,
+}
+
+impl AccessSpec {
+    /// The networks and client IDs in `entries`, which must be valid, as
+    /// [`ConfigSnapshot::validate`] makes sure; anything else is skipped.
+    pub fn list(entries: &[String]) -> AccessList {
+        let mut list = AccessList::default();
+        for entry in entries {
+            match parse_access_entry(entry) {
+                Some(AccessEntry::Network(network)) => list.networks.push(network),
+                Some(AccessEntry::Id(id)) => list.ids.push(id.into()),
+                None => {}
+            }
+        }
+        list
+    }
+
+    fn validate(&self) -> Result<(), ValidationError> {
+        for (name, entries) in [("allowed", &self.allowed), ("blocked", &self.blocked)] {
+            let field = format!("settings.access.{name}");
+            if entries.len() > MAX_ACCESS_ENTRIES {
+                return Err(invalid(
+                    field,
+                    format!("has more than {MAX_ACCESS_ENTRIES} entries"),
+                ));
+            }
+            let mut seen = HashSet::new();
+            for (index, entry) in entries.iter().enumerate() {
+                let at = format!("{field}[{index}]");
+                let parsed = parse_access_entry(entry).ok_or_else(|| {
+                    invalid(
+                        &at,
+                        "needs an IP address, a network such as 192.168.1.0/24, or a client ID",
+                    )
+                })?;
+                if !seen.insert(parsed) {
+                    return Err(invalid(at, format!("{entry} is listed twice")));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// One entry of an access list.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum AccessEntry<'a> {
+    Network(Cidr),
+    Id(&'a str),
+}
+
+/// An address or network, or else a client ID; `None` for anything else,
+/// such as a network with host bits set.
+fn parse_access_entry(entry: &str) -> Option<AccessEntry<'_>> {
+    match entry.parse::<Cidr>() {
+        Ok(network) => Some(AccessEntry::Network(network)),
+        Err(_) => is_client_id(entry).then_some(AccessEntry::Id(entry)),
     }
 }
 
@@ -623,6 +706,7 @@ impl ScheduleSpec {
 
 impl SettingsSpec {
     fn validate(&self) -> Result<(), ValidationError> {
+        self.access.validate()?;
         if self.blocked_ttl > 86_400 {
             return Err(invalid("settings.blocked_ttl", "must be at most 86400"));
         }

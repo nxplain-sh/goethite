@@ -4,8 +4,9 @@ import { type FormEvent, useState } from 'react'
 import { ApiError, type BlockResponseKind, type Settings as Stored } from '../api/client'
 import { saveSettings, settingsQuery } from '../api/resources'
 import { Loading } from '../components/editor'
-import { CheckField, SelectField, TextField } from '../components/form'
+import { CheckField, SelectField, TextAreaField, TextField } from '../components/form'
 import { ErrorNotice } from '../components/ui'
+import { isAccessEntry, parseAccessEntries } from '../forms/forms'
 
 /** The node's (or the cluster's) filtering settings. */
 export function Settings() {
@@ -50,6 +51,12 @@ function SettingsForm({
 	)
 	const [blockedTtl, setBlockedTtl] = useState(String(stored.spec.blocked_ttl ?? 10))
 	const [updateHours, setUpdateHours] = useState(String(stored.spec.list_update_hours ?? 24))
+	const [allowedText, setAllowedText] = useState((stored.spec.access?.allowed ?? []).join('\n'))
+	const [blockedText, setBlockedText] = useState((stored.spec.access?.blocked ?? []).join('\n'))
+	const allowed = parseAccessEntries(allowedText)
+	const blocked = parseAccessEntries(blockedText)
+	const badAllowed = allowed.filter((entry) => !isAccessEntry(entry))
+	const badBlocked = blocked.filter((entry) => !isAccessEntry(entry))
 	const save = useMutation({
 		mutationFn: () =>
 			saveSettings(stored.revision, {
@@ -57,6 +64,7 @@ function SettingsForm({
 				block_response: blockResponse,
 				blocked_ttl: Number(blockedTtl),
 				list_update_hours: Number(updateHours),
+				access: { allowed, blocked },
 			}),
 		onMutate: () => setSaved(false),
 		onSuccess: async () => {
@@ -68,7 +76,16 @@ function SettingsForm({
 	const ttl = Number(blockedTtl)
 	const hours = Number(updateHours)
 	const valid =
-		Number.isInteger(ttl) && ttl >= 0 && ttl <= 86_400 && Number.isInteger(hours) && hours >= 1 && hours <= 168
+		Number.isInteger(ttl) &&
+		ttl >= 0 &&
+		ttl <= 86_400 &&
+		Number.isInteger(hours) &&
+		hours >= 1 &&
+		hours <= 168 &&
+		badAllowed.length === 0 &&
+		badBlocked.length === 0 &&
+		allowed.length <= 10_000 &&
+		blocked.length <= 10_000
 	const changedMeanwhile = save.error instanceof ApiError && save.error.code === 'revision_mismatch'
 
 	const submit = (event: FormEvent) => {
@@ -121,6 +138,33 @@ function SettingsForm({
 						value={updateHours}
 						onChange={setUpdateHours}
 						hint="1 to 168."
+					/>
+				</fieldset>
+				<fieldset className="subform" disabled={save.isPending}>
+					<legend>Who may use goethite</legend>
+					<TextAreaField
+						label="Allowed clients"
+						value={allowedText}
+						onChange={setAllowedText}
+						placeholder={'192.168.1.0/24\nfd00::/64\nanna-phone'}
+						hint={
+							badAllowed.length > 0
+								? `Not an address, a network or a client ID: ${badAllowed.join(', ')}.`
+								: allowed.length > 0
+									? `Only these ${allowed.length} entries are answered, and this machine itself. Make sure your own devices are on the list.`
+									: 'Addresses, networks or client IDs, one per line. Empty: every client is answered.'
+						}
+					/>
+					<TextAreaField
+						label="Blocked clients"
+						value={blockedText}
+						onChange={setBlockedText}
+						placeholder={'192.168.1.66\nguest'}
+						hint={
+							badBlocked.length > 0
+								? `Not an address, a network or a client ID: ${badBlocked.join(', ')}.`
+								: 'Never answered, even when allowed: addresses, networks or client IDs, one per line. UDP queries get no answer; other connections are closed.'
+						}
 					/>
 				</fieldset>
 				<div className="actions">

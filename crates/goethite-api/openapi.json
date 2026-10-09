@@ -2508,6 +2508,27 @@
   },
   "components": {
     "schemas": {
+      "AccessSpec": {
+        "type": "object",
+        "description": "Which clients are answered, over every transport. An entry is an IP\naddress, a network in CIDR notation (`192.168.1.0/24`) or a client ID. A\nquery is answered when its client is on `allowed`, or `allowed` is\nempty, and is not on `blocked`. Loopback addresses always pass, but a\nblocked client ID is refused even there. Refused UDP queries get no\nanswer; refused connections are closed before their TLS handshake; a\nclient ID refused after it is known gets `REFUSED`.",
+        "properties": {
+          "allowed": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "When not empty, only these clients are answered. At most 10,000\nentries."
+          },
+          "blocked": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "These clients are never answered. At most 10,000 entries."
+          }
+        },
+        "additionalProperties": false
+      },
       "Actor": {
         "type": "object",
         "description": "Who made a change, and from where.",
@@ -4343,6 +4364,10 @@
         "type": "object",
         "description": "Node-wide filtering settings.",
         "properties": {
+          "access": {
+            "$ref": "#/components/schemas/AccessSpec",
+            "description": "Which clients are answered at all; by default, everyone."
+          },
           "block_response": {
             "$ref": "#/components/schemas/BlockResponseKind",
             "description": "How blocked names are answered."

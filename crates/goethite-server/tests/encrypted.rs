@@ -84,6 +84,11 @@ impl Running {
 /// A resolver that knows the client `cl_kid` by its ID `kid-1` and the
 /// client `cl_tv` by `tv`.
 fn resolver() -> Resolver {
+    resolver_with(goethite_resolver::Access::default())
+}
+
+/// [`resolver`], with the access lists `access`.
+fn resolver_with(access: goethite_resolver::Access) -> Resolver {
     let client = |id: &str, client_id: &str| ClientPolicy {
         id: id.into(),
         addresses: Vec::new(),
@@ -99,6 +104,7 @@ fn resolver() -> Resolver {
         blocked_ttl: 10,
         protection: true,
         services: Arc::new(goethite_resolver::ServiceFilter::empty()),
+        access,
     })
     .unwrap();
     Resolver::new(vec![test_record().unwrap()]).with_policy(Arc::new(PolicyState::new(policy)))
@@ -124,6 +130,10 @@ fn certificate() -> (Arc<rustls::ServerConfig>, Arc<rustls::RootCertStore>) {
 }
 
 fn start_with(configure: impl FnOnce(&mut ServerConfig)) -> Running {
+    start_resolving(configure, resolver())
+}
+
+fn start_resolving(configure: impl FnOnce(&mut ServerConfig), resolver: Resolver) -> Running {
     let mut config = ServerConfig::new(vec!["127.0.0.1:0".parse().unwrap()]);
     config.dot = vec!["127.0.0.1:0".parse().unwrap()];
     config.doh = vec!["127.0.0.1:0".parse().unwrap()];
@@ -132,7 +142,7 @@ fn start_with(configure: impl FnOnce(&mut ServerConfig)) -> Running {
     configure(&mut config);
     let (tls, roots) = certificate();
     let seen = Arc::new(Seen::default());
-    let server = Server::bind(config, Arc::new(resolver()))
+    let server = Server::bind(config, Arc::new(resolver))
         .unwrap()
         .with_tls(tls)
         .with_observer(Arc::clone(&seen) as Arc<dyn QueryObserver>);
@@ -702,6 +712,49 @@ async fn only_known_client_ids_are_answered_when_required() {
     assert_test_answer(&doq_exchange(&known, &wire).await, 0);
     let (_other, unknown) = quic(&server, "dns.example").await;
     refused(&doq_exchange(&unknown, &wire).await);
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn blocked_client_ids_are_refused() {
+    let blocked = goethite_resolver::AccessList {
+        networks: Vec::new(),
+        ids: vec!["tv".into()],
+    };
+    let access =
+        goethite_resolver::Access::new(&goethite_resolver::AccessList::default(), &blocked);
+    let server = start_resolving(|_| {}, resolver_with(access));
+    let refused = |message: &Message| {
+        assert_eq!(message.metadata.response_code, ResponseCode::Refused);
+        assert_eq!(message.answers.len(), 0);
+    };
+    let wire = query(0, "goethite.test.");
+
+    let mut blocked = connect(&server, server.dot, "tv.dns.example", &[]).await;
+    refused(&dot_exchange(&mut blocked, &wire).await);
+    let mut other = connect(&server, server.dot, "kid-1.dns.example", &[]).await;
+    assert_test_answer(&dot_exchange(&mut other, &wire).await, 0);
+
+    let (mut http, _connection) = Http::connect(&server, "dns.example", true).await;
+    let answer = http
+        .send(post(
+            "/dns-query/tv",
+            "application/dns-message",
+            wire.clone(),
+        ))
+        .await;
+    refused(&answer.message());
+    let answer = http
+        .send(post("/dns-query", "application/dns-message", wire.clone()))
+        .await;
+    assert_test_answer(&answer.message(), 0);
+
+    let (_endpoint, blocked) = quic(&server, "tv.dns.example").await;
+    refused(&doq_exchange(&blocked, &wire).await);
+
+    for transport in [Transport::Tls, Transport::Https, Transport::Quic] {
+        assert_eq!(server.stats.access_refused.get(transport), 1, "{transport}");
+    }
     server.shutdown().await;
 }
 

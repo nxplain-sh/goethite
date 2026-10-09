@@ -146,6 +146,14 @@ pub(crate) async fn serve(
 /// was answered with a Retry or refused.
 fn admit(incoming: Incoming, shared: &Shared) -> Option<(Connecting, SocketAddr, Slots)> {
     let peer = incoming.remote_address();
+    // Ignored, not refused: nothing goes back to an address the access
+    // lists refuse, which may not even be the sender's.
+    if !shared.engine.resolver.may_admit(peer.ip()) {
+        trace!(%peer, "access lists refuse the client, ignoring a DNS over QUIC connection");
+        shared.stats.access_refused.count(Transport::Quic);
+        incoming.ignore();
+        return None;
+    }
     if !incoming.remote_address_validated() {
         if incoming.may_retry() {
             if let Err(err) = incoming.retry() {

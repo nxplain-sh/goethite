@@ -8,6 +8,7 @@
 
 #![forbid(unsafe_code)]
 
+mod access;
 mod blocking;
 mod cache;
 mod cidr;
@@ -32,6 +33,7 @@ use goethite_proto::{
     Edns, Name, NameError, Query, Question, Record, RecordClass, RecordType, Response, ResponseCode,
 };
 
+pub use access::{Access, AccessList, MAX_ACCESS_ENTRIES};
 pub use blocking::BlockResponse;
 pub use cache::{Cache, CacheConfig, CacheStats, MAX_CACHED_RECORDS, MAX_CNAME_CHAIN, MAX_ENTRIES};
 pub use cidr::{Cidr, CidrError};
@@ -387,6 +389,24 @@ impl Resolver {
         self.policy
             .as_ref()
             .is_some_and(|state| state.policy().client_with_id(id).is_some())
+    }
+
+    /// Whether the access lists let a query from `client`, which named
+    /// itself `client_id` (if it did), be answered (see [`Access::admits`]).
+    /// Without a policy, every query is.
+    pub fn admits(&self, client: IpAddr, client_id: Option<&str>) -> bool {
+        self.policy
+            .as_ref()
+            .is_none_or(|state| state.access(|access| access.admits(client, client_id)))
+    }
+
+    /// Whether the access lists could let a client at `client` be answered
+    /// once it names its client ID, for deciding before a TLS handshake
+    /// (see [`Access::may_admit`]).
+    pub fn may_admit(&self, client: IpAddr) -> bool {
+        self.policy
+            .as_ref()
+            .is_none_or(|state| state.access(|access| access.may_admit(client)))
     }
 
     fn asker(&self, client: IpAddr, client_id: Option<&str>) -> Asker {

@@ -13,9 +13,9 @@ pub mod stats;
 mod store;
 
 pub use model::{
-    BlockResponseKind, BlockedService, Client, ClientSpec, ConfigSnapshot, DEFAULT_GROUP, Group,
-    GroupList, GroupSpec, List, ListSpec, ManagedBy, Rule, RuleSpec, Schedule, ScheduleSpec,
-    Settings, SettingsSpec, ValidationError, Weekday, Window,
+    AccessSpec, BlockResponseKind, BlockedService, Client, ClientSpec, ConfigSnapshot,
+    DEFAULT_GROUP, Group, GroupList, GroupSpec, List, ListSpec, ManagedBy, Rule, RuleSpec,
+    Schedule, ScheduleSpec, Settings, SettingsSpec, ValidationError, Weekday, Window,
 };
 pub use querylog::{
     LogEvent, LogUpstream, NameBuf, Protocol, QueryEntry, QueryLog, QueryLogConfig, QueryOutcome,

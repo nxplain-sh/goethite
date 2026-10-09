@@ -28,12 +28,15 @@ listen = "127.0.0.1:15353"
 max_tcp_connections = 256
 max_tcp_connections_per_client = 16
 
-# UDP queries per second per client network. A client over the limit has its
-# queries dropped, except every slip-th one, which gets an empty truncated
-# answer so a real client retries over TCP (TCP is not rate limited). This
-# stops goethite from being used to flood a spoofed address with answers.
-# Loopback clients are never limited. These are the defaults; set
-# queries_per_second = 0 to turn rate limiting off.
+# Queries per second per client network, over UDP, TCP, DNS over TLS, HTTPS
+# and QUIC together. Over UDP, a client over the limit has its queries
+# dropped, except every slip-th one, which gets an empty truncated answer so a
+# real client retries over TCP; this stops goethite from being used to flood a
+# spoofed address with answers. Over the other transports it gets REFUSED.
+# Loopback clients are never limited, nor are networks listed in exempt.
+# These are the defaults; set queries_per_second = 0 to turn rate limiting
+# off. Which clients may use goethite at all is a replicated setting (the web
+# UI's Settings, or `access` in /api/v1/settings), not part of this file.
 [server.rate_limit]
 queries_per_second = 300
 burst = 1000
@@ -41,6 +44,7 @@ slip = 2
 ipv4_prefix = 32       # clients in the same /32 share a limit (each address)
 ipv6_prefix = 64       # clients in the same /64 share a limit
 max_clients = 65536    # client networks tracked at once
+exempt = []            # never limited, such as ["192.168.0.0/16"]; at most 256
 
 # DNS over TLS, HTTPS and QUIC for clients, with a certificate for the name
 # devices use (and *.<that name>, for client IDs in the server name). Read at
