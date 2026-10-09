@@ -62,7 +62,8 @@ the network; otherwise the token crosses it in clear text.
 - **Leak test**: whether this device's lookups reach goethite, over which protocol and as which
   client, or go to another resolver past its filtering; see [DNS leak test](../leak-test/).
 - **Settings**, in the header beside Pause and Sign out: filtering on or off, how blocked names
-  are answered, and how often lists are downloaded.
+  are answered, how often lists are downloaded, and who may use goethite: the allowed and blocked
+  clients (see [access control](../security/#access-control)).
 
 Changes are made with the revision you saw: if someone else changed the same thing meanwhile, the
 UI says so and offers their version instead of overwriting it. What [Terraform](../terraform/)
