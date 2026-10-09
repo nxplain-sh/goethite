@@ -248,15 +248,25 @@ fn main() -> ExitCode {
 /// attacker-controlled bytes at a much larger size than the packet. goethite
 /// reports rejected messages itself, so hickory stays silent unless `RUST_LOG`
 /// names it explicitly.
+///
+/// openraft logs its elections and membership changes at `info`, with its
+/// internal state and members' raw numbers. goethite logs the same events
+/// itself, by name, so openraft logs only warnings and errors unless
+/// `RUST_LOG` names it.
 fn init_logging() {
     let directives = std::env::var(EnvFilter::DEFAULT_ENV).unwrap_or_default();
     let mut filter = EnvFilter::builder()
         .with_default_directive(LevelFilter::INFO.into())
         .parse_lossy(&directives);
-    if !directives.contains("hickory")
-        && let Ok(quiet) = "hickory_proto=off".parse()
-    {
-        filter = filter.add_directive(quiet);
+    for (name, quiet) in [
+        ("hickory", "hickory_proto=off"),
+        ("openraft", "openraft=warn"),
+    ] {
+        if !directives.contains(name)
+            && let Ok(quiet) = quiet.parse()
+        {
+            filter = filter.add_directive(quiet);
+        }
     }
     // Only fails if a global subscriber is already set, which never happens here.
     let _ = tracing_subscriber::fmt()

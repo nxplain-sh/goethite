@@ -237,4 +237,7 @@ anyone.
 
 Logs go to standard error, and the `RUST_LOG` environment variable sets the level (default
 `info`). For example, `RUST_LOG=debug` shows dropped and rejected packets, and
-`RUST_LOG=goethite_resolver=debug` shows only the resolver's details.
+`RUST_LOG=goethite_resolver=debug` shows only the resolver's details. Two libraries say less
+unless `RUST_LOG` names them, since goethite reports what they would itself: hickory-proto, which
+would quote malformed packets, is off, and openraft, which logs every election and membership
+change, logs warnings only (`RUST_LOG=info,openraft=info` shows them).
