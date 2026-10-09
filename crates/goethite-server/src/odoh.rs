@@ -102,7 +102,7 @@ pub enum OdohError {
 /// An ODoH message, as read from the wire.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Message<'a> {
-    /// [`QUERY`] or [`RESPONSE`].
+    /// `QUERY` (1) or `RESPONSE` (2).
     pub message_type: u8,
     /// The key's ID for a query, the response nonce for a response.
     pub key_id: &'a [u8],
@@ -451,6 +451,15 @@ pub struct Opened {
     secret: [u8; NK],
 }
 
+// The decrypted query and the exported secret stay out of the output.
+impl std::fmt::Debug for Opened {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Opened")
+            .field("dns_len", &self.dns_len)
+            .finish_non_exhaustive()
+    }
+}
+
 impl Opened {
     /// The DNS query.
     pub fn dns(&self) -> &[u8] {
@@ -537,6 +546,13 @@ pub mod client {
     pub struct Pending {
         plain: Vec<u8>,
         secret: [u8; NK],
+    }
+
+    // The query and the exported secret stay out of the output.
+    impl std::fmt::Debug for Pending {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("Pending").finish_non_exhaustive()
+        }
     }
 
     /// Encrypts `dns`, with `padding` zero bytes, to `config`.

@@ -28,7 +28,7 @@ use crate::lists::ListStore;
 use crate::services::{self, Catalog, ServicesFrom};
 
 /// The control plane's handle on the data plane.
-pub struct Control {
+pub(crate) struct Control {
     store: Arc<Store>,
     state: Arc<PolicyState>,
     lists: ListStore,
@@ -48,7 +48,7 @@ pub struct Control {
 impl Control {
     /// A control plane for `store`, steering `state`, keeping downloaded
     /// lists in `lists`, with the services catalog from `services_from`.
-    pub fn new(
+    pub(crate) fn new(
         store: Arc<Store>,
         state: Arc<PolicyState>,
         lists: ListStore,
@@ -70,23 +70,23 @@ impl Control {
     }
 
     /// The store.
-    pub fn store(&self) -> &Arc<Store> {
+    pub(crate) fn store(&self) -> &Arc<Store> {
         &self.store
     }
 
     /// The policy state the resolver uses.
-    pub fn state(&self) -> &Arc<PolicyState> {
+    pub(crate) fn state(&self) -> &Arc<PolicyState> {
         &self.state
     }
 
     /// The current filter.
-    pub fn compiled(&self) -> Arc<Compiled> {
+    pub(crate) fn compiled(&self) -> Arc<Compiled> {
         Arc::clone(&self.compiled.lock().unwrap_or_else(PoisonError::into_inner))
     }
 
     /// Why the last filter or policy build failed, if it did and nothing
     /// has been built since.
-    pub fn build_error(&self) -> Option<String> {
+    pub(crate) fn build_error(&self) -> Option<String> {
         self.build_error
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -101,13 +101,13 @@ impl Control {
     }
 
     /// The services catalog in use.
-    pub fn catalog(&self) -> Arc<Catalog> {
+    pub(crate) fn catalog(&self) -> Arc<Catalog> {
         Arc::clone(&self.catalog.lock().unwrap_or_else(PoisonError::into_inner))
     }
 
     /// The services groups can block, for the API; `None` when this node
     /// does not use the catalog.
-    pub fn services(&self) -> Option<goethite_api::services::Services> {
+    pub(crate) fn services(&self) -> Option<goethite_api::services::Services> {
         let from = self.services_from.as_ref()?;
         let catalog = self.catalog();
         Some(goethite_api::services::Services {
@@ -201,7 +201,7 @@ impl Control {
     /// runtime, then the policy. The services catalog is read again too. If
     /// compiling fails, the current filter stays. Returns whether the new
     /// filter is in use.
-    pub async fn rebuild_filter(&self) -> bool {
+    pub(crate) async fn rebuild_filter(&self) -> bool {
         let _rebuilding = self.rebuilding.lock().await;
         self.reload_services().await;
         let config = self.store.config();
@@ -236,7 +236,7 @@ impl Control {
 
     /// Recompiles the policy around the current filter, after groups,
     /// clients, schedules or settings changed.
-    pub fn rebuild_policy(&self) -> bool {
+    pub(crate) fn rebuild_policy(&self) -> bool {
         let config = self.store.config();
         match build_policy(&config, &self.compiled(), &self.catalog().filter) {
             Ok(policy) => {
@@ -254,13 +254,13 @@ impl Control {
     }
 
     /// Sets which schedules are active right now.
-    pub fn update_schedules(&self) {
+    pub(crate) fn update_schedules(&self) {
         self.state
             .set_active_schedules(active_schedules(&self.store.config(), Timestamp::now()));
     }
 
     /// How each list is doing, by list ID.
-    pub fn list_statuses(&self) -> HashMap<String, ListStatus> {
+    pub(crate) fn list_statuses(&self) -> HashMap<String, ListStatus> {
         let compiled = self.compiled();
         let downloads = self
             .downloads
@@ -283,14 +283,14 @@ impl Control {
     }
 
     /// Downloads the lists now instead of at the next scheduled time.
-    pub fn refresh_lists(&self) {
+    pub(crate) fn refresh_lists(&self) {
         self.refresh.notify_one();
     }
 
     /// Starts downloading lists (now, then every `list_update_hours`) and
     /// tracking schedules (every minute), in `tasks`, until `stopped`
     /// turns true.
-    pub fn spawn(
+    pub(crate) fn spawn(
         self: &Arc<Self>,
         downloader: Downloader,
         tasks: &mut JoinSet<()>,
@@ -438,7 +438,7 @@ fn group_services(
 /// The policy for `config` around the filter in `compiled` and the services
 /// in `catalog`. Lists that are not compiled in (disabled ones) are left out
 /// of every group.
-pub fn build_policy(
+pub(crate) fn build_policy(
     config: &ConfigSnapshot,
     compiled: &Compiled,
     catalog: &Arc<ServiceFilter>,

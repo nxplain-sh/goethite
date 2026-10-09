@@ -291,6 +291,15 @@ pub struct Server {
     stats: Arc<ServerStats>,
 }
 
+impl fmt::Debug for Server {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Server")
+            .field("config", &self.config)
+            .field("tls", &self.tls.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
 impl Server {
     /// Binds the sockets for `config` (see [`Listeners::bind`]) and prepares
     /// to serve them. The resolver is shared, e.g. with the filter list

@@ -37,7 +37,7 @@ const RISE: u32 = 2;
 
 /// Runs the floating IP for the config file at `config_path` until SIGINT
 /// or SIGTERM.
-pub fn run(config_path: &Path) -> Result<()> {
+pub(crate) fn run(config_path: &Path) -> Result<()> {
     info!(
         version = env!("CARGO_PKG_VERSION"),
         config = %config_path.display(),

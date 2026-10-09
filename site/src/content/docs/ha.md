@@ -177,11 +177,11 @@ listens on the floating IP even while the other node holds it, and answers on it
 arrives. All the settings are in the [configuration reference](../configuration/#vrrp).
 
 Then install
-[`dist/systemd/goethite-vrrp.service`](https://github.com/nxplain-sh/goethite/blob/main/dist/systemd/goethite-vrrp.service)
+[`deploy/systemd/goethite-vrrp.service`](https://github.com/nxplain-sh/goethite/blob/main/deploy/systemd/goethite-vrrp.service)
 beside `goethite.service` on both nodes:
 
 ```sh
-sudo install -m 0644 dist/systemd/goethite-vrrp.service /etc/systemd/system/
+sudo install -m 0644 deploy/systemd/goethite-vrrp.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl restart goethite
 sudo systemctl enable --now goethite-vrrp

@@ -201,7 +201,7 @@ mod tests {
     fn fuzz_seeds_parse_as_named() {
         let seed = |name: &str| {
             let path = format!(
-                "{}/../../fuzz/seeds/parse_cidr/{name}",
+                "{}/../../fuzz/seeds/parse-cidr/{name}",
                 env!("CARGO_MANIFEST_DIR")
             );
             std::fs::read_to_string(&path).unwrap()

@@ -20,29 +20,29 @@ fn notify(state: &str, fds: &[BorrowedFd<'_>]) {
 }
 
 /// Startup is done: goethite answers queries.
-pub fn ready() {
+pub(crate) fn ready() {
     notify("READY=1", &[]);
 }
 
 /// goethite is shutting down.
-pub fn stopping() {
+pub(crate) fn stopping() {
     notify("STOPPING=1", &[]);
 }
 
 /// This process, which took over from the previous one, is now the
 /// service's main process, and ready.
-pub fn took_over() {
+pub(crate) fn took_over() {
     notify(&format!("MAINPID={}\nREADY=1", std::process::id()), &[]);
 }
 
 /// Removes the sockets named `name` from systemd's store.
-pub fn forget(name: &str) {
+pub(crate) fn forget(name: &str) {
     notify(&format!("FDSTOREREMOVE=1\nFDNAME={name}"), &[]);
 }
 
 /// Keeps `fd` in systemd's store under `name`. Storing the same socket
 /// again is harmless: systemd keeps one copy.
-pub fn store(name: &str, fd: BorrowedFd<'_>) {
+pub(crate) fn store(name: &str, fd: BorrowedFd<'_>) {
     notify(&format!("FDSTORE=1\nFDNAME={name}"), &[fd]);
 }
 

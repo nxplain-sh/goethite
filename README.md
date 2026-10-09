@@ -25,7 +25,7 @@ is audit-logged, and a DNS leak test shows whether a device's lookups reach it. 
 share one configuration over mutual TLS and one floating IP over VRRP, and goethite upgrades
 without dropping a query. It protects against DNS rebinding, rate limits clients, pads encrypted
 messages, drops its privileges after binding port 53, and ships hardened systemd units
-([`dist/systemd/`](dist/systemd/)). See the [changelog](CHANGELOG.md) and the roadmap in
+([`deploy/systemd/`](deploy/systemd/)). See the [changelog](CHANGELOG.md) and the roadmap in
 [`AGENTS.md`](AGENTS.md#roadmap-respect-the-order).
 
 ## Quick start (development)
@@ -82,14 +82,18 @@ cd web && npm ci --ignore-scripts && npm run build
 | `crates/goethite-store`     | Embedded storage for query log, stats and config                        |
 | `crates/goethite-tui`       | Terminal UI that talks to the API                                       |
 | `crates/goethite`           | The binary: CLI, wiring, signal handling                                |
+| `xtask/`                    | Repository automation: `cargo xtask ci` runs the checks CI runs         |
 | `web/`                      | Web UI (Vite, React, TanStack), embedded into the binary                |
 | `site/`                     | Project website and docs (Astro Starlight), deployed to GitHub Pages    |
 | `fuzz/`                     | cargo-fuzz targets                                                      |
 | `tests/chaos/`              | Chaos tests: two nodes and a client in network namespaces               |
-| `dist/`                     | Deployment files: the hardened systemd units                            |
+| `deploy/`                   | Deployment files: the hardened systemd units                            |
+| `config/`                   | The example configuration                                               |
 | `docs/`                     | Threat model, ADRs, backlog                                             |
 
-Benchmarks and how to record them are in [`bench/`](bench/README.md).
+Benchmarks and how to record them are in [`bench/`](bench/README.md). The layout follows the
+[standard Rust project layout](https://github.com/miguelmartens/standard-rust-project-layout);
+[ADR 0025](docs/adr/0025-standard-rust-project-layout.md) records where goethite deviates from it.
 
 ## Documentation
 

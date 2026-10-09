@@ -158,6 +158,18 @@ pub struct PolicyParts {
     pub services: Arc<ServiceFilter>,
 }
 
+impl std::fmt::Debug for PolicyParts {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PolicyParts")
+            .field("filter", &self.filter)
+            .field("sources", &self.source_ids.len())
+            .field("groups", &self.groups.len())
+            .field("clients", &self.clients.len())
+            .field("block_response", &self.block_response)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Why a policy could not be built.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
@@ -293,6 +305,20 @@ pub struct Policy {
     blocked_ttl: u32,
     protection: bool,
     services: Arc<ServiceFilter>,
+}
+
+impl std::fmt::Debug for Policy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Policy")
+            .field("filter", &self.filter)
+            .field("sources", &self.source_ids.len())
+            .field("groups", &self.groups.len())
+            .field("clients", &self.clients.len())
+            .field("block_response", &self.block_response)
+            .field("blocked_ttl", &self.blocked_ttl)
+            .field("protection", &self.protection)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Policy {
@@ -433,6 +459,19 @@ pub struct PolicyState {
     /// Seconds since the Unix epoch until which filtering is paused; 0 when
     /// it is not.
     paused_until: AtomicU64,
+}
+
+impl std::fmt::Debug for PolicyState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PolicyState")
+            .field("policy", &self.policy.load())
+            .field(
+                "active_schedules",
+                &self.active_schedules.load(Ordering::Relaxed),
+            )
+            .field("paused_until", &self.paused_until.load(Ordering::Relaxed))
+            .finish()
+    }
 }
 
 impl PolicyState {

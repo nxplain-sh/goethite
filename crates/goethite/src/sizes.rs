@@ -25,7 +25,7 @@ use tracing::debug;
 use crate::download::Downloader;
 
 /// How long the sizes are kept.
-pub const KEEP: Duration = Duration::from_hours(24);
+pub(crate) const KEEP: Duration = Duration::from_hours(24);
 
 /// How long reading one list's header may take.
 const HEADER_TIMEOUT: Duration = Duration::from_secs(10);
@@ -39,7 +39,7 @@ struct Cached {
 }
 
 /// The recommended lists' stated sizes, read on demand.
-pub struct ListSizes {
+pub(crate) struct ListSizes {
     downloader: Arc<Downloader>,
     cached: ArcSwapOption<Cached>,
     refresh: Semaphore,
@@ -48,7 +48,7 @@ pub struct ListSizes {
 impl ListSizes {
     /// Reads headers resolving with `resolver` and checking certificates
     /// with `tls`.
-    pub fn new(resolver: Arc<Resolver>, tls: Arc<ClientConfig>) -> Self {
+    pub(crate) fn new(resolver: Arc<Resolver>, tls: Arc<ClientConfig>) -> Self {
         Self {
             downloader: Arc::new(Downloader::new(resolver, tls, recommended::HEADER_LEN)),
             cached: ArcSwapOption::empty(),
@@ -69,7 +69,7 @@ impl ListSizes {
     /// # Errors
     ///
     /// Only if the refresh cannot start.
-    pub async fn sizes(&self) -> Result<RecommendedSizes> {
+    pub(crate) async fn sizes(&self) -> Result<RecommendedSizes> {
         if let Some(sizes) = self.fresh() {
             return Ok(sizes);
         }

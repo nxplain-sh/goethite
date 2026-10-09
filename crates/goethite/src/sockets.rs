@@ -30,7 +30,7 @@ use tracing::warn;
 use crate::config::Config;
 
 /// Every listening socket of the node.
-pub struct Sockets {
+pub(crate) struct Sockets {
     dns: Option<Listeners>,
     api: Vec<TcpListener>,
     cluster: Option<TcpListener>,
@@ -43,7 +43,7 @@ impl Sockets {
     /// # Errors
     ///
     /// If one cannot be bound.
-    pub fn bind(config: &Config) -> Result<Self> {
+    pub(crate) fn bind(config: &Config) -> Result<Self> {
         let dns = Listeners::bind(&config.server_config())?;
         let api = if config.api.enabled {
             config
@@ -71,7 +71,7 @@ impl Sockets {
     ///
     /// If a socket the config asks for is missing, or is not what its name
     /// says. Listen addresses cannot change without a restart.
-    pub fn adopt(config: &Config, given: Vec<(String, OwnedFd)>) -> Result<Self> {
+    pub(crate) fn adopt(config: &Config, given: Vec<(String, OwnedFd)>) -> Result<Self> {
         let mut by_name: HashMap<String, OwnedFd> = given.into_iter().collect();
         let mut take = |name: &str| {
             by_name.remove(name).with_context(|| {
@@ -174,7 +174,7 @@ impl Sockets {
     }
 
     /// The DNS sockets, for the server, which owns them from then on.
-    pub fn take_dns(&mut self) -> Option<Listeners> {
+    pub(crate) fn take_dns(&mut self) -> Option<Listeners> {
         self.dns.take()
     }
 
@@ -184,7 +184,7 @@ impl Sockets {
     /// # Errors
     ///
     /// If a socket cannot be duplicated.
-    pub fn api_listeners(&self) -> Result<Option<ApiListeners>> {
+    pub(crate) fn api_listeners(&self) -> Result<Option<ApiListeners>> {
         if self.api.is_empty() {
             return Ok(None);
         }
@@ -201,7 +201,7 @@ impl Sockets {
     /// # Errors
     ///
     /// If it cannot be duplicated.
-    pub fn cluster_listener(&self) -> Result<Option<ApiListeners>> {
+    pub(crate) fn cluster_listener(&self) -> Result<Option<ApiListeners>> {
         match &self.cluster {
             Some(listener) => Ok(Some(ApiListeners::from_listeners(vec![
                 listener.try_clone()?,
@@ -211,7 +211,7 @@ impl Sockets {
     }
 
     /// Every socket with its name, to hand over or store.
-    pub fn named(&self) -> impl Iterator<Item = (&str, BorrowedFd<'_>)> {
+    pub(crate) fn named(&self) -> impl Iterator<Item = (&str, BorrowedFd<'_>)> {
         self.named
             .iter()
             .map(|(name, fd)| (name.as_str(), fd.as_fd()))
@@ -311,7 +311,7 @@ pub fn take_systemd_fds() -> Vec<(String, OwnedFd)> {
 
 /// systemd is Linux only.
 #[cfg(not(target_os = "linux"))]
-pub fn take_systemd_fds() -> Vec<(String, OwnedFd)> {
+pub(crate) fn take_systemd_fds() -> Vec<(String, OwnedFd)> {
     Vec::new()
 }
 

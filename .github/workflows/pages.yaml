@@ -7,7 +7,7 @@ on:
       - "site/**"
       - "CHANGELOG.md"
       - "crates/goethite-api/openapi.json"
-      - ".github/workflows/pages.yml"
+      - ".github/workflows/pages.yaml"
   workflow_dispatch:
 
 permissions:

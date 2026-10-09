@@ -25,120 +25,120 @@ libfuzzer-sys = "0.4.13"
 members = ["."]
 
 [[bin]]
-name = "classify_response"
-path = "fuzz_targets/classify_response.rs"
+name = "classify-response"
+path = "fuzz_targets/classify-response.rs"
 test = false
 doc = false
 bench = false
 
 [[bin]]
-name = "check_dnssec"
-path = "fuzz_targets/check_dnssec.rs"
+name = "check-dnssec"
+path = "fuzz_targets/check-dnssec.rs"
 test = false
 doc = false
 bench = false
 
 [[bin]]
-name = "decode_query"
-path = "fuzz_targets/decode_query.rs"
+name = "decode-query"
+path = "fuzz_targets/decode-query.rs"
 test = false
 doc = false
 bench = false
 
 [[bin]]
-name = "decode_query_record"
-path = "fuzz_targets/decode_query_record.rs"
+name = "decode-query-record"
+path = "fuzz_targets/decode-query-record.rs"
 test = false
 doc = false
 bench = false
 
 [[bin]]
-name = "decode_response"
-path = "fuzz_targets/decode_response.rs"
+name = "decode-response"
+path = "fuzz_targets/decode-response.rs"
 test = false
 doc = false
 bench = false
 
 [[bin]]
-name = "parse_netlink"
-path = "fuzz_targets/parse_netlink.rs"
+name = "parse-netlink"
+path = "fuzz_targets/parse-netlink.rs"
 test = false
 doc = false
 bench = false
 
 [[bin]]
-name = "parse_cidr"
-path = "fuzz_targets/parse_cidr.rs"
+name = "parse-cidr"
+path = "fuzz_targets/parse-cidr.rs"
 test = false
 doc = false
 bench = false
 
 [[bin]]
-name = "parse_doh"
-path = "fuzz_targets/parse_doh.rs"
+name = "parse-doh"
+path = "fuzz_targets/parse-doh.rs"
 test = false
 doc = false
 bench = false
 
 [[bin]]
-name = "parse_doq"
-path = "fuzz_targets/parse_doq.rs"
+name = "parse-doq"
+path = "fuzz_targets/parse-doq.rs"
 test = false
 doc = false
 bench = false
 
 [[bin]]
-name = "parse_filterlists"
-path = "fuzz_targets/parse_filterlists.rs"
+name = "parse-filterlists"
+path = "fuzz_targets/parse-filterlists.rs"
 test = false
 doc = false
 bench = false
 
 [[bin]]
-name = "parse_odoh"
-path = "fuzz_targets/parse_odoh.rs"
+name = "parse-odoh"
+path = "fuzz_targets/parse-odoh.rs"
 test = false
 doc = false
 bench = false
 
 [[bin]]
-name = "parse_services"
-path = "fuzz_targets/parse_services.rs"
+name = "parse-services"
+path = "fuzz_targets/parse-services.rs"
 test = false
 doc = false
 bench = false
 
 [[bin]]
-name = "parse_leak_probe"
-path = "fuzz_targets/parse_leak_probe.rs"
+name = "parse-leak-probe"
+path = "fuzz_targets/parse-leak-probe.rs"
 test = false
 doc = false
 bench = false
 
 [[bin]]
-name = "parse_list"
-path = "fuzz_targets/parse_list.rs"
+name = "parse-list"
+path = "fuzz_targets/parse-list.rs"
 test = false
 doc = false
 bench = false
 
 [[bin]]
-name = "parse_name"
-path = "fuzz_targets/parse_name.rs"
+name = "parse-name"
+path = "fuzz_targets/parse-name.rs"
 test = false
 doc = false
 bench = false
 
 [[bin]]
-name = "parse_vrrp"
-path = "fuzz_targets/parse_vrrp.rs"
+name = "parse-vrrp"
+path = "fuzz_targets/parse-vrrp.rs"
 test = false
 doc = false
 bench = false
 
 [[bin]]
-name = "request_checks"
-path = "fuzz_targets/request_checks.rs"
+name = "request-checks"
+path = "fuzz_targets/request-checks.rs"
 test = false
 doc = false
 bench = false

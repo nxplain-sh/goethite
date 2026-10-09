@@ -1,4 +1,4 @@
-//! The committed `request_checks` fuzz seeds behave the way their names
+//! The committed `request-checks` fuzz seeds behave the way their names
 //! say, so they keep steering the fuzzer at both sides of each check.
 
 #![allow(
@@ -12,7 +12,7 @@ use goethite_api::fuzzing::{is_loopback_authority, is_plain, origin_authority};
 #[test]
 fn request_check_seeds() {
     let dir = format!(
-        "{}/../../fuzz/seeds/request_checks",
+        "{}/../../fuzz/seeds/request-checks",
         env!("CARGO_MANIFEST_DIR")
     );
     let mut seen = 0;

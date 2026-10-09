@@ -43,7 +43,7 @@ const MAX_VALIDATOR_LEN: usize = 1024;
 
 /// What a previous download returned, to revalidate it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Validators {
+pub(crate) struct Validators {
     /// The `ETag` header.
     pub etag: Option<String>,
     /// The `Last-Modified` header.
@@ -51,7 +51,7 @@ pub struct Validators {
 }
 
 /// The result of a download.
-pub enum Fetched {
+pub(crate) enum Fetched {
     /// The server says the copy we have is current.
     NotModified,
     /// A new copy.
@@ -71,7 +71,7 @@ enum Step {
 }
 
 /// Fetches `https://` URLs.
-pub struct Downloader {
+pub(crate) struct Downloader {
     resolver: Arc<Resolver>,
     connector: TlsConnector,
     max_len: usize,
@@ -80,7 +80,7 @@ pub struct Downloader {
 impl Downloader {
     /// A downloader resolving names with `resolver`, verifying certificates
     /// with `tls` and accepting bodies of at most `max_len` bytes.
-    pub fn new(resolver: Arc<Resolver>, tls: Arc<ClientConfig>, max_len: usize) -> Self {
+    pub(crate) fn new(resolver: Arc<Resolver>, tls: Arc<ClientConfig>, max_len: usize) -> Self {
         Self {
             resolver,
             connector: TlsConnector::from(tls),
@@ -90,7 +90,7 @@ impl Downloader {
 
     /// Downloads `url`, sending `validators` so an unchanged list is not
     /// transferred again.
-    pub async fn fetch(&self, url: &str, validators: &Validators) -> Result<Fetched> {
+    pub(crate) async fn fetch(&self, url: &str, validators: &Validators) -> Result<Fetched> {
         timeout(
             DOWNLOAD_TIMEOUT,
             self.fetch_following(url, validators, None),
@@ -102,7 +102,7 @@ impl Downloader {
     /// The first `len` bytes of `url` (fewer if it is shorter), for its
     /// header: asked for with a range, and cut off there if the server
     /// sends more.
-    pub async fn fetch_start(&self, url: &str, len: usize) -> Result<Vec<u8>> {
+    pub(crate) async fn fetch_start(&self, url: &str, len: usize) -> Result<Vec<u8>> {
         let fetched = timeout(
             DOWNLOAD_TIMEOUT,
             self.fetch_following(url, &Validators::default(), Some(len)),
@@ -290,7 +290,7 @@ async fn connect(addresses: &[IpAddr], port: u16) -> Result<TcpStream> {
 }
 
 /// Parses `url`, which must be an `https://` URL with a host.
-pub fn https_uri(url: &str) -> Result<Uri> {
+pub(crate) fn https_uri(url: &str) -> Result<Uri> {
     let uri: Uri = url
         .parse()
         .with_context(|| format!("{url:?} is not a URL"))?;

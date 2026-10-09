@@ -454,6 +454,14 @@ pub struct QueryLog {
     writer: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
 
+impl std::fmt::Debug for QueryLog {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("QueryLog")
+            .field("dropped", &self.dropped.load(Ordering::Relaxed))
+            .finish_non_exhaustive()
+    }
+}
+
 impl QueryLog {
     /// Queues `event` for the writer. Never waits: if the queue is full, the
     /// event is dropped and counted.
@@ -1018,7 +1026,7 @@ mod tests {
     fn fuzz_seeds_decode() {
         for seed in ["forwarded-v4", "blocked-v6-cname", "minimal"] {
             let path = format!(
-                "{}/../../fuzz/seeds/decode_query_record/{seed}",
+                "{}/../../fuzz/seeds/decode-query-record/{seed}",
                 env!("CARGO_MANIFEST_DIR")
             );
             let bytes = std::fs::read(&path).unwrap();

@@ -45,7 +45,7 @@ use crate::{Api, Change, Status};
 type Shared = State<Arc<Api>>;
 
 /// The longest pause, in seconds: a week.
-pub const MAX_PAUSE_SECONDS: u32 = 7 * 86_400;
+pub(crate) const MAX_PAUSE_SECONDS: u32 = 7 * 86_400;
 
 /// The most audit entries one request returns.
 const MAX_AUDIT_PAGE: usize = 1000;
@@ -307,7 +307,7 @@ resource_handlers!(
 
 /// The answer to a health check.
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
-pub struct Health {
+pub(crate) struct Health {
     /// Always `ok`.
     pub status: String,
 }
@@ -365,7 +365,7 @@ pub(crate) async fn put_settings(
 
 /// Whether filtering is paused.
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
-pub struct Pause {
+pub(crate) struct Pause {
     /// Until when filtering is paused; absent when it is not.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub paused_until: Option<Timestamp>,
@@ -374,7 +374,7 @@ pub struct Pause {
 /// How long to pause filtering.
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
-pub struct PauseRequest {
+pub(crate) struct PauseRequest {
     /// Seconds, from 1 to 604,800 (a week).
     pub seconds: u32,
 }

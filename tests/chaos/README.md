@@ -28,4 +28,4 @@ docker run --rm --privileged -v "$PWD/tests/chaos:/chaos:ro" \
 ```
 
 It exits non-zero if a check fails, after printing the nodes' last log lines. The
-[chaos workflow](../../.github/workflows/chaos.yml) runs it weekly and on demand.
+[chaos workflow](../../.github/workflows/chaos.yaml) runs it weekly and on demand.

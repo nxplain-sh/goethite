@@ -18,13 +18,13 @@ use goethite_proto::dnssec::{
 use goethite_proto::{Name, Record, RecordType};
 
 /// The most signature checks for one client query.
-pub const MAX_CHECKS: u32 = 64;
+pub(super) const MAX_CHECKS: u32 = 64;
 /// The most keys tried for one key tag (several keys may share one).
-pub const MAX_KEYS_PER_TAG: usize = 4;
+pub(super) const MAX_KEYS_PER_TAG: usize = 4;
 /// The most signatures tried for one RRset.
-pub const MAX_SIGS_PER_RRSET: usize = 8;
+pub(super) const MAX_SIGS_PER_RRSET: usize = 8;
 /// NSEC3 proofs with more iterations count as insecure (RFC 9276).
-pub const MAX_NSEC3_ITERATIONS: u16 = 150;
+pub(super) const MAX_NSEC3_ITERATIONS: u16 = 150;
 /// The most NSEC3 hashes computed for one proof.
 const MAX_HASHES: usize = 64;
 /// How far a signature's times may be off, at most: clocks are not exact.
@@ -32,7 +32,7 @@ const MAX_SKEW: u32 = 3_600;
 
 /// What validation found.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Security {
+pub(super) enum Security {
     /// Signed, and every signature checked: the AD bit.
     Secure,
     /// Not signed, or in a part of the DNS that is provably unsigned.
@@ -44,14 +44,14 @@ pub enum Security {
 
 /// Signature checks left for a client's query.
 #[derive(Debug)]
-pub struct Checks {
+pub(super) struct Checks {
     left: u32,
     ran_out: bool,
 }
 
 impl Checks {
     /// A budget of `checks` signature checks.
-    pub fn new(checks: u32) -> Self {
+    pub(super) fn new(checks: u32) -> Self {
         Self {
             left: checks,
             ran_out: false,
@@ -59,13 +59,13 @@ impl Checks {
     }
 
     /// Checks left.
-    pub fn left(&self) -> u32 {
+    pub(super) fn left(&self) -> u32 {
         self.left
     }
 
     /// Whether a check was refused for want of budget: then a failed
     /// verification proves nothing about the data.
-    pub fn ran_out(&self) -> bool {
+    pub(super) fn ran_out(&self) -> bool {
         self.ran_out
     }
 
@@ -96,7 +96,7 @@ fn in_time(rrsig: &Rrsig, now: u32) -> bool {
 
 /// The keys of a zone that may sign: zone keys of a supported algorithm,
 /// not revoked.
-pub fn usable_keys(dnskeys: &[Record]) -> Vec<Record> {
+pub(super) fn usable_keys(dnskeys: &[Record]) -> Vec<Record> {
     dnskeys
         .iter()
         .filter(|record| {
@@ -111,7 +111,7 @@ pub fn usable_keys(dnskeys: &[Record]) -> Vec<Record> {
 /// A checked RRset: how long it may be kept, and, for one synthesized from
 /// a wildcard, the wildcard's parent (the closest encloser).
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Verified {
+pub(super) struct Verified {
     /// The TTL the records may have at most: the signature's original TTL
     /// and the time left until it expires.
     pub ttl: u32,
@@ -122,7 +122,7 @@ pub struct Verified {
 /// Checks `rrset` (one owner and type) against `sigs` (any RRSIGs) with
 /// `keys`, the usable keys of `signer`: at least one RRSIG by `signer`
 /// covering the type, in time and labelled consistently, must verify.
-pub fn verify_rrset(
+pub(super) fn verify_rrset(
     rrset: &[Record],
     sigs: &[Record],
     signer: &Name,
@@ -178,7 +178,7 @@ pub fn verify_rrset(
 /// of signs the DNSKEY RRset in `dnskeys` (which holds its RRSIGs too):
 /// the keys, and how long they may be kept. No usable DS at all (an
 /// insecure zone, RFC 4035 5.2) is told apart by [`usable_ds`].
-pub fn keys_from_ds(
+pub(super) fn keys_from_ds(
     zone: &Name,
     ds: &[Record],
     dnskeys: &[Record],
@@ -204,7 +204,7 @@ pub fn keys_from_ds(
 
 /// The DS records that can be used: supported algorithm and digest; and
 /// when there is a SHA-256 one, no SHA-1 ones (RFC 4509, section 3).
-pub fn usable_ds(ds: &[Record]) -> Vec<Record> {
+pub(super) fn usable_ds(ds: &[Record]) -> Vec<Record> {
     let supported: Vec<&Record> = ds
         .iter()
         .filter(|record| {
@@ -225,7 +225,7 @@ pub fn usable_ds(ds: &[Record]) -> Vec<Record> {
 
 /// What denial-of-existence records prove.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Denial {
+pub(super) enum Denial {
     /// The name or type does not exist.
     Proven,
     /// It may lie in an unsigned delegation (NSEC3 opt-out), or the proof
@@ -288,7 +288,7 @@ fn wildcard_of(name: &Name) -> Option<Name> {
 
 /// NSEC proof that `name` does not exist (NXDOMAIN, RFC 4035 3.1.3.2): an
 /// NSEC covers it, and one covers the wildcard at its closest encloser.
-pub fn nsec_nxdomain(name: &Name, proof: &[Record]) -> bool {
+pub(super) fn nsec_nxdomain(name: &Name, proof: &[Record]) -> bool {
     let Some((owner, nsec)) = covering_nsec(proof, name) else {
         return false;
     };
@@ -311,7 +311,7 @@ pub fn nsec_nxdomain(name: &Name, proof: &[Record]) -> bool {
 /// does not; an NSEC covering `name` whose next name is below it (an empty
 /// non-terminal); or `name` covered and the wildcard at its closest
 /// encloser without the type (a wildcard NODATA, RFC 4035 3.1.3.4).
-pub fn nsec_nodata(name: &Name, qtype: RecordType, proof: &[Record]) -> bool {
+pub(super) fn nsec_nodata(name: &Name, qtype: RecordType, proof: &[Record]) -> bool {
     let without =
         |nsec: &Nsec| !nsec.types.contains(&qtype) && !nsec.types.contains(&RecordType::CNAME);
     let at_name = nsecs(proof).any(|(owner, nsec)| {
@@ -345,7 +345,7 @@ pub fn nsec_nodata(name: &Name, qtype: RecordType, proof: &[Record]) -> bool {
 
 /// NSEC proof for an answer synthesized from a wildcard: `name` itself
 /// does not exist.
-pub fn nsec_wildcard(name: &Name, proof: &[Record]) -> bool {
+pub(super) fn nsec_wildcard(name: &Name, proof: &[Record]) -> bool {
     covering_nsec(proof, name).is_some()
 }
 
@@ -458,7 +458,7 @@ impl Nsec3Set {
 
 /// NSEC3 proof that `name` does not exist (RFC 5155 8.4): the closest
 /// encloser proof, and no wildcard at the encloser.
-pub fn nsec3_nxdomain(zone: &Name, name: &Name, proof: &[Record]) -> Denial {
+pub(super) fn nsec3_nxdomain(zone: &Name, name: &Name, proof: &[Record]) -> Denial {
     let mut set = match nsec3_set(zone, proof) {
         Nsec3Params::Usable(set) => set,
         Nsec3Params::TooCostly => return Denial::Insecure,
@@ -484,7 +484,12 @@ pub fn nsec3_nxdomain(zone: &Name, name: &Name, proof: &[Record]) -> Denial {
 /// an NSEC3 matching it without the type or a CNAME; for DS, also an opt-out
 /// span covering it (an unsigned delegation, so insecure); or a wildcard
 /// NODATA.
-pub fn nsec3_nodata(zone: &Name, name: &Name, qtype: RecordType, proof: &[Record]) -> Denial {
+pub(super) fn nsec3_nodata(
+    zone: &Name,
+    name: &Name,
+    qtype: RecordType,
+    proof: &[Record],
+) -> Denial {
     let mut set = match nsec3_set(zone, proof) {
         Nsec3Params::Usable(set) => set,
         Nsec3Params::TooCostly => return Denial::Insecure,
@@ -522,7 +527,12 @@ pub fn nsec3_nodata(zone: &Name, name: &Name, qtype: RecordType, proof: &[Record
 
 /// NSEC3 proof for an answer synthesized from the wildcard below
 /// `encloser`: the next closer name does not exist (RFC 5155 8.8).
-pub fn nsec3_wildcard(zone: &Name, name: &Name, encloser: &Name, proof: &[Record]) -> Denial {
+pub(super) fn nsec3_wildcard(
+    zone: &Name,
+    name: &Name,
+    encloser: &Name,
+    proof: &[Record],
+) -> Denial {
     let mut set = match nsec3_set(zone, proof) {
         Nsec3Params::Usable(set) => set,
         Nsec3Params::TooCostly => return Denial::Insecure,
@@ -543,7 +553,7 @@ pub fn nsec3_wildcard(zone: &Name, name: &Name, encloser: &Name, proof: &[Record
 /// without DS, from the parent's side (no SOA); or an NSEC3 opt-out span
 /// covers it. A name that is no delegation (no NS) is not a zone, so a
 /// signature claiming it as signer is bogus, not insecure.
-pub fn ds_denial(parent: &Name, zone: &Name, proof: &[Record]) -> Denial {
+pub(super) fn ds_denial(parent: &Name, zone: &Name, proof: &[Record]) -> Denial {
     let unsigned = |types: &[RecordType]| {
         types.contains(&RecordType::NS)
             && !types.contains(&RecordType::DS)
@@ -573,7 +583,7 @@ pub fn ds_denial(parent: &Name, zone: &Name, proof: &[Record]) -> Denial {
 /// Whether `cname` (unsigned) is what `dname` synthesizes (RFC 6672): its
 /// owner below the DNAME's, and its target the owner with the DNAME's
 /// owner replaced by the DNAME's target.
-pub fn synthesized(cname: &Record, dname: &Record) -> bool {
+pub(super) fn synthesized(cname: &Record, dname: &Record) -> bool {
     let (Some(target), Some(dname_target)) = (cname.cname_target(), dname.dname_target()) else {
         return false;
     };
@@ -590,7 +600,7 @@ pub fn synthesized(cname: &Record, dname: &Record) -> bool {
 /// The RRSIGs, NSEC and NSEC3 records and DNAMEs of `records` owned by
 /// names within `zone`: what validating an answer from `zone`'s servers may
 /// use. At most [`MAX_EVIDENCE`].
-pub fn evidence<'a>(zone: &Name, records: impl Iterator<Item = &'a Record>) -> Vec<Record> {
+pub(super) fn evidence<'a>(zone: &Name, records: impl Iterator<Item = &'a Record>) -> Vec<Record> {
     records
         .filter(|record| {
             matches!(
@@ -604,14 +614,14 @@ pub fn evidence<'a>(zone: &Name, records: impl Iterator<Item = &'a Record>) -> V
 }
 
 /// The most DNSSEC records kept from one response.
-pub const MAX_EVIDENCE: usize = 128;
+pub(super) const MAX_EVIDENCE: usize = 128;
 
 /// The most NSEC and NSEC3 records checked for one negative answer.
-pub const MAX_PROOFS: usize = 8;
+pub(super) const MAX_PROOFS: usize = 8;
 
 /// `records` grouped into RRsets (same owner and type), in order of first
 /// appearance.
-pub fn rrsets(records: &[Record]) -> Vec<Vec<Record>> {
+pub(super) fn rrsets(records: &[Record]) -> Vec<Vec<Record>> {
     let mut sets: Vec<Vec<Record>> = Vec::new();
     for record in records {
         let set = sets.iter_mut().find(|set| {
@@ -628,7 +638,7 @@ pub fn rrsets(records: &[Record]) -> Vec<Vec<Record>> {
 }
 
 /// The RRSIGs of `sigs` that cover `owner`'s `rtype` records.
-pub fn covering<'a>(
+pub(super) fn covering<'a>(
     sigs: &'a [Record],
     owner: &'a Name,
     rtype: RecordType,
@@ -642,7 +652,12 @@ pub fn covering<'a>(
 /// The zone that signed `owner`'s `rtype` records, as the first RRSIG
 /// covering them says: a name `owner` is in, within `zone` (the zone whose
 /// servers answered).
-pub fn signer(sigs: &[Record], owner: &Name, rtype: RecordType, zone: &Name) -> Option<Name> {
+pub(super) fn signer(
+    sigs: &[Record],
+    owner: &Name,
+    rtype: RecordType,
+    zone: &Name,
+) -> Option<Name> {
     covering(sigs, owner, rtype)
         .map(|(_, rrsig)| rrsig.signer)
         .find(|signer| owner.is_within(signer) && signer.is_within(zone))
@@ -650,7 +665,7 @@ pub fn signer(sigs: &[Record], owner: &Name, rtype: RecordType, zone: &Name) -> 
 
 /// The NSEC and NSEC3 records of `evidence` that `signer`'s `keys` sign, at
 /// most [`MAX_PROOFS`] of them, and how long they may be kept.
-pub fn verified_proofs(
+pub(super) fn verified_proofs(
     evidence: &[Record],
     signer: &Name,
     keys: &[Record],

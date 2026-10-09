@@ -5,7 +5,7 @@
 //! following referrals down (with QNAME minimisation, RFC 9156, in its
 //! relaxed form) until a server answers, then following CNAMEs to the end.
 //! What servers say is believed only within their bailiwick
-//! ([`classify`]). Exchanges use the same defenses as forwarding: a fresh
+//! (see `classify`). Exchanges use the same defenses as forwarding: a fresh
 //! random source port and ID for every query, 0x20 case randomization
 //! (dropped for a server that does not keep case), the question matched
 //! exactly, and TCP when an answer is truncated.

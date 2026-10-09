@@ -38,7 +38,7 @@ const MAX_CONFIG_LEN: usize = 1024 * 1024;
 /// The whole configuration file.
 #[derive(Debug, Default, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct Config {
+pub(crate) struct Config {
     /// The `[server]` table.
     #[serde(default)]
     pub server: ServerSection,
@@ -82,7 +82,7 @@ pub struct Config {
 /// The `[cluster]` table: this node's place in a two-node cluster.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct ClusterSection {
+pub(crate) struct ClusterSection {
     /// This node's name, as in its certificate.
     pub node: NodeId,
     /// Its role when it starts.
@@ -103,7 +103,7 @@ pub struct ClusterSection {
 /// The `[cluster.peer]` table.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct PeerSection {
+pub(crate) struct PeerSection {
     /// The peer's name, as in its certificate.
     pub node: NodeId,
     /// The peer's cluster listener.
@@ -138,7 +138,7 @@ impl ClusterSection {
 /// moved between the nodes with VRRP by `goethite vrrp`.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct VrrpSection {
+pub(crate) struct VrrpSection {
     /// The network interface the address lives on.
     pub interface: String,
     /// The floating IP.
@@ -235,7 +235,7 @@ impl VrrpSection {
     /// Where `goethite vrrp` checks that goethite answers: `check`, or the
     /// first listen address that is always there (not the floating IP),
     /// with loopback for an unspecified one.
-    pub fn check_address(&self, server: &ServerSection) -> Option<SocketAddr> {
+    pub(crate) fn check_address(&self, server: &ServerSection) -> Option<SocketAddr> {
         if self.check.is_some() {
             return self.check;
         }
@@ -255,7 +255,7 @@ impl VrrpSection {
     }
 
     /// The settings `goethite vrrp` runs with.
-    pub fn to_vrrp_config(&self) -> VrrpConfig {
+    pub(crate) fn to_vrrp_config(&self) -> VrrpConfig {
         VrrpConfig {
             interface: self.interface.clone(),
             address: self.address,
@@ -272,7 +272,7 @@ impl VrrpSection {
 /// The `[api]` table.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, default)]
-pub struct ApiSection {
+pub(crate) struct ApiSection {
     /// Whether the API (and the web UI) is served.
     pub enabled: bool,
     /// Addresses for the API: one, or a list.
@@ -307,7 +307,7 @@ impl Default for ApiSection {
 
 impl ApiSection {
     /// The token hash, if one is configured.
-    pub fn token(&self) -> Result<Option<TokenHash>> {
+    pub(crate) fn token(&self) -> Result<Option<TokenHash>> {
         self.token_sha256
             .as_deref()
             .map(|hash| hash.parse().context("api.token_sha256"))
@@ -351,7 +351,7 @@ impl ApiSection {
 /// The `[querylog]` table.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, default)]
-pub struct QueryLogSection {
+pub(crate) struct QueryLogSection {
     /// Whether queries are logged. Statistics are kept either way.
     pub enabled: bool,
     /// How long entries are kept, in days.
@@ -386,7 +386,7 @@ impl QueryLogSection {
     }
 
     /// The store's view of this table.
-    pub fn to_config(&self) -> QueryLogConfig {
+    pub(crate) fn to_config(&self) -> QueryLogConfig {
         QueryLogConfig {
             enabled: self.enabled,
             retention: std::time::Duration::from_hours(
@@ -401,7 +401,7 @@ impl QueryLogSection {
 /// The `[store]` table.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, default)]
-pub struct StoreSection {
+pub(crate) struct StoreSection {
     /// The database file. Defaults to `goethite.redb` in the state
     /// directory.
     pub path: Option<PathBuf>,
@@ -411,7 +411,7 @@ impl Config {
     /// Where goethite keeps its state: systemd's `STATE_DIRECTORY` (the
     /// unit's `StateDirectory=`) if set, otherwise the config file's
     /// directory.
-    pub fn state_dir(&self) -> PathBuf {
+    pub(crate) fn state_dir(&self) -> PathBuf {
         std::env::var_os("STATE_DIRECTORY")
             .and_then(|dirs| {
                 std::env::split_paths(&dirs)
@@ -422,7 +422,7 @@ impl Config {
     }
 
     /// The store's database file.
-    pub fn store_path(&self) -> PathBuf {
+    pub(crate) fn store_path(&self) -> PathBuf {
         self.store
             .path
             .clone()
@@ -430,7 +430,7 @@ impl Config {
     }
 
     /// Where downloaded lists are kept.
-    pub fn lists_dir(&self) -> PathBuf {
+    pub(crate) fn lists_dir(&self) -> PathBuf {
         self.filter
             .cache_dir
             .clone()
@@ -441,7 +441,7 @@ impl Config {
 /// The `[security]` table.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, default)]
-pub struct SecuritySection {
+pub(crate) struct SecuritySection {
     /// Remove private addresses from answers for public names.
     pub rebinding_protection: bool,
     /// Names below these may resolve to private addresses.
@@ -462,7 +462,7 @@ impl Default for SecuritySection {
 
 impl SecuritySection {
     /// The resolver's rebinding protection, if it is on.
-    pub fn rebinding_protection(&self) -> Result<Option<RebindingProtection>> {
+    pub(crate) fn rebinding_protection(&self) -> Result<Option<RebindingProtection>> {
         if !self.rebinding_protection {
             return Ok(None);
         }
@@ -493,7 +493,7 @@ const MAX_INLINE_RULES: usize = 10_000;
 )]
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, default)]
-pub struct FilterSection {
+pub(crate) struct FilterSection {
     /// Whether filtering is on at all.
     pub enabled: bool,
     /// How blocked names are answered.
@@ -531,7 +531,7 @@ pub struct FilterSection {
 /// cannot be built, or checking a name fails.
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum OnFailure {
+pub(crate) enum OnFailure {
     /// Keep resolving, unfiltered if need be, and say so loudly.
     #[default]
     Open,
@@ -541,7 +541,7 @@ pub enum OnFailure {
 
 impl OnFailure {
     /// The resolver's mode.
-    pub fn mode(self) -> goethite_resolver::FailMode {
+    pub(crate) fn mode(self) -> goethite_resolver::FailMode {
         match self {
             Self::Open => goethite_resolver::FailMode::Open,
             Self::Closed => goethite_resolver::FailMode::Closed,
@@ -626,7 +626,7 @@ impl FilterSection {
 
     /// Where the services catalog comes from, unless blocked services are
     /// turned off.
-    pub fn services_from(&self) -> Option<crate::services::ServicesFrom> {
+    pub(crate) fn services_from(&self) -> Option<crate::services::ServicesFrom> {
         use crate::services::ServicesFrom;
         self.services.then(|| match &self.services_file {
             Some(path) => ServicesFrom::File(path.clone()),
@@ -636,7 +636,7 @@ impl FilterSection {
 
     /// The table as resources to import into the store: config rules and
     /// lists become resources managed by the config file.
-    pub fn to_import(&self) -> Import {
+    pub(crate) fn to_import(&self) -> Import {
         let lists = self
             .list
             .iter()
@@ -714,7 +714,7 @@ impl FilterSection {
 /// One `[[filter.list]]` table: exactly one of `path` and `url`.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct ListSection {
+pub(crate) struct ListSection {
     /// A local list file (hosts, domains or AdGuard syntax, mixed freely).
     pub path: Option<PathBuf>,
     /// An `https://` URL to download the list from, every `update_hours`.
@@ -724,7 +724,7 @@ pub struct ListSection {
 /// `filter.block_response`.
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum BlockResponseSetting {
+pub(crate) enum BlockResponseSetting {
     /// `0.0.0.0` / `::`, empty for other types.
     #[default]
     NullIp,
@@ -743,7 +743,7 @@ const MAX_NEGATIVE_TTL_LIMIT: u32 = 86_400;
 /// The `[recursion]` table.
 #[derive(Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, default)]
-pub struct RecursionSection {
+pub(crate) struct RecursionSection {
     /// Resolve from the root servers down instead of asking `[[upstream]]`
     /// resolvers.
     pub enabled: bool,
@@ -771,7 +771,7 @@ impl Default for RecursionSection {
 impl RecursionSection {
     /// The resolver's view of this table; `has_ipv6` decides when `ipv6` is
     /// unset.
-    pub fn to_recursor_config(&self, has_ipv6: impl FnOnce() -> bool) -> RecursorConfig {
+    pub(crate) fn to_recursor_config(&self, has_ipv6: impl FnOnce() -> bool) -> RecursorConfig {
         RecursorConfig {
             qname_minimisation: self.qname_minimisation,
             ipv6: self.ipv6.unwrap_or_else(has_ipv6),
@@ -784,7 +784,7 @@ impl RecursionSection {
 /// The `[cache]` table.
 #[derive(Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, default)]
-pub struct CacheSection {
+pub(crate) struct CacheSection {
     /// Most cached answers; 0 turns the cache off.
     pub max_entries: usize,
     /// Keep positive answers at least this many seconds.
@@ -809,7 +809,7 @@ impl Default for CacheSection {
 
 impl CacheSection {
     /// The resolver's view of this table.
-    pub fn to_cache_config(&self) -> CacheConfig {
+    pub(crate) fn to_cache_config(&self) -> CacheConfig {
         CacheConfig {
             max_entries: self.max_entries,
             min_ttl: self.min_ttl,
@@ -851,7 +851,7 @@ impl CacheSection {
 /// One `[[upstream]]` table: a resolver goethite forwards to.
 #[derive(Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct UpstreamSection {
+pub(crate) struct UpstreamSection {
     /// IP address, with an optional port (the protocol's standard port
     /// otherwise). Hostnames are not accepted: resolving them would need the
     /// resolver being configured.
@@ -870,7 +870,7 @@ pub struct UpstreamSection {
 
 /// An upstream IP address with an optional port.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Address {
+pub(crate) struct Address {
     /// The IP address.
     pub ip: IpAddr,
     /// The port, if one was given.
@@ -900,7 +900,7 @@ impl<'de> Deserialize<'de> for Address {
 /// The `protocol` of an upstream.
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
-pub enum Protocol {
+pub(crate) enum Protocol {
     /// Plain DNS over UDP, retried over TCP when the answer is truncated.
     #[default]
     Udp,
@@ -924,7 +924,7 @@ impl Protocol {
 
 impl UpstreamSection {
     /// The resolver's view of this upstream. Call [`Self::validate`] first.
-    pub fn to_upstream(&self) -> UpstreamConfig {
+    pub(crate) fn to_upstream(&self) -> UpstreamConfig {
         let port = self
             .address
             .port
@@ -971,7 +971,7 @@ const MAX_TCP_CONNECTIONS_LIMIT: usize = 100_000;
 /// The `[server]` table.
 #[derive(Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, default)]
-pub struct ServerSection {
+pub(crate) struct ServerSection {
     /// Addresses for DNS over UDP and TCP: one, or a list.
     #[serde(deserialize_with = "listen_addresses")]
     pub listen: Vec<SocketAddr>,
@@ -992,7 +992,7 @@ pub struct ServerSection {
 /// The `[server.tls]` table: DNS over TLS, HTTPS and QUIC for clients.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct TlsSection {
+pub(crate) struct TlsSection {
     /// The certificate chain (PEM).
     pub cert: PathBuf,
     /// Its private key (PEM).
@@ -1135,7 +1135,7 @@ impl ServerSection {
     }
 
     /// The listener settings.
-    pub fn to_server_config(&self) -> ServerConfig {
+    pub(crate) fn to_server_config(&self) -> ServerConfig {
         let mut config = ServerConfig::new(self.listen.clone());
         if let Some(sockets) = self.udp_sockets {
             config.udp_sockets = sockets;
@@ -1204,7 +1204,7 @@ fn listen_addresses<'de, D: Deserializer<'de>>(
 /// The `[server.rate_limit]` table.
 #[derive(Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, default)]
-pub struct RateLimitSection {
+pub(crate) struct RateLimitSection {
     /// Average UDP queries per second per client network; 0 turns it off.
     pub queries_per_second: u32,
     /// Queries a client network may send at once.
@@ -1274,7 +1274,7 @@ impl RateLimitSection {
 
 impl Config {
     /// Reads and parses the configuration file at `path`.
-    pub fn load(path: &Path) -> Result<Self> {
+    pub(crate) fn load(path: &Path) -> Result<Self> {
         let file = File::open(path)
             .with_context(|| format!("cannot open config file {}", path.display()))?;
         let limit = u64::try_from(MAX_CONFIG_LEN)?.saturating_add(1);
@@ -1413,7 +1413,7 @@ impl Config {
 
     /// The DNS listener settings, with the floating IP (if any) bound
     /// before this node holds it.
-    pub fn server_config(&self) -> ServerConfig {
+    pub(crate) fn server_config(&self) -> ServerConfig {
         let mut server = self.server.to_server_config();
         if let Some(vrrp) = &self.vrrp {
             server.freebind = vec![IpAddr::V4(vrrp.address)];
@@ -1422,7 +1422,7 @@ impl Config {
     }
 
     /// Parses configuration from TOML text.
-    pub fn parse(text: &str) -> Result<Self, toml::de::Error> {
+    pub(crate) fn parse(text: &str) -> Result<Self, toml::de::Error> {
         toml::from_str(text)
     }
 }

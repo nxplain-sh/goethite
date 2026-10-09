@@ -116,6 +116,16 @@ pub struct Serving {
     pub max_connections: usize,
 }
 
+impl std::fmt::Debug for Serving {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Serving")
+            .field("name", &self.name)
+            .field("tls", &self.tls.is_some())
+            .field("max_connections", &self.max_connections)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Serves `serving` on `listeners` until `shutdown` completes, with the same
 /// bounds as the API: connection count, handshake and header time, and a
 /// grace period on shutdown. The cluster listener uses it too.

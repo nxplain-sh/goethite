@@ -239,6 +239,15 @@ pub struct FilterBuilder {
     stats: ListStats,
 }
 
+impl std::fmt::Debug for FilterBuilder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FilterBuilder")
+            .field("rules", &self.rules.len())
+            .field("stats", &self.stats)
+            .finish()
+    }
+}
+
 impl FilterBuilder {
     /// An empty builder.
     pub fn new() -> Self {
@@ -356,6 +365,16 @@ pub struct Filter {
     bloom: Bloom,
     rules: usize,
     keys: usize,
+}
+
+// Counts only: the FST of a million rules is megabytes.
+impl std::fmt::Debug for Filter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Filter")
+            .field("rules", &self.rules)
+            .field("keys", &self.keys)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Filter {
@@ -748,7 +767,7 @@ mod tests {
 
     #[test]
     fn rules_for_the_root_are_refused() {
-        // Found by fuzzing (fuzz/artifacts/parse_list): a root rule matched
+        // Found by fuzzing (fuzz/artifacts/parse-list): a root rule matched
         // `.` in the reference but not in the compiled filter.
         let root_rule = Rule {
             name: Name::root(),

@@ -18,14 +18,14 @@ use crate::download::{Downloader, Fetched};
 use crate::lists::{ListStore, validate};
 
 /// List files and downloads larger than this many bytes are refused.
-pub const MAX_LIST_LEN: usize = 128 * 1024 * 1024;
+pub(crate) const MAX_LIST_LEN: usize = 128 * 1024 * 1024;
 
 /// The ID of the source holding the custom rules.
-pub const CUSTOM_RULES: &str = "custom";
+pub(crate) const CUSTOM_RULES: &str = "custom";
 
 /// How one list is doing, for logs and the API.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct ListStatus {
+pub(crate) struct ListStatus {
     /// What was read the last time the filter was compiled; `None` if the
     /// list was not read (disabled, not downloaded yet, or unreadable).
     pub stats: Option<ListStats>,
@@ -40,7 +40,7 @@ pub struct ListStatus {
 }
 
 /// A compiled filter, with what each source is.
-pub struct Compiled {
+pub(crate) struct Compiled {
     /// The filter.
     pub filter: Arc<Filter>,
     /// Source `i`'s ID: [`CUSTOM_RULES`], then list IDs.
@@ -51,7 +51,7 @@ pub struct Compiled {
 
 impl Compiled {
     /// No rules at all.
-    pub fn empty() -> Self {
+    pub(crate) fn empty() -> Self {
         Self {
             filter: Arc::new(Filter::empty()),
             source_ids: Vec::new(),
@@ -60,7 +60,7 @@ impl Compiled {
     }
 
     /// The source index of `id`, if it was compiled in.
-    pub fn source(&self, id: &str) -> Option<Source> {
+    pub(crate) fn source(&self, id: &str) -> Option<Source> {
         self.source_ids
             .iter()
             .position(|source| &**source == id)
@@ -75,7 +75,7 @@ impl Compiled {
 /// # Errors
 ///
 /// Only if the FST cannot be built, which does not happen for parsed rules.
-pub fn compile(config: &ConfigSnapshot, lists: &ListStore) -> Result<Compiled> {
+pub(crate) fn compile(config: &ConfigSnapshot, lists: &ListStore) -> Result<Compiled> {
     let mut builder = FilterBuilder::new();
     let mut source_ids: Vec<Arc<str>> = vec![CUSTOM_RULES.into()];
     let mut statuses = HashMap::new();
@@ -133,7 +133,7 @@ fn list_file(list: &List, lists: &ListStore) -> Option<PathBuf> {
 
 /// Reads and compiles the config file's rules and lists, for
 /// `goethite check-config`: a list file that cannot be read is an error.
-pub fn check(section: &FilterSection, lists: &ListStore) -> Result<()> {
+pub(crate) fn check(section: &FilterSection, lists: &ListStore) -> Result<()> {
     let mut builder = FilterBuilder::new();
     let source = Source::new(0).context("no filter source")?;
     if !section.rules.is_empty() {
@@ -197,7 +197,7 @@ fn read_list(path: &Path) -> Result<String> {
 
 /// The outcome of one list download.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Downloaded {
+pub(crate) enum Downloaded {
     /// A new copy was saved.
     Changed,
     /// The server says the copy we have is current.
@@ -208,7 +208,7 @@ pub enum Downloaded {
 
 /// Downloads `url` into `lists` if it changed, validating it before it
 /// replaces the last good copy.
-pub async fn download(url: &str, lists: &ListStore, downloader: &Downloader) -> Downloaded {
+pub(crate) async fn download(url: &str, lists: &ListStore, downloader: &Downloader) -> Downloaded {
     download_checked(url, lists, downloader, |bytes| {
         validate(bytes).map(|stats| stats.rules)
     })
@@ -217,7 +217,7 @@ pub async fn download(url: &str, lists: &ListStore, downloader: &Downloader) -> 
 
 /// Downloads `url` into `lists` if it changed, keeping it only if `check`
 /// accepts it; `check` says how many rules or entries it holds.
-pub async fn download_checked(
+pub(crate) async fn download_checked(
     url: &str,
     lists: &ListStore,
     downloader: &Downloader,

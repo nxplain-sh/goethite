@@ -8,7 +8,7 @@
 //! `https://` addresses are kept, since goethite downloads nothing else.
 //! Lists in syntaxes goethite cannot read, and allowlists (whose domains
 //! goethite would block), are left out. The parsers are fuzzed
-//! (`parse_filterlists`).
+//! (`parse-filterlists`).
 
 use std::collections::HashMap;
 

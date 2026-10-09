@@ -24,19 +24,19 @@ use tokio::time::timeout;
 use crate::download::{Downloader, Fetched, Validators};
 
 /// FilterLists' API.
-pub const API: &str = "https://api.filterlists.com";
+pub(crate) const API: &str = "https://api.filterlists.com";
 
 /// The largest answer read: the whole directory is about 600 KiB.
-pub const MAX_RESPONSE: usize = 4 * 1024 * 1024;
+pub(crate) const MAX_RESPONSE: usize = 4 * 1024 * 1024;
 
 /// How long one request may take.
-pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
+pub(crate) const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// How long the directory and list details are kept.
-pub const KEEP: Duration = Duration::from_hours(24);
+pub(crate) const KEEP: Duration = Duration::from_hours(24);
 
 /// The most lists' details kept.
-pub const MAX_DETAILS: usize = 256;
+pub(crate) const MAX_DETAILS: usize = 256;
 
 /// The directory and the names it refers to, as fetched at `at`.
 struct Cached {
@@ -46,7 +46,7 @@ struct Cached {
 }
 
 /// The FilterLists directory, fetched on demand.
-pub struct FilterLists {
+pub(crate) struct FilterLists {
     downloader: Downloader,
     base: String,
     cached: ArcSwapOption<Cached>,
@@ -57,7 +57,7 @@ pub struct FilterLists {
 impl FilterLists {
     /// Fetches from [`API`], resolving with `resolver` and checking
     /// certificates with `tls`.
-    pub fn new(resolver: Arc<Resolver>, tls: Arc<ClientConfig>) -> Self {
+    pub(crate) fn new(resolver: Arc<Resolver>, tls: Arc<ClientConfig>) -> Self {
         Self::with_base(resolver, tls, API)
     }
 
@@ -76,7 +76,7 @@ impl FilterLists {
     /// # Errors
     ///
     /// If FilterLists cannot be reached or sends something unexpected.
-    pub async fn directory(&self) -> Result<Directory> {
+    pub(crate) async fn directory(&self) -> Result<Directory> {
         Ok(self.current().await?.directory.clone())
     }
 
@@ -85,7 +85,7 @@ impl FilterLists {
     /// # Errors
     ///
     /// If FilterLists cannot be reached or sends something unexpected.
-    pub async fn list(&self, id: u64) -> Result<DirectoryList> {
+    pub(crate) async fn list(&self, id: u64) -> Result<DirectoryList> {
         if let Some(list) = self.kept_detail(id) {
             return Ok(list);
         }

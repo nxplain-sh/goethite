@@ -26,7 +26,7 @@ without the web UI.
 
 ```sh
 sudo install -m 0755 target/release/goethite /usr/bin/goethite
-sudo install -m 0644 dist/systemd/goethite.service /etc/systemd/system/goethite.service
+sudo install -m 0644 deploy/systemd/goethite.service /etc/systemd/system/goethite.service
 sudo install -d -m 0755 /etc/goethite
 sudo install -m 0644 config/goethite.example.toml /etc/goethite/goethite.toml
 ```

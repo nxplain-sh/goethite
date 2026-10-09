@@ -1,0 +1,5 @@
+# `cargo xtask <task>` runs the repository automation in xtask/:
+# `cargo xtask ci` is the gate CI applies, `cargo xtask help` lists the rest.
+# Lints belong in [workspace.lints] and credentials never belong here.
+[alias]
+xtask = "run --package xtask --"

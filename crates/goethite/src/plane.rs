@@ -38,7 +38,7 @@ use crate::{download, filters, node};
 const STOP_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// What the control plane steers and reports on: the data plane.
-pub struct DataPlane {
+pub(crate) struct DataPlane {
     /// The resolver, for its cache and upstreams, and for list downloads.
     pub resolver: Arc<Resolver>,
     /// The policy the resolver filters with.
@@ -58,7 +58,7 @@ pub struct DataPlane {
 }
 
 /// The running control plane.
-pub struct ControlPlane {
+pub(crate) struct ControlPlane {
     stop: watch::Sender<bool>,
     tasks: JoinSet<()>,
     store: Weak<Store>,
@@ -78,7 +78,7 @@ impl ControlPlane {
     /// If the store cannot be used (and filtering fails closed), the filter
     /// cannot be built at the first start (and filtering fails closed), or
     /// a listener or certificate is unusable.
-    pub async fn start(
+    pub(crate) async fn start(
         config: &Config,
         config_path: &Path,
         sockets: &Sockets,
@@ -194,7 +194,7 @@ impl ControlPlane {
     /// # Errors
     ///
     /// If something still holds the store after [`STOP_TIMEOUT`].
-    pub async fn stop(self) -> Result<()> {
+    pub(crate) async fn stop(self) -> Result<()> {
         let Self {
             stop,
             mut tasks,

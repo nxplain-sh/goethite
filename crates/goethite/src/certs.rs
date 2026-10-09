@@ -21,7 +21,7 @@ use tracing::{info, warn};
 use crate::secrets::CertAndKey;
 
 /// A certificate and its key, replaceable while serving.
-pub struct Served {
+pub(crate) struct Served {
     /// What it is, for messages, such as "API certificate".
     what: &'static str,
     /// The files it was read from, to read again.
@@ -46,7 +46,7 @@ impl Served {
     /// # Errors
     ///
     /// If `pem` holds no certificate, no key, or a key that does not fit.
-    pub fn new(
+    pub(crate) fn new(
         what: &'static str,
         pem: &CertAndKey,
         files: Option<(PathBuf, PathBuf)>,
@@ -66,7 +66,10 @@ impl Served {
     /// # Errors
     ///
     /// Never in practice: ring supports the default protocol versions.
-    pub fn server_config(self: &Arc<Self>, alpn: &[&[u8]]) -> Result<Arc<rustls::ServerConfig>> {
+    pub(crate) fn server_config(
+        self: &Arc<Self>,
+        alpn: &[&[u8]],
+    ) -> Result<Arc<rustls::ServerConfig>> {
         let mut tls = rustls::ServerConfig::builder_with_provider(Arc::clone(&self.provider))
             .with_safe_default_protocol_versions()?
             .with_no_client_auth()
@@ -82,7 +85,7 @@ impl Served {
     ///
     /// If the files cannot be read or do not hold a matching certificate
     /// and key; the certificate in use stays.
-    pub fn reload(&self) -> Result<bool> {
+    pub(crate) fn reload(&self) -> Result<bool> {
         let Some((cert, key)) = &self.files else {
             return Ok(false);
         };
@@ -102,7 +105,7 @@ impl Served {
     }
 
     /// [`Served::reload`], logged.
-    pub fn reload_and_log(&self) {
+    pub(crate) fn reload_and_log(&self) {
         match self.reload() {
             Ok(true) => info!("serving the renewed {}", self.what),
             Ok(false) => {}

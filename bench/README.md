@@ -65,6 +65,33 @@ handful) and compiling 100,000 rules still takes 98 ms.
 These cover the resolver only. Decoding the query and encoding the response, and the socket round
 trip, come on top; the end-to-end number below is the one the p99 target refers to.
 
+### Release profile
+
+The workspace's `[profile.release]` (which `cargo bench` inherits) uses thin LTO and one codegen
+unit since 2026-10-09; the results above were taken with Cargo's default profile. Both profiles,
+measured back to back on the same code (`98d470d`), Apple M3 Pro, macOS, with the default one
+selected by `CARGO_PROFILE_{RELEASE,BENCH}_LTO=false` and `..._CODEGEN_UNITS=16` and recorded as a
+criterion baseline (`-- --save-baseline default`, then `-- --baseline default`). Times are
+criterion's point estimates; Change is its estimate of the difference:
+
+| | Default profile | Thin LTO, 1 codegen unit | Change |
+| --- | --- | --- | --- |
+| `goethite` binary (release) | 24.9 MB | 19.0 MB | −24% |
+| Release build of `goethite`, clean | 76 s | 94 s | +24% |
+| `cache/get hit (10k entries)` | 319 ns | 302 ns | −4% |
+| `cache/get miss (10k entries)` | 97.6 ns | 76.9 ns | −18% |
+| `cache/insert (10k entries)` | 479 ns | 493 ns | +4% |
+| `resolve/cached answer` | 403 ns | 385 ns | −4% |
+| `resolve/cached answer, 100k rules, groups, 100 clients` | 459 ns | 467 ns | no change (p = 0.57) |
+| `filter/check blocked (1M rules)` | 122 ns | 120 ns | −2% |
+| `filter/check near miss (1M rules)` | 29.1 ns | 30.4 ns | +4% |
+| `filter/check miss (1M rules)` | 26.6 ns | 27.2 ns | +2% |
+| `filter/check miss, unknown TLD (1M rules)` | 26.8 ns | 27.0 ns | +2% |
+| `filter/build/parse and compile 100k rules` | 93.7 ms | 88.8 ms | −5% |
+
+The lookups move by a few nanoseconds either way; the profile is kept for the 24% smaller binary
+(less to download, verify and map on small arm64 hosts) at the cost of slower release builds.
+
 ## End-to-end with dnsperf
 
 [`dnsperf.sh`](dnsperf.sh) drives a running goethite with

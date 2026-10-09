@@ -501,6 +501,16 @@ pub struct Store {
     writer: Mutex<()>,
 }
 
+// The path only: printing the configuration would take its lock and dump
+// every list, rule and client.
+impl std::fmt::Debug for Store {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Store")
+            .field("path", &self.path)
+            .finish_non_exhaustive()
+    }
+}
+
 impl Store {
     /// Opens the database at `path`, creating it if needed.
     ///

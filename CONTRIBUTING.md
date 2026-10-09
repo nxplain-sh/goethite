@@ -12,16 +12,29 @@ agents alike.
 - Supply-chain tools: `cargo install --locked cargo-deny cargo-audit`
 - Fuzzing: `cargo install --locked cargo-fuzz`
 - `dig` (from bind-utils / dnsutils) for manual checks
+- Optional: [shellcheck](https://www.shellcheck.net) for the shell scripts (CI runs it)
 - Node.js 22.19 or newer, only if you work on the web UI in `web/` or the website in `site/`
   (CI uses Node 24)
 
 ## Build, test, lint
+
+One command runs every check CI runs, cheapest first, from anywhere in the repository:
+
+```sh
+cargo xtask ci       # `cargo xtask help` lists the single tasks; `cargo xtask fmt` formats
+```
+
+That is `cargo fmt --check`, the toolchain pin, shellcheck, clippy and rustdoc with `-D warnings`,
+the tests (doctests included) and the supply-chain checks below. shellcheck, cargo-deny and
+cargo-audit are skipped with a note when they are not installed; CI always runs them. The tasks
+live in [`xtask/`](xtask/README.md), plain Rust with no dependencies. The same checks one by one:
 
 ```sh
 cargo build --workspace
 cargo test --workspace --all-features
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features
 ```
 
 Supply chain (licenses, advisories, banned crates, sources), for the main workspace and the
@@ -63,8 +76,9 @@ cargo build --release
 sudo tests/chaos/chaos.sh target/release/goethite
 ```
 
-CI (`.github/workflows/ci.yml`) runs fmt, clippy with `-D warnings`, the tests on linux amd64
-(`ubuntu-24.04`) and arm64 (`ubuntu-24.04-arm`), an MSRV check, `cargo deny` and `cargo audit`.
+CI (`.github/workflows/ci.yaml`) runs fmt, clippy and rustdoc with `-D warnings`, shellcheck, the
+tests on linux amd64 (`ubuntu-24.04`) and arm64 (`ubuntu-24.04-arm`), an MSRV check, `cargo deny`
+and `cargo audit`.
 The fuzz and chaos workflows run weekly and on demand. All actions are pinned to commit SHAs. Keep
 it that way when you edit workflows.
 
@@ -75,32 +89,32 @@ Every parser gets a fuzz target. Targets live in `fuzz/fuzz_targets/` and use
 
 | Target         | What it does                                                                                 |
 | -------------- | -------------------------------------------------------------------------------------------- |
-| `decode_query` | Decodes bytes via `goethite-proto`. On success, re-encodes, decodes again and asserts the two results are equal, including the case of the name, and that the name displays as printable ASCII. Every response goethite would send must fit in 512 bytes. |
-| `decode_query_record` | Decodes bytes as a query log record read back from the store. On success, the record must encode and decode back to itself. |
-| `decode_response` | Decodes bytes as an upstream response. On success, re-encodes and decodes again; the two results must be equal, since forwarding relies on that. |
-| `parse_cidr`   | Parses text as a client network. On success, the network's display must parse back to the same network, which contains its own address. |
-| `parse_list`   | Parses and compiles text as a filter list. For every parsed rule's name, its parent and a child, the compiled filter must agree with the rule-by-rule reference. |
-| `parse_name`   | Parses text as a domain name. On success, the name's display must parse back to the same name. |
-| `request_checks` | Runs the API's `Host`, `Origin` and web UI path checks on text. A `Host` taken for loopback must name this machine with at most a numeric port; an accepted path must not leave the UI's folder. |
+| `decode-query` | Decodes bytes via `goethite-proto`. On success, re-encodes, decodes again and asserts the two results are equal, including the case of the name, and that the name displays as printable ASCII. Every response goethite would send must fit in 512 bytes. |
+| `decode-query-record` | Decodes bytes as a query log record read back from the store. On success, the record must encode and decode back to itself. |
+| `decode-response` | Decodes bytes as an upstream response. On success, re-encodes and decodes again; the two results must be equal, since forwarding relies on that. |
+| `parse-cidr`   | Parses text as a client network. On success, the network's display must parse back to the same network, which contains its own address. |
+| `parse-list`   | Parses and compiles text as a filter list. For every parsed rule's name, its parent and a child, the compiled filter must agree with the rule-by-rule reference. |
+| `parse-name`   | Parses text as a domain name. On success, the name's display must parse back to the same name. |
+| `request-checks` | Runs the API's `Host`, `Origin` and web UI path checks on text. A `Host` taken for loopback must name this machine with at most a numeric port; an accepted path must not leave the UI's folder. |
 
-Seeds are committed in `fuzz/seeds/<target>/`, and `crates/goethite-proto/tests/fuzz_seeds.rs`
+Seeds are committed in `fuzz/seeds/<target>/`, and `crates/goethite-proto/tests/fuzz-seeds.rs`
 checks that each one still behaves the way its name says. The working corpus (`fuzz/corpus/`) and
 crash artifacts (`fuzz/artifacts/`) are gitignored, so create the corpus directory first.
 
 Run a target for 60 seconds, writing new inputs to the working corpus and reading the seeds:
 
 ```sh
-mkdir -p fuzz/corpus/decode_query
-cargo +nightly fuzz run decode_query fuzz/corpus/decode_query fuzz/seeds/decode_query -- -max_total_time=60
+mkdir -p fuzz/corpus/decode-query
+cargo +nightly fuzz run decode-query fuzz/corpus/decode-query fuzz/seeds/decode-query -- -max_total_time=60
 ```
 
-Use the same commands with `parse_name` for the other target.
+The same commands work for every target; `cargo +nightly fuzz list` names them.
 
 Reproduce and minimize a crash:
 
 ```sh
-cargo +nightly fuzz run decode_query fuzz/artifacts/decode_query/<crash-file>
-cargo +nightly fuzz tmin decode_query fuzz/artifacts/decode_query/<crash-file>
+cargo +nightly fuzz run decode-query fuzz/artifacts/decode-query/<crash-file>
+cargo +nightly fuzz tmin decode-query fuzz/artifacts/decode-query/<crash-file>
 ```
 
 Every fixed crash gets a regression unit test in `goethite-proto` with the minimized input.
@@ -114,7 +128,8 @@ privately as described in [`SECURITY.md`](SECURITY.md).
 ### Adding a fuzz target
 
 1. `cargo +nightly fuzz add <name>` from the repo root, or copy an existing target in
-   `fuzz/fuzz_targets/`.
+   `fuzz/fuzz_targets/`. Names are kebab-case (`parse-thing`): Cargo warns about other binary
+   names.
 2. Fuzz the public parsing entry point, not internals. Where possible, check a property (such as
    decode, encode, decode round-tripping), not just "does not crash".
 3. Add a few small, valid seed inputs under `fuzz/seeds/<name>/`.
@@ -166,8 +181,17 @@ The full list is in [`AGENTS.md`](AGENTS.md). The short version:
   debug builds) workspace-wide in non-test code. `clippy.toml` allows the panic family inside
   `#[test]` functions and `#[cfg(test)]` modules. Helpers in integration tests (`tests/*.rs`) are
   not covered, so those files carry a crate-level `#![allow(...)]` with a reason.
-- **No `unsafe`.** `unsafe_code = "forbid"` is set workspace-wide, and `goethite-proto`,
-  `goethite-filter` and `goethite-resolver` also carry `#![forbid(unsafe_code)]`.
+- **No `unsafe`.** `unsafe_code` is denied workspace-wide, and every crate root carries
+  `#![forbid(unsafe_code)]` except the binary and `goethite-cluster`, which each have one item
+  under `#[allow(unsafe_code)]` with a `SAFETY` comment.
+  [ADR 0025](docs/adr/0025-standard-rust-project-layout.md) says why this is not a workspace
+  `forbid`.
+- **Visibility and `Debug`.** `unreachable_pub` and `missing_debug_implementations` are on: what no
+  other crate reaches is `pub(crate)`, and a public type's `Debug` prints neither secrets (keys,
+  tokens, decrypted queries) nor bulk (filter tables, cache entries).
+- **Layout.** Modules with children are `foo.rs` beside `foo/`; files in `tests/`, `benches/` and
+  `examples/` are kebab-case. The rest of the layout and its deliberate deviations are in
+  [ADR 0025](docs/adr/0025-standard-rust-project-layout.md).
 - **Bound everything:** message sizes, label counts, loops, chain depths, cache sizes, connection
   counts, timeouts.
 - Errors: `thiserror` in libraries, `anyhow` only in the binary.
@@ -205,7 +229,7 @@ The page runs under a strict CSP: no inline scripts or styles, no `eval`, nothin
 ## Website
 
 The project site lives in `site/` (Astro Starlight) and deploys to GitHub Pages from `main` via
-`.github/workflows/pages.yml`. Deployment needs Pages enabled with source "GitHub Actions" (see
+`.github/workflows/pages.yaml`. Deployment needs Pages enabled with source "GitHub Actions" (see
 [Repository settings](#repository-settings-maintainers)).
 
 ```sh
@@ -220,17 +244,15 @@ Two one-time settings on `nxplain-sh/goethite` that the repository cannot set it
 
 - **GitHub Pages:** Settings → Pages → Build and deployment → Source: **GitHub Actions**
   (or `gh api -X POST repos/nxplain-sh/goethite/pages -f build_type=workflow`). Without it the
-  deploy job in `pages.yml` fails.
+  deploy job in `pages.yaml` fails.
 - **Private vulnerability reporting:** Settings → Code security → Private vulnerability
   reporting → Enable (or `gh api -X PUT repos/nxplain-sh/goethite/private-vulnerability-reporting`).
   [`SECURITY.md`](SECURITY.md) relies on it.
 
 ## Pull request checklist
 
-- [ ] `cargo fmt --all --check` passes
-- [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings` passes
-- [ ] `cargo test --workspace --all-features` passes
-- [ ] `cargo deny check` passes. Any new dependency is justified in the PR description.
+- [ ] `cargo xtask ci` passes, with shellcheck, cargo-deny and cargo-audit installed
+- [ ] Any new dependency is justified in the PR description
 - [ ] Web UI changes: `npm run build` in `web/` passes (type-check, build, size budget)
 - [ ] Parser changes: the fuzz target was run for at least 60 seconds without findings
 - [ ] No new `unwrap`/`expect`/panicking indexing on untrusted data
