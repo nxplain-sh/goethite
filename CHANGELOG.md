@@ -7,6 +7,12 @@ configuration format.
 
 ## [Unreleased]
 
+### Fixed
+
+- Deleting a filter list in the web UI no longer fails with a conflict when a group started using
+  it after the page loaded, such as the default group just after the list was created: the UI
+  checks which groups use the list at the moment it deletes it.
+
 ## [0.5.0] - 2026-10-09
 
 Phase 5, v0.5: Raft clustering with a witness, a Landlock and seccomp sandbox, reproducible and
