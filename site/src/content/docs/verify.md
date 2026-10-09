@@ -13,18 +13,23 @@ This page shows three checks, from quick to thorough.
 
 For amd64 (`x86_64`) and arm64 (`aarch64`):
 
-| File                                                   | What it is                                                                                      |
-| ------------------------------------------------------ | ----------------------------------------------------------------------------------------------- |
-| `goethite-<version>-<arch>-unknown-linux-gnu.tar.gz`   | The binary (web UI included), the licences, README, changelog, example config and systemd units |
-| `goethite-<version>-<arch>-unknown-linux-gnu.cdx.json` | A [CycloneDX](https://cyclonedx.org) SBOM of the Rust crates built into that binary             |
+| File                                                   | What it is                                                                                   |
+| ------------------------------------------------------ | -------------------------------------------------------------------------------------------- |
+| `goethite-<version>-<arch>-unknown-linux-gnu.tar.gz`   | The binary (web UI included), the systemd units, a server config, the example config, the docs |
+| `goethite_<version>-1_<arch>.deb`                      | The Debian and Ubuntu package (`amd64`, `arm64`)                                             |
+| `goethite-<version>-1.<arch>.rpm`                      | The RHEL and Fedora package (`x86_64`, `aarch64`)                                            |
+| `goethite-<version>-<arch>-unknown-linux-gnu.cdx.json` | A [CycloneDX](https://cyclonedx.org) SBOM of the Rust crates built into that binary          |
 
 And once:
 
 | File                                          | What it is                                                     |
 | --------------------------------------------- | -------------------------------------------------------------- |
 | `goethite-<version>-web.cdx.json`             | A CycloneDX SBOM of the npm packages built into the web UI     |
-| `goethite-<version>.provenance.sigstore.json` | The build provenance of both tarballs, as a Sigstore bundle    |
-| `SHA256SUMS`                                  | The SHA-256 checksums of the tarballs and the SBOMs            |
+| `goethite-<version>.provenance.sigstore.json` | The build provenance of the tarballs and packages, as a Sigstore bundle |
+| `SHA256SUMS`                                  | The SHA-256 checksums of the tarballs, the packages and the SBOMs        |
+
+The container image `ghcr.io/nxplain-sh/goethite:<version>` is built from the release's tarballs
+once the release is published, and attested the same way.
 
 The binary also carries its own dependency list (from
 [cargo-auditable](https://github.com/rust-secure-code/cargo-auditable)), so
@@ -58,8 +63,19 @@ running on a tag `v0.5.0` on GitHub's own runners, with a certificate Sigstore i
 and recorded in its public transparency log. The output names the commit it was built from.
 
 `gh` fetches the attestation from GitHub. To use the bundle from the release instead, add
-`--bundle goethite-0.5.0.provenance.sigstore.json`. The SBOMs are attested the same way; check one
-with `--predicate-type https://cyclonedx.org/bom`.
+`--bundle goethite-0.5.0.provenance.sigstore.json`. The packages are checked the same way, and the
+SBOMs are attested for the tarballs and packages; check one with
+`--predicate-type https://cyclonedx.org/bom`.
+
+For the container image, name it with `oci://`; the image workflow pushed it, from the release
+it checked first:
+
+```sh
+gh attestation verify oci://ghcr.io/nxplain-sh/goethite:0.5.0 \
+  --repo nxplain-sh/goethite \
+  --signer-workflow nxplain-sh/goethite/.github/workflows/image.yaml \
+  --deny-self-hosted-runners
+```
 
 ## 3. Rebuild it
 
@@ -76,7 +92,9 @@ cd target/dist && sha256sum --check --ignore-missing /path/to/SHA256SUMS
 ```
 
 `cargo xtask dist` builds from the checked-out commit inside the pinned image (uncommitted changes
-are left out) and writes the tarball and the SBOMs to `target/dist`. If a file differs, please
+are left out) and writes the tarball, the packages and the SBOMs to `target/dist`. With docker
+and buildx, `cargo xtask image` then builds the container image from the tarballs there, as an OCI
+archive in `target/dist`. If a file differs, please
 [report it](https://github.com/nxplain-sh/goethite/security/advisories/new): either the build is
 not reproducible in a way the release workflow missed, or the release is not what the source
 says. [`diffoscope`](https://diffoscope.org) shows where two files differ.

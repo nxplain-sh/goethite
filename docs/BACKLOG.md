@@ -177,6 +177,8 @@ Phase 3's scope shipped in v0.3.0. These items came up along the way.
 
 ## Unscheduled / tooling
 
+- **[later] APT and DNF repositories** for `apt upgrade` and `dnf upgrade`: they need a
+  long-lived signing key and hosting (ADR 0027).
 - **[later] Static musl builds** that run on any Linux, including Alpine. musl's allocator is
   much slower under goethite's multi-threaded load, so this needs another allocator (a new
   dependency) and a bench against the glibc build first (see ADR 0026).

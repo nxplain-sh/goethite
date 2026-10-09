@@ -1,34 +1,89 @@
 ---
 title: Install on Linux
-description: Download or build goethite, install it with the hardened systemd unit, and point your network at it.
+description: Install goethite from a package, a tarball or a container image, start it with the hardened systemd unit, and point your network at it.
 ---
 
 goethite runs on Linux on amd64 and arm64, with glibc 2.34 or newer: RHEL 9, Ubuntu 22.04,
-Debian 12 or anything newer. This guide installs a release with the systemd unit that comes with
-it. (macOS works for development only; see the [quick start](../quick-start/).)
+Debian 12 or anything newer. Each [release](https://github.com/nxplain-sh/goethite/releases)
+comes as a `.deb` and an `.rpm` package, a tarball and a container image; all of them hold the
+same binary, with the [web UI](../web-ui/) inside. (macOS works for development only; see the
+[quick start](../quick-start/).)
 
-## Download
+Every download can be checked with `gh attestation verify` (from the
+[GitHub CLI](https://cli.github.com)), which shows that goethite's release workflow built it;
+[Verifying releases](../verify/) explains that, and how to rebuild a release yourself and get the
+same bytes.
 
-Each [release](https://github.com/nxplain-sh/goethite/releases) has a tarball per architecture
-with the binary (web UI included), the systemd units and an example config:
+## Install
+
+### From a package
+
+On Debian and Ubuntu:
+
+```sh
+version=0.5.0
+arch=$(dpkg --print-architecture)    # amd64 or arm64
+curl -fLO "https://github.com/nxplain-sh/goethite/releases/download/v$version/goethite_${version}-1_${arch}.deb"
+gh attestation verify "goethite_${version}-1_${arch}.deb" --repo nxplain-sh/goethite
+sudo apt install "./goethite_${version}-1_${arch}.deb"
+```
+
+On RHEL, Rocky, Alma and Fedora:
+
+```sh
+version=0.5.0
+arch=$(uname -m)    # x86_64 or aarch64
+curl -fLO "https://github.com/nxplain-sh/goethite/releases/download/v$version/goethite-${version}-1.${arch}.rpm"
+gh attestation verify "goethite-${version}-1.${arch}.rpm" --repo nxplain-sh/goethite
+sudo dnf install "./goethite-${version}-1.${arch}.rpm"
+```
+
+The package installs `/usr/bin/goethite`, the systemd units, and a config for a server at
+`/etc/goethite/goethite.toml`, which upgrades leave as you edited it. It does not start goethite:
+[configure](#configure) it first.
+
+### From the tarball
+
+On any distribution with glibc 2.34 or newer:
 
 ```sh
 version=0.5.0
 arch=$(uname -m)    # x86_64 or aarch64
 base=https://github.com/nxplain-sh/goethite/releases/download/v$version
 curl -fLO "$base/goethite-$version-$arch-unknown-linux-gnu.tar.gz"
-curl -fLO "$base/SHA256SUMS"
-sha256sum --check --ignore-missing SHA256SUMS
 gh attestation verify "goethite-$version-$arch-unknown-linux-gnu.tar.gz" --repo nxplain-sh/goethite
 tar -xzf "goethite-$version-$arch-unknown-linux-gnu.tar.gz"
 cd "goethite-$version-$arch-unknown-linux-gnu"
+sudo install -m 0755 goethite /usr/bin/goethite
+sudo install -m 0644 systemd/goethite.service /etc/systemd/system/goethite.service
+sudo install -d -m 0755 /etc/goethite
+sudo install -m 0644 goethite.toml /etc/goethite/goethite.toml
 ```
 
-`gh attestation verify` (from the [GitHub CLI](https://cli.github.com)) checks that goethite's
-release workflow built the file; [Verifying releases](../verify/) explains it, and how to rebuild a
-release yourself and get the same bytes.
+`goethite.example.toml` beside it explains every setting.
 
-### Or build from source
+### In a container
+
+The image is `ghcr.io/nxplain-sh/goethite`, for amd64 and arm64, tagged with each version, its
+minor version (`0.5`) and `latest`:
+
+```sh
+gh attestation verify oci://ghcr.io/nxplain-sh/goethite:0.5.0 --repo nxplain-sh/goethite
+docker run -d --name goethite --restart unless-stopped \
+  -p 53:53/udp -p 53:53/tcp -v goethite:/var/lib/goethite \
+  ghcr.io/nxplain-sh/goethite:0.5.0
+```
+
+The image is distroless: no shell, no package manager, the binary and the C library. goethite
+starts as root to bind port 53, then switches to an unprivileged user (65532) and gives up every
+capability before it reads a packet. Its store and lists live in the `/var/lib/goethite` volume.
+The image's config listens on IPv4 only, since container networks often have no IPv6; to change
+anything, mount your own over `/etc/goethite/goethite.toml`. The [API](../api/) and the web UI
+answer inside the container only until you set an admin token there, as below, and publish port
+8053. To upgrade, pull the new tag and recreate the container: unlike the packages, a container
+restart drops queries for a second or two.
+
+### From source
 
 Install Rust with [rustup](https://rustup.rs), a C compiler (`build-essential` on Debian and
 Ubuntu, `gcc` elsewhere) and Node.js 24 or later (for the web UI only), then:
@@ -39,38 +94,19 @@ git clone https://github.com/nxplain-sh/goethite && cd goethite
 cargo build --release --locked
 ```
 
-The binary is `target/release/goethite`, with the [web UI](../web-ui/) inside. It has no runtime
-dependencies beyond the C library; Node.js is needed only to build. Skip the `web` line to build
-without the web UI. In the commands below, use `target/release/goethite`,
-`deploy/systemd/goethite.service` and `config/goethite.example.toml` for the three files.
+The binary is `target/release/goethite`. It has no runtime dependencies beyond the C library;
+Node.js is needed only to build. Skip the `web` line to build without the web UI. Install it as
+for the tarball, with `target/release/goethite`, `deploy/systemd/goethite.service` and
+`deploy/goethite.toml`. `cargo xtask dist` builds the release files themselves, in the pinned
+build image (it needs docker or podman).
 
-## Install
+## Configure
 
-From the release directory:
-
-```sh
-sudo install -m 0755 goethite /usr/bin/goethite
-sudo install -m 0644 systemd/goethite.service /etc/systemd/system/goethite.service
-sudo install -d -m 0755 /etc/goethite
-sudo install -m 0644 goethite.example.toml /etc/goethite/goethite.toml
-```
-
-Then edit `/etc/goethite/goethite.toml` for production. At least:
-
-```toml
-[server]
-listen = ["0.0.0.0:53", "[::]:53"]   # or the host's own addresses, see below
-
-[filter]
-cache_dir = "/var/lib/goethite/lists"
-
-[[filter.list]]
-url = "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts"
-```
-
-The example config forwards to Quad9 over DNS over TLS; change the `[[upstream]]` tables to use
-another resolver. The [configuration reference](../configuration/) lists every setting. Check
-the result before starting:
+The installed config listens on port 53 on every address, forwards to Quad9 over DNS over TLS,
+and keeps its data in `/var/lib/goethite`. New nodes start with a recommended set of filter
+lists. Change the `[[upstream]]` tables to use another resolver; the
+[configuration reference](../configuration/) lists every setting. Check the result before
+starting:
 
 ```sh
 goethite check-config --config /etc/goethite/goethite.toml
@@ -147,8 +183,11 @@ worst abuse, but an open resolver still attracts it.
 
 ## Upgrade
 
-Download (or build) the new version, install it, and ask the running goethite to hand over to
-it:
+With a package, install the new one: `sudo apt install ./goethite_<new version>_<arch>.deb` or
+`sudo dnf install ./goethite-<new version>.<arch>.rpm`. The package asks the running goethite to
+hand over to the new binary, as below, and keeps your config.
+
+Otherwise, install the new binary and ask the running goethite to hand over to it:
 
 ```sh
 sudo install -m 0755 goethite /usr/bin/goethite

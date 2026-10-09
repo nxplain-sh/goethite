@@ -1,0 +1,103 @@
+# The .deb and .rpm packages. `cargo xtask dist` builds them with nfpm, from
+# the repository root, out of the same files as the release tarball. It sets
+# GOETHITE_VERSION, GOETHITE_ARCH (amd64 or arm64; nfpm names them x86_64 and
+# aarch64 in the .rpm), GOETHITE_BINARY and SOURCE_DATE_EPOCH, which dates
+# every file, so a package is reproducible like the tarball.
+
+name: goethite
+version: ${GOETHITE_VERSION}
+release: "1"
+arch: ${GOETHITE_ARCH}
+platform: linux
+section: net
+priority: optional
+maintainer: nxplain.sh <hello@nxplain.sh>
+vendor: nxplain.sh
+homepage: https://nxplain-sh.github.io/goethite/
+license: MIT OR Apache-2.0
+description: |-
+  Self-hosted, clustered, security-hardened DNS filtering resolver
+  goethite blocks ads, trackers and malware for a whole network. It filters with
+  hosts files, domain lists and AdGuard-style rules, per client group and
+  schedule, forwards over DNS over TLS or HTTPS or resolves recursively with
+  DNSSEC validation, and serves DNS over TLS, HTTPS and QUIC. Two nodes can
+  share one configuration and one floating IP. It is managed through a REST
+  API, a web UI and a terminal UI.
+
+# The binary needs glibc 2.34 (`cargo xtask dist` checks it) and libgcc_s for
+# unwinding.
+overrides:
+  deb:
+    depends:
+      - libc6 (>= 2.34)
+      - libgcc-s1
+  rpm:
+    depends:
+      - glibc >= 2.34
+      - libgcc
+
+umask: 0o022
+
+contents:
+  - src: ${GOETHITE_BINARY}
+    dst: /usr/bin/goethite
+    expand: true
+    file_info:
+      mode: 0755
+
+  - src: deploy/systemd/goethite.service
+    dst: /usr/lib/systemd/system/goethite.service
+  - src: deploy/systemd/goethite-vrrp.service
+    dst: /usr/lib/systemd/system/goethite-vrrp.service
+
+  # Kept as edited on upgrade; a new version of it lands beside it
+  # (.dpkg-dist or .rpmnew) for comparison.
+  - src: deploy/goethite.toml
+    dst: /etc/goethite/goethite.toml
+    type: config|noreplace
+
+  - src: config/goethite.example.toml
+    dst: /usr/share/doc/goethite/goethite.example.toml
+  - src: README.md
+    dst: /usr/share/doc/goethite/README.md
+  - src: CHANGELOG.md
+    dst: /usr/share/doc/goethite/CHANGELOG.md
+
+  # Licences where each format expects them.
+  - src: deploy/package/copyright
+    dst: /usr/share/doc/goethite/copyright
+    packager: deb
+  - src: LICENSE-MIT
+    dst: /usr/share/doc/goethite/LICENSE-MIT
+    packager: deb
+  - src: LICENSE-APACHE
+    dst: /usr/share/doc/goethite/LICENSE-APACHE
+    packager: deb
+  - src: LICENSE-MIT
+    dst: /usr/share/licenses/goethite/LICENSE-MIT
+    packager: rpm
+  - src: LICENSE-APACHE
+    dst: /usr/share/licenses/goethite/LICENSE-APACHE
+    packager: rpm
+
+  # Owned by the package, so removing it removes them. The unit's
+  # StateDirectory (/var/lib/goethite) belongs to systemd and is kept.
+  - dst: /etc/goethite
+    type: dir
+    file_info:
+      mode: 0755
+  - dst: /usr/share/doc/goethite
+    type: dir
+    file_info:
+      mode: 0755
+    packager: rpm
+  - dst: /usr/share/licenses/goethite
+    type: dir
+    file_info:
+      mode: 0755
+    packager: rpm
+
+scripts:
+  postinstall: deploy/package/postinstall.sh
+  preremove: deploy/package/preremove.sh
+  postremove: deploy/package/postremove.sh

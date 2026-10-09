@@ -35,10 +35,13 @@ Tasks:
     versions      the internal crates and the web UI carry the workspace version
     shellcheck    lint the shell scripts (needs shellcheck)
     supply-chain  cargo deny and cargo audit on both workspaces (needs both)
-    dist          the release tarball and SBOMs for this machine's architecture,
-                  built from the last commit in the pinned build image (needs
-                  docker or podman), into target/dist
+    dist          the release tarball, packages and SBOMs for this machine's
+                  architecture, built from the last commit in the pinned build
+                  image (needs docker or podman), into target/dist
     dist-inside   what `dist` runs inside the build image
+    image         the container image from the release tarballs in target/dist,
+                  as an OCI archive there (needs docker with buildx); with
+                  `--push <name:tag>...`, pushed to a registry instead
     help          this message
 ";
 
@@ -60,11 +63,12 @@ const DIST_GLIBC: (u32, u32) = (2, 34);
 
 /// What a release tarball holds, from the repository root to its place in
 /// the tarball's top directory. The binary comes from the target directory.
-const DIST_FILES: [(&str, &str); 7] = [
+const DIST_FILES: [(&str, &str); 8] = [
     ("LICENSE-APACHE", "LICENSE-APACHE"),
     ("LICENSE-MIT", "LICENSE-MIT"),
     ("README.md", "README.md"),
     ("CHANGELOG.md", "CHANGELOG.md"),
+    ("deploy/goethite.toml", "goethite.toml"),
     ("config/goethite.example.toml", "goethite.example.toml"),
     (
         "deploy/systemd/goethite.service",
@@ -92,6 +96,7 @@ fn main() -> ExitCode {
             Some(out) => dist_inside(Path::new(&out)),
             None => Err("usage: cargo xtask dist-inside <output directory>".into()),
         },
+        Some("image") => image(&env::args().skip(2).collect::<Vec<_>>()),
         Some("help" | "--help" | "-h") | None => {
             print_help();
             return ExitCode::SUCCESS;
@@ -294,8 +299,16 @@ fn dist() -> Result {
          cargo xtask dist-inside /out >&2; tar -c -C /out ."
     );
     let mut container = Command::new(engine);
+    // A fixed host name, which the .rpm records as its build host.
     container
-        .args(["run", "--rm", "--interactive", "--env"])
+        .args([
+            "run",
+            "--rm",
+            "--interactive",
+            "--hostname",
+            DIST_IMAGE,
+            "--env",
+        ])
         .arg(format!("SOURCE_DATE_EPOCH={epoch}"));
     // Fewer parallel jobs for a small VM; the output does not depend on it.
     if let Some(jobs) = env::var_os("CARGO_BUILD_JOBS") {
@@ -317,7 +330,7 @@ fn dist() -> Result {
 
 /// What `dist` runs inside the image: the web UI, the binary (with its
 /// dependency list embedded by cargo-auditable), the SBOMs, then the
-/// tarball, all into `out`. Given the image and `SOURCE_DATE_EPOCH`, the
+/// tarball and the packages, all into `out`. Given the image and `SOURCE_DATE_EPOCH`, the
 /// output is the same bytes every time: paths are remapped, and the tarball
 /// has fixed times, owners, modes and order.
 fn dist_inside(out: &Path) -> Result {
@@ -334,11 +347,12 @@ fn dist_inside(out: &Path) -> Result {
     dist_glibc(&root)?;
     dist_sboms(&root, &out, &host, &version, &name)?;
     dist_tarball(&root, &out, &name, &epoch)?;
-    run(Command::new("sha256sum")
-        .current_dir(&out)
-        .arg(format!("{name}.tar.gz"))
-        .arg(format!("{name}.cdx.json"))
-        .arg(format!("goethite-{version}-web.cdx.json")))
+    dist_packages(&root, &out, &host, &version)?;
+    let mut files: Vec<OsString> = fs::read_dir(&out)?
+        .map(|entry| entry.map(|entry| entry.file_name()))
+        .collect::<io::Result<_>>()?;
+    files.sort();
+    run(Command::new("sha256sum").current_dir(&out).args(files))
 }
 
 /// The target triple to build for, once the image is known to hold the
@@ -494,6 +508,30 @@ fn dist_tarball(root: &Path, out: &Path, name: &str, epoch: &str) -> Result {
     Ok(fs::remove_dir_all(&stage)?)
 }
 
+/// The .deb and .rpm packages, from deploy/package/nfpm.yaml. nfpm dates
+/// every file with `SOURCE_DATE_EPOCH`, which `dist` sets.
+fn dist_packages(root: &Path, out: &Path, host: &str, version: &str) -> Result {
+    let arch = if host.starts_with("x86_64-") {
+        "amd64"
+    } else if host.starts_with("aarch64-") {
+        "arm64"
+    } else {
+        return Err(format!("no package architecture for {host}").into());
+    };
+    let binary = dist_binary_path(root);
+    for packager in ["deb", "rpm"] {
+        run(Command::new("nfpm")
+            .current_dir(root)
+            .args(["package", "--config", "deploy/package/nfpm.yaml"])
+            .args(["--packager", packager, "--target"])
+            .arg(out)
+            .env("GOETHITE_VERSION", version)
+            .env("GOETHITE_ARCH", arch)
+            .env("GOETHITE_BINARY", &binary))?;
+    }
+    Ok(())
+}
+
 /// Two CycloneDX SBOMs: the crates built into the binary on this target, and
 /// the npm packages bundled into the web UI.
 fn dist_sboms(root: &Path, out: &Path, host: &str, version: &str, name: &str) -> Result {
@@ -551,6 +589,91 @@ fn dist_sboms(root: &Path, out: &Path, host: &str, version: &str, name: &str) ->
         ]),
         Command::new("node").args(["--eval", STABLE]).stdout(web),
     ])
+}
+
+/// The container image (deploy/container/Containerfile) for every
+/// architecture with a release tarball in target/dist: the binaries come out
+/// of the tarballs, so the image holds exactly what was released. Without
+/// arguments it is written to target/dist as an OCI archive; with
+/// `--push <name:tag>...` it goes to a registry under each name, and the
+/// digest is printed. Timestamps are the last commit's, so the same tarballs
+/// give the same image.
+fn image(args: &[String]) -> Result {
+    let push: Vec<&str> = match args.split_first() {
+        None => Vec::new(),
+        Some((flag, names)) if flag == "--push" && !names.is_empty() => {
+            names.iter().map(String::as_str).collect()
+        }
+        Some(_) => return Err("usage: cargo xtask image [--push <name:tag>...]".into()),
+    };
+    let root = root()?;
+    let dist = root.join("target").join("dist");
+    let version = toml_string(&root.join("Cargo.toml"), "version")?;
+    let context = dist.join("image");
+    remove_dir_if_exists(&context)?;
+    fs::create_dir_all(context.join("empty"))?;
+    let mut platforms = Vec::new();
+    for (arch, triple) in [
+        ("amd64", "x86_64-unknown-linux-gnu"),
+        ("arm64", "aarch64-unknown-linux-gnu"),
+    ] {
+        let name = format!("goethite-{version}-{triple}");
+        let tarball = dist.join(format!("{name}.tar.gz"));
+        if !tarball.is_file() {
+            continue;
+        }
+        let binary = fs::File::create(context.join(format!("goethite-{arch}")))?;
+        run(Command::new("tar")
+            .arg("--extract")
+            .arg("--to-stdout")
+            .arg("--file")
+            .arg(&tarball)
+            .arg(format!("{name}/goethite"))
+            .stdout(binary))?;
+        platforms.push(format!("linux/{arch}"));
+    }
+    if platforms.is_empty() {
+        return Err(format!(
+            "no release tarball for {version} in {}: run `cargo xtask dist` first",
+            dist.display()
+        )
+        .into());
+    }
+    fs::copy(
+        root.join("deploy").join("container").join("goethite.toml"),
+        context.join("goethite.toml"),
+    )?;
+    let epoch = capture(git(&root).args(["log", "-1", "--format=%ct", "HEAD"]))?;
+    let mut build = Command::new("docker");
+    build
+        .args(["buildx", "build", "--platform", &platforms.join(",")])
+        .arg("--file")
+        .arg(root.join("deploy").join("container").join("Containerfile"))
+        // buildx's own provenance carries build times; the release workflow
+        // attests the image instead.
+        .args(["--provenance=false", "--sbom=false"])
+        .arg("--build-arg")
+        .arg(format!("SOURCE_DATE_EPOCH={epoch}"))
+        .env("SOURCE_DATE_EPOCH", &epoch);
+    if push.is_empty() {
+        let archive = dist.join(format!("goethite-{version}-image.oci.tar"));
+        build.arg("--output").arg(format!(
+            "type=oci,dest={},rewrite-timestamp=true",
+            archive.display()
+        ));
+    } else {
+        build
+            .arg("--output")
+            .arg(format!(
+                "type=image,\"name={}\",push=true,rewrite-timestamp=true",
+                push.join(",")
+            ))
+            .arg("--metadata-file")
+            .arg(dist.join("image-metadata.json"));
+    }
+    run(build.arg(&context))?;
+    fs::remove_dir_all(&context)?;
+    Ok(())
 }
 
 fn remove_dir_if_exists(dir: &Path) -> Result {

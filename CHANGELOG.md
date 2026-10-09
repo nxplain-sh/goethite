@@ -18,6 +18,14 @@ configuration format.
   binaries need glibc 2.34 or newer. See
   [Verifying releases](https://nxplain-sh.github.io/goethite/verify/) and
   [ADR 0026](docs/adr/0026-release-builds.md).
+- **Packages and a container image.** Each release has a .deb and an .rpm per architecture and a
+  container image, `ghcr.io/nxplain-sh/goethite`, all holding the release binary and attested
+  like it. The packages install the units and a server config, start nothing on first install,
+  and on upgrade hand over to the new binary in place without dropping a query. The image is
+  distroless; goethite binds port 53 as root there, then runs as an unprivileged user. The
+  tarball ships the same server config as `goethite.toml`. See the
+  [install guide](https://nxplain-sh.github.io/goethite/install/) and
+  [ADR 0027](docs/adr/0027-packages-and-container-image.md).
 - `cargo xtask versions`, also in CI: the internal crates and the web UI carry the workspace
   version.
 
