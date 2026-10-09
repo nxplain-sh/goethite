@@ -17,18 +17,18 @@ use crate::download::Validators;
 
 /// Where downloaded lists live.
 #[derive(Clone, Debug)]
-pub struct ListStore {
+pub(crate) struct ListStore {
     dir: PathBuf,
 }
 
 impl ListStore {
     /// A store in `dir`, created when the first list is saved.
-    pub fn new(dir: PathBuf) -> Self {
+    pub(crate) fn new(dir: PathBuf) -> Self {
         Self { dir }
     }
 
     /// The file holding the last good copy of `url`.
-    pub fn path_for(&self, url: &str) -> PathBuf {
+    pub(crate) fn path_for(&self, url: &str) -> PathBuf {
         self.dir
             .join(format!("list-{:016x}.txt", fnv1a(url.as_bytes())))
     }
@@ -38,7 +38,7 @@ impl ListStore {
     }
 
     /// The validators saved with the last good copy of `url`, if any.
-    pub fn validators(&self, url: &str) -> Validators {
+    pub(crate) fn validators(&self, url: &str) -> Validators {
         let Ok(text) = fs::read_to_string(self.meta_path_for(url)) else {
             return Validators::default();
         };
@@ -54,7 +54,7 @@ impl ListStore {
     }
 
     /// Replaces the copy of `url` atomically and records its validators.
-    pub fn save(&self, url: &str, bytes: &[u8], validators: &Validators) -> Result<()> {
+    pub(crate) fn save(&self, url: &str, bytes: &[u8], validators: &Validators) -> Result<()> {
         fs::create_dir_all(&self.dir)
             .with_context(|| format!("cannot create {}", self.dir.display()))?;
         write_atomically(&self.path_for(url), bytes)?;
@@ -94,7 +94,7 @@ fn write_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
 /// Checks that a download looks like a filter list before it replaces the
 /// last good copy: it must hold rules, and more rules than junk. An error
 /// page served with status 200, or a list changed into something else, fails.
-pub fn validate(bytes: &[u8]) -> Result<ListStats> {
+pub(crate) fn validate(bytes: &[u8]) -> Result<ListStats> {
     let text = String::from_utf8_lossy(bytes);
     let Some(source) = Source::new(0) else {
         bail!("no filter source available");

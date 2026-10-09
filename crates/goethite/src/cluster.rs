@@ -62,7 +62,7 @@ struct PeerState {
 }
 
 /// This node's cluster, running.
-pub struct Cluster {
+pub(crate) struct Cluster {
     node: NodeId,
     peer: PeerClient,
     peer_address: String,
@@ -77,7 +77,7 @@ pub struct Cluster {
 }
 
 /// What the cluster needs from the rest of the control plane.
-pub struct Parts<'a> {
+pub(crate) struct Parts<'a> {
     /// The control plane.
     pub control: &'a Arc<Control>,
     /// The query log, for the statistics.
@@ -92,7 +92,7 @@ pub struct Parts<'a> {
 /// # Errors
 ///
 /// If the certificates do not fit together, or the store cannot be read.
-pub fn start(
+pub(crate) fn start(
     section: &ClusterSection,
     pem: &ClusterPem,
     listeners: ApiListeners,
@@ -203,13 +203,13 @@ fn starting_role(store: &Store, configured: Role) -> Result<Role> {
 
 impl Cluster {
     /// Hands over the API, to run forwarded changes with.
-    pub fn set_api(&self, api: Arc<Api>) {
+    pub(crate) fn set_api(&self, api: Arc<Api>) {
         *self.api.lock().unwrap_or_else(PoisonError::into_inner) = Some(api);
     }
 
     /// Lets go of the API: the control plane is stopping, and the API
     /// refers back to this cluster.
-    pub fn release_api(&self) {
+    pub(crate) fn release_api(&self) {
         *self.api.lock().unwrap_or_else(PoisonError::into_inner) = None;
     }
 
@@ -230,7 +230,7 @@ impl Cluster {
     }
 
     /// The cluster as the API reports it.
-    pub fn status(&self) -> ClusterStatus {
+    pub(crate) fn status(&self) -> ClusterStatus {
         let role = self.role();
         let peer = self.peer_state();
         let sync = self
@@ -287,7 +287,7 @@ impl Cluster {
     }
 
     /// Where configuration changes made through this node go.
-    pub fn writes(&self) -> Writes {
+    pub(crate) fn writes(&self) -> Writes {
         let peer = self.peer_state();
         // Before the first check, try: forwarding says itself if it fails.
         if self.role() == Role::Replica && peer.checked_at.is_none() {
@@ -310,7 +310,7 @@ impl Cluster {
     }
 
     /// Sends a configuration change to the primary.
-    pub async fn forward(&self, forwarded: Forwarded) -> Result<ForwardedAnswer, ApiError> {
+    pub(crate) async fn forward(&self, forwarded: Forwarded) -> Result<ForwardedAnswer, ApiError> {
         self.peer
             .post(API_PATH, &forwarded)
             .await
@@ -327,7 +327,7 @@ impl Cluster {
 
     /// The other node's statistics, unless it was unreachable at the last
     /// check (no point waiting for it).
-    pub async fn peer_stats(&self, hours: u32) -> Result<StatsReport, ApiError> {
+    pub(crate) async fn peer_stats(&self, hours: u32) -> Result<StatsReport, ApiError> {
         if self.peer_state().info.is_none() && self.peer_state().checked_at.is_some() {
             return Err(ApiError::unavailable(format!(
                 "{} is unreachable",
@@ -341,7 +341,7 @@ impl Cluster {
     }
 
     /// Makes this node the primary or a replica.
-    pub async fn set_role(
+    pub(crate) async fn set_role(
         &self,
         role: ClusterRole,
         force: bool,
@@ -608,7 +608,7 @@ async fn apply(
 /// # Errors
 ///
 /// If a file exists already or cannot be written.
-pub fn init(dir: &Path) -> Result<String> {
+pub(crate) fn init(dir: &Path) -> Result<String> {
     let ca = goethite_cluster::certs::new_ca()?;
     let cert = dir.join("ca.crt");
     let key = dir.join("ca.key");
@@ -631,7 +631,7 @@ pub fn init(dir: &Path) -> Result<String> {
 ///
 /// An invalid node name, a missing CA key, or a file that exists already
 /// (unless `force`) or cannot be written.
-pub fn cert(dir: &Path, node: &str, force: bool) -> Result<String> {
+pub(crate) fn cert(dir: &Path, node: &str, force: bool) -> Result<String> {
     let node = NodeId::new(node)?;
     let ca_key_path = dir.join("ca.key");
     let ca_key = std::fs::read_to_string(&ca_key_path).with_context(|| {

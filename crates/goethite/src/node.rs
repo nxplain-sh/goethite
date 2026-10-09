@@ -24,7 +24,7 @@ use crate::metrics::{self, Metrics};
 use crate::sizes::ListSizes;
 
 /// Everything the API reports on and acts through.
-pub struct Node {
+pub(crate) struct Node {
     /// The control plane.
     pub control: Arc<Control>,
     /// The resolver, for the cache and upstreams.

@@ -159,7 +159,7 @@ impl IntoResponse for ApiError {
 
 /// A JSON request body. Unlike [`Json`], a body that does not parse (or has
 /// unknown fields) is answered with an [`ApiError`] in JSON.
-pub struct ApiJson<T>(pub T);
+pub(crate) struct ApiJson<T>(pub T);
 
 impl<S, T> FromRequest<S> for ApiJson<T>
 where

@@ -17,7 +17,7 @@ use crate::config::Config;
 
 /// The PEM text of a certificate and its key.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CertAndKey {
+pub(crate) struct CertAndKey {
     /// The certificate chain.
     pub cert: String,
     /// The private key.
@@ -26,7 +26,7 @@ pub struct CertAndKey {
 
 /// The cluster's CA, and this node's certificate and key.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ClusterPem {
+pub(crate) struct ClusterPem {
     /// The cluster CA's certificate.
     pub ca: String,
     /// This node's certificate and key.
@@ -35,7 +35,7 @@ pub struct ClusterPem {
 
 /// Every key and certificate the node uses.
 #[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Secrets {
+pub(crate) struct Secrets {
     /// The API's TLS certificate, if it serves HTTPS.
     pub api_tls: Option<CertAndKey>,
     /// The certificate for DNS over TLS and HTTPS, if they are served.
@@ -65,7 +65,7 @@ impl Secrets {
     /// # Errors
     ///
     /// If one cannot be read.
-    pub fn read(config: &Config) -> Result<Self> {
+    pub(crate) fn read(config: &Config) -> Result<Self> {
         let api_tls = match (&config.api.tls_cert, &config.api.tls_key) {
             (Some(cert), Some(key)) if config.api.enabled => Some(CertAndKey {
                 cert: read(cert, "the API certificate")?,
@@ -100,7 +100,7 @@ impl Secrets {
     /// Reads the files if this process can (picking up renewed
     /// certificates), and otherwise keeps `handed_over`, from the goethite
     /// this one takes over from.
-    pub fn read_or(config: &Config, handed_over: Self) -> Self {
+    pub(crate) fn read_or(config: &Config, handed_over: Self) -> Self {
         match Self::read(config) {
             Ok(fresh) => fresh,
             Err(err) => {

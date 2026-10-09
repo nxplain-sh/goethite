@@ -25,7 +25,7 @@ const MAX_PASSWD_LEN: u64 = 16 * 1024 * 1024;
 
 /// A user to run as.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Account {
+pub(crate) struct Account {
     /// The user name.
     pub name: String,
     /// Its user ID.
@@ -37,7 +37,7 @@ pub struct Account {
 /// Looks `name` up in `/etc/passwd`. Users known only to other name services
 /// (LDAP, systemd-homed) are not found: goethite does not use the C
 /// library's name service switch.
-pub fn lookup(name: &str) -> Result<Account> {
+pub(crate) fn lookup(name: &str) -> Result<Account> {
     let mut text = String::new();
     File::open(PASSWD)
         .and_then(|file| file.take(MAX_PASSWD_LEN).read_to_string(&mut text))
@@ -185,7 +185,7 @@ pub fn keep_net_admin() -> Result<()> {
 
 /// Other platforms are for development only: `server.user` is refused.
 #[cfg(not(target_os = "linux"))]
-pub fn drop_privileges(account: Option<&Account>) -> Result<()> {
+pub(crate) fn drop_privileges(account: Option<&Account>) -> Result<()> {
     if account.is_some() {
         bail!("server.user is only supported on Linux");
     }

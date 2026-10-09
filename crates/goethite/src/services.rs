@@ -20,7 +20,7 @@ use jiff::Timestamp;
 
 /// Where the catalog comes from.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ServicesFrom {
+pub(crate) enum ServicesFrom {
     /// Downloaded from this URL with the lists.
     Url(String),
     /// Read from this file.
@@ -28,7 +28,7 @@ pub enum ServicesFrom {
 }
 
 /// The catalog, compiled.
-pub struct Catalog {
+pub(crate) struct Catalog {
     /// Its rules, one source per service.
     pub filter: Arc<ServiceFilter>,
     /// Its services, with the rules goethite uses, for the API.
@@ -39,7 +39,7 @@ pub struct Catalog {
 
 impl Catalog {
     /// No services.
-    pub fn empty() -> Self {
+    pub(crate) fn empty() -> Self {
         Self {
             filter: Arc::new(ServiceFilter::empty()),
             services: Vec::new(),
@@ -49,7 +49,7 @@ impl Catalog {
 }
 
 /// What reading the catalog's file found.
-pub enum Read {
+pub(crate) enum Read {
     /// There is no such file yet.
     Missing,
     /// It is the copy already in use.
@@ -65,7 +65,7 @@ pub enum Read {
 ///
 /// If the file cannot be read, is larger than [`MAX_LEN`] or is not a
 /// catalog.
-pub fn read(path: &Path, known: Option<Timestamp>) -> Result<Read> {
+pub(crate) fn read(path: &Path, known: Option<Timestamp>) -> Result<Read> {
     let file = match File::open(path) {
         Ok(file) => file,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Read::Missing),
@@ -96,7 +96,7 @@ pub fn read(path: &Path, known: Option<Timestamp>) -> Result<Read> {
 /// # Errors
 ///
 /// If it is not.
-pub fn validate(bytes: &[u8]) -> Result<usize> {
+pub(crate) fn validate(bytes: &[u8]) -> Result<usize> {
     Ok(compile(bytes)?.services.len())
 }
 

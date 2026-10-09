@@ -34,7 +34,7 @@ use crate::secrets::Secrets;
 use crate::sockets::Sockets;
 
 /// The environment variable that tells a new goethite where to connect.
-pub const ENV: &str = "GOETHITE_HANDOFF";
+pub(crate) const ENV: &str = "GOETHITE_HANDOFF";
 
 #[cfg(target_os = "linux")]
 pub use linux::{Child, Parent};
@@ -422,7 +422,7 @@ mod linux {
 
 /// Upgrading by handing over sockets needs Linux.
 #[cfg(not(target_os = "linux"))]
-pub struct Parent;
+pub(crate) struct Parent;
 
 #[cfg(not(target_os = "linux"))]
 #[expect(
@@ -437,37 +437,37 @@ impl Parent {
     /// # Errors
     ///
     /// Always.
-    pub fn spawn(_binary: &Path, _config: &Path, _dir: &Path) -> Result<Self> {
+    pub(crate) fn spawn(_binary: &Path, _config: &Path, _dir: &Path) -> Result<Self> {
         anyhow::bail!("upgrading by handing over sockets needs Linux")
     }
 
     /// Never reached.
-    pub fn send_sockets(&self, _sockets: &Sockets, _secrets: &Secrets) -> Result<()> {
+    pub(crate) fn send_sockets(&self, _sockets: &Sockets, _secrets: &Secrets) -> Result<()> {
         Ok(())
     }
 
     /// Never reached.
-    pub fn wait_adopted(&mut self) -> Result<()> {
+    pub(crate) fn wait_adopted(&mut self) -> Result<()> {
         Ok(())
     }
 
     /// Never reached.
-    pub fn store_released(&self) -> Result<()> {
+    pub(crate) fn store_released(&self) -> Result<()> {
         Ok(())
     }
 
     /// Never reached.
-    pub fn wait_serving(&mut self) -> Result<()> {
+    pub(crate) fn wait_serving(&mut self) -> Result<()> {
         Ok(())
     }
 
     /// Never reached.
-    pub fn abandon(&mut self) {}
+    pub(crate) fn abandon(&mut self) {}
 }
 
 /// Taking over needs Linux.
 #[cfg(not(target_os = "linux"))]
-pub struct Child;
+pub(crate) struct Child;
 
 #[cfg(not(target_os = "linux"))]
 #[expect(
@@ -481,7 +481,7 @@ impl Child {
     /// # Errors
     ///
     /// If `GOETHITE_HANDOFF` is set.
-    pub fn from_env() -> Result<Option<Self>> {
+    pub(crate) fn from_env() -> Result<Option<Self>> {
         if std::env::var_os(ENV).is_some() {
             anyhow::bail!("taking over from another goethite needs Linux");
         }
@@ -489,20 +489,20 @@ impl Child {
     }
 
     /// Never reached.
-    pub fn receive(&self) -> Result<(Vec<(String, std::os::fd::OwnedFd)>, Secrets)> {
+    pub(crate) fn receive(&self) -> Result<(Vec<(String, std::os::fd::OwnedFd)>, Secrets)> {
         Ok((Vec::new(), Secrets::default()))
     }
 
     /// Never reached.
-    pub fn adopted(&self) -> Result<()> {
+    pub(crate) fn adopted(&self) -> Result<()> {
         Ok(())
     }
 
     /// Never reached.
-    pub fn serving(&self) -> Result<()> {
+    pub(crate) fn serving(&self) -> Result<()> {
         Ok(())
     }
 
     /// Never reached.
-    pub fn failed(&self, _reason: &str) {}
+    pub(crate) fn failed(&self, _reason: &str) {}
 }

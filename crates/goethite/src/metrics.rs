@@ -21,7 +21,7 @@ const PROTOCOLS: [Protocol; Protocol::ALL.len()] = Protocol::ALL;
 
 /// Per-query counters.
 #[derive(Debug)]
-pub struct Metrics {
+pub(crate) struct Metrics {
     queries: [[AtomicU64; PROTOCOLS.len()]; QueryOutcome::ALL.len()],
     latency: [AtomicU64; BUCKETS_US.len() + 1],
     latency_sum_us: AtomicU64,
@@ -41,7 +41,7 @@ impl Default for Metrics {
 
 impl Metrics {
     /// Counts one answered query.
-    pub fn observe(&self, outcome: QueryOutcome, protocol: Protocol, elapsed: Duration) {
+    pub(crate) fn observe(&self, outcome: QueryOutcome, protocol: Protocol, elapsed: Duration) {
         let outcome_index = QueryOutcome::ALL
             .iter()
             .position(|o| *o == outcome)
@@ -67,7 +67,7 @@ impl Metrics {
 }
 
 /// Everything a scrape reports, gathered from its owners.
-pub struct Sources<'a> {
+pub(crate) struct Sources<'a> {
     /// Per-query counters.
     pub metrics: &'a Metrics,
     /// What the listeners turned away.
@@ -116,7 +116,7 @@ impl Out {
 }
 
 /// Writes all metrics in the Prometheus text format.
-pub fn render(sources: &Sources<'_>) -> String {
+pub(crate) fn render(sources: &Sources<'_>) -> String {
     let mut out = Out(String::with_capacity(4096));
     queries(&mut out, sources.metrics);
     turned_away(&mut out, sources.server);

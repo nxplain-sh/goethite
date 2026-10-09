@@ -15,7 +15,7 @@ use crate::metrics::Metrics;
 
 /// Reports queries to the query log and the metrics. It only copies and
 /// queues: it never waits on the disk.
-pub struct Observer {
+pub(crate) struct Observer {
     /// The query log, while the control plane runs: it can stop and start
     /// again (on an upgrade) while queries go on.
     log: Arc<ArcSwapOption<QueryLog>>,
@@ -34,7 +34,7 @@ impl Observer {
     /// # Errors
     ///
     /// Never in practice: [`HEALTH_NAME`] is a valid name.
-    pub fn new(
+    pub(crate) fn new(
         log: Arc<ArcSwapOption<QueryLog>>,
         metrics: Arc<Metrics>,
         leak: Arc<LeakTests>,
