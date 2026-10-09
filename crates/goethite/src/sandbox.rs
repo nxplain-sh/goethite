@@ -331,25 +331,39 @@ mod linux {
             "cannot install the seccomp filter (set [security] sandbox = false to run without \
              the sandbox)",
         )?;
-        match landlock {
-            Some((abi, true)) => info!(
+        // Not available: an older kernel, or a sandbox around goethite (a
+        // systemd unit's or a container's system call filter) that refuses
+        // the calls. That sandbox then confines goethite itself.
+        let elsewhere = "an older kernel, or a sandbox around goethite that refuses it";
+        match (landlock, denied) {
+            (Some((abi, true)), Some(denied)) => info!(
                 process = policy.name,
                 landlock_abi = abi,
                 system_calls_denied = denied,
                 "sandboxed: Landlock limits files, seccomp system calls"
             ),
-            Some((abi, false)) => info!(
+            (Some((abi, false)), Some(denied)) => info!(
                 process = policy.name,
                 landlock_abi = abi,
                 system_calls_denied = denied,
                 "sandboxed: Landlock limits files (as far as this kernel supports), seccomp \
                  system calls"
             ),
-            None => warn!(
+            (None, Some(denied)) => warn!(
                 process = policy.name,
                 system_calls_denied = denied,
-                "Landlock is not available in this kernel, so file access is not limited; \
+                "Landlock is not available ({elsewhere}), so file access is not limited; \
                  seccomp limits system calls"
+            ),
+            (Some((abi, _)), None) => warn!(
+                process = policy.name,
+                landlock_abi = abi,
+                "the seccomp filter is not available ({elsewhere}); Landlock limits files"
+            ),
+            (None, None) => warn!(
+                process = policy.name,
+                "neither Landlock nor the seccomp filter is available ({elsewhere}): goethite \
+                 runs without its own sandbox"
             ),
         }
         Ok(landlock)
@@ -392,8 +406,8 @@ mod linux {
     }
 
     /// Installs the seccomp filter. Returns how many system calls it
-    /// denies.
-    fn restrict_calls(policy: &Policy) -> Result<usize> {
+    /// denies, or `None` if the kernel refuses filters here.
+    fn restrict_calls(policy: &Policy) -> Result<Option<usize>> {
         let arch = TargetArch::try_from(std::env::consts::ARCH)
             .context("no seccomp filter for this architecture")?;
         let number = |call: &Denied| match arch {
@@ -434,8 +448,18 @@ mod linux {
             arch,
         )?;
         let program = BpfProgram::try_from(filter)?;
-        seccompiler::apply_filter(&program)?;
-        Ok(denied)
+        match seccompiler::apply_filter(&program) {
+            Ok(()) => Ok(Some(denied)),
+            // Refused rather than broken: an outer filter (EPERM, EACCES)
+            // or a kernel without seccomp (ENOSYS). An invalid filter
+            // (EINVAL) would be goethite's own bug, and stays an error.
+            Err(seccompiler::Error::Seccomp(err))
+                if matches!(err.raw_os_error(), Some(1 | 13 | 38)) =>
+            {
+                Ok(None)
+            }
+            Err(err) => Err(err.into()),
+        }
     }
 
     #[cfg(test)]
@@ -453,17 +477,33 @@ mod linux {
         /// test binary itself, running this one test.
         #[test]
         fn a_confined_process_keeps_to_its_files_and_starts_nothing() {
-            if let Some(dir) = std::env::var_os(CHILD) {
-                confined_child(&PathBuf::from(dir));
-                return;
+            match std::env::var_os(CHILD) {
+                Some(dir) => confined_child(&PathBuf::from(dir)),
+                None => run_child("a_confined_process_keeps_to_its_files_and_starts_nothing"),
             }
-            let dir =
-                std::env::temp_dir().join(format!("goethite-sandbox-child-{}", std::process::id()));
+        }
+
+        /// A sandbox around goethite that refuses Landlock and seccomp, as
+        /// an older systemd's filter does, leaves goethite running.
+        #[test]
+        fn an_outer_sandbox_refusing_the_calls_is_not_fatal() {
+            match std::env::var_os(CHILD) {
+                Some(dir) => refused_child(&PathBuf::from(dir)),
+                None => run_child("an_outer_sandbox_refusing_the_calls_is_not_fatal"),
+            }
+        }
+
+        /// Runs the test `name` again in a child process, as the child.
+        fn run_child(name: &str) {
+            let dir = std::env::temp_dir().join(format!(
+                "goethite-sandbox-child-{}-{name}",
+                std::process::id()
+            ));
             std::fs::create_dir_all(&dir).unwrap();
             let output = std::process::Command::new(std::env::current_exe().unwrap())
                 .args([
                     "--exact",
-                    "sandbox::linux::tests::a_confined_process_keeps_to_its_files_and_starts_nothing",
+                    &format!("sandbox::linux::tests::{name}"),
                     "--nocapture",
                 ])
                 .env(CHILD, &dir)
@@ -476,6 +516,40 @@ mod linux {
                 String::from_utf8_lossy(&output.stdout),
                 String::from_utf8_lossy(&output.stderr)
             );
+        }
+
+        fn refused_child(dir: &std::path::Path) {
+            // The outer sandbox: `seccomp` and the Landlock calls refused.
+            let arch = TargetArch::try_from(std::env::consts::ARCH).unwrap();
+            let seccomp = match arch {
+                TargetArch::x86_64 => 317,
+                _ => 277,
+            };
+            let rules = [seccomp, 444, 445, 446]
+                .into_iter()
+                .map(|number| (number, Vec::new()))
+                .collect();
+            let outer = SeccompFilter::new(
+                rules,
+                SeccompAction::Allow,
+                SeccompAction::Errno(EPERM),
+                arch,
+            )
+            .unwrap();
+            seccompiler::apply_filter(&BpfProgram::try_from(outer).unwrap()).unwrap();
+            let policy = Policy {
+                name: "test",
+                write: [dir.to_path_buf()].into(),
+                ..Policy::default()
+            };
+            assert_eq!(
+                apply(&policy).unwrap(),
+                None,
+                "no Landlock behind the filter"
+            );
+            // Nothing of goethite's own sandbox applies.
+            assert!(std::fs::read("/etc/hostname").is_ok());
+            assert!(std::process::Command::new("/bin/true").status().is_ok());
         }
 
         fn confined_child(dir: &std::path::Path) {

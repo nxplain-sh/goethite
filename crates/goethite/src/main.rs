@@ -344,8 +344,9 @@ fn start(
 }
 
 /// Confines `goethite run` (see [`sandbox`]), unless `[security] sandbox`
-/// is off. The directories it may change are created first: rules can only
-/// name what exists.
+/// is off. The directories it may change are created first, if they can
+/// be: rules can only name what exists. One that cannot be created now
+/// could not be written later either, so that is left to whatever needs it.
 fn confine(config: &Config, config_path: &Path, binary: &Path) -> Result<()> {
     if !config.security.sandbox {
         warn!("the sandbox is turned off ([security] sandbox = false)");
@@ -353,7 +354,9 @@ fn confine(config: &Config, config_path: &Path, binary: &Path) -> Result<()> {
     }
     let store_dir = config.store_path().parent().map(Path::to_path_buf);
     for dir in store_dir.iter().chain([&config.lists_dir()]) {
-        std::fs::create_dir_all(dir).with_context(|| format!("cannot create {}", dir.display()))?;
+        if let Err(err) = std::fs::create_dir_all(dir) {
+            tracing::debug!(dir = %dir.display(), %err, "cannot create it before the sandbox");
+        }
     }
     sandbox::apply(&sandbox::Policy::run(
         config,
