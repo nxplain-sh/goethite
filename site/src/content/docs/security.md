@@ -15,7 +15,9 @@ talking to the attacker's site, so the page can reach devices that were never me
 to the internet.
 
 goethite removes such answers: when a forwarded answer for a public name contains an A or AAAA
-record with a private address, that record is dropped before the answer is cached or sent. These
+record with a private address, that record is dropped before the answer is cached or sent, and the
+`ipv4hint` and `ipv6hint` parameters of an `HTTPS` or `SVCB` record (RFC 9460) lose their private
+addresses too, since a client may connect to a hint before the A and AAAA records arrive. These
 addresses count as private:
 
 | Range | What it is |
@@ -26,6 +28,7 @@ addresses count as private:
 | `169.254.0.0/16`, `fe80::/10` | link-local |
 | `0.0.0.0/8`, `::` | "this host" and unspecified |
 | `fc00::/7` | unique local IPv6 (RFC 4193) |
+| `64:ff9b:1::/48` | local-use NAT64 (RFC 8215) |
 
 IPv4 addresses mapped into IPv6 (`::ffff:192.168.1.1`) are checked as IPv4. The question name
 decides, not the names in the answer: a public name that is a CNAME for `printer.lan` still loses
