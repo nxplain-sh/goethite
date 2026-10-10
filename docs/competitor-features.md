@@ -72,10 +72,10 @@ not cover it.
 | Hosts files and domain lists | Yes | Yes | Yes | Yes |
 | `\|\|name^` rules and `@@` exceptions | Yes | Only `\|\|name^` and `@@\|\|name^` | Reduced to bare names; `@@` lines never match | Yes |
 | Regex rules | Yes (RE2) | Yes, with `;querytype=`, `;invert`, `;reply=` | No | No |
-| Rule modifiers | 7 (`$client`, `$ctag`, `$denyallow`, `$dnstype`, `$dnsrewrite`, `$important`, `$badfilter`) | No | No (stripped) | No |
+| Rule modifiers | 7 (`$client`, `$ctag`, `$denyallow`, `$dnstype`, `$dnsrewrite`, `$important`, `$badfilter`) | No | No (stripped) | 2 (`$important`, `$badfilter`) |
 | Hosts lines with a real address as the answer | Yes | No (address ignored) | No | No (skipped) |
 | CNAME uncloaking | Yes, and answer IPs | Yes | No | Yes |
-| Blocked answer | 5 modes, including a custom IP | 5 modes, including an IP and NODATA | `0.0.0.0` / `::`, fixed | Null IP, NXDOMAIN or REFUSED |
+| Blocked answer | 5 modes, including a custom IP | 5 modes, including an IP and NODATA | `0.0.0.0` / `::`, fixed | Null IP, NXDOMAIN, REFUSED or a custom IP |
 | Extended DNS Error on blocked answers | No ("not yet") | Yes, EDE 15 by default | Not checked | Yes, EDE 15 |
 | Safe search | 7 engines | No | No | 7 engines |
 | Blocked services | 142 services | No | No | Yes, AdGuard's catalog |
@@ -161,13 +161,12 @@ users ask.
 
 | Gap | Who has it | Backlog |
 | --- | --- | --- |
-| Rule modifiers: `$important`, `$badfilter`, `$client`, `$dnstype`, `$denyallow` | AdGuard Home | Yes, "More filter syntax" |
+| Rule modifiers: `$client`, `$dnstype`, `$denyallow` | AdGuard Home | Yes, "More filter syntax" |
 | `$ctag` and `$dnsrewrite` (answers, NXDOMAIN and other RCODEs) | AdGuard Home | `$dnsrewrite=NXDOMAIN` only |
 | Regex rules | AdGuard Home, Pi-hole | Yes |
 | Hosts lines with a real address, as local answers | AdGuard Home | Yes |
 | Answer filtering by IP (`\|10.*`-style rules) | AdGuard Home | No |
 | A rule tester: which rule blocks a name, for which client | AdGuard Home, Numa; Pi-hole (list search) | No |
-| A custom IP as the blocked answer | AdGuard Home, Pi-hole | No |
 
 ### Resolver
 
