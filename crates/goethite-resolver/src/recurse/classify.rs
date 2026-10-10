@@ -123,11 +123,24 @@ fn answer(response: &Response, zone: &Name, name: &Name, qtype: RecordType) -> O
         let owned: Vec<&Record> = internet(&response.answers)
             .filter(|record| record.name() == &at)
             .collect();
-        let wanted: Vec<Record> = owned
-            .iter()
-            .filter(|record| qtype == RecordType::ANY || record.record_type() == qtype)
-            .map(|record| (*record).clone())
-            .collect();
+        let wanted: Vec<Record> = match qtype {
+            // RFC 8482: answer ANY with one RRset, not every type at the
+            // name, which hostile clients would otherwise make the server
+            // and its upstreams carry for a penny a query.
+            RecordType::ANY => match owned.first() {
+                Some(first) => owned
+                    .iter()
+                    .filter(|record| record.record_type() == first.record_type())
+                    .map(|record| (*record).clone())
+                    .collect(),
+                None => Vec::new(),
+            },
+            _ => owned
+                .iter()
+                .filter(|record| record.record_type() == qtype)
+                .map(|record| (*record).clone())
+                .collect(),
+        };
         if !wanted.is_empty() {
             records.extend(wanted);
             return Some(Kind::Answer {
@@ -307,6 +320,34 @@ mod tests {
             ),
             Kind::Lame
         );
+    }
+
+    #[test]
+    fn any_answers_one_rrset() {
+        let mut answer = response(ResponseCode::NO_ERROR);
+        answer.authoritative = true;
+        let first = a("www.example.com.", 1);
+        let second = a("www.example.com.", 2);
+        answer.answers = vec![
+            first.clone(),
+            Record::aaaa(
+                name("www.example.com."),
+                300,
+                "2001:db8::1".parse().unwrap(),
+            ),
+            second.clone(),
+        ];
+        let kind = classify(
+            &answer,
+            &name("example.com."),
+            &name("www.example.com."),
+            RecordType::ANY,
+        );
+        let Kind::Answer { records, next } = kind else {
+            panic!("{kind:?}");
+        };
+        assert_eq!(records, vec![first, second], "one RRset, not every type");
+        assert_eq!(next, None);
     }
 
     #[test]

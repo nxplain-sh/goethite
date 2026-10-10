@@ -671,16 +671,17 @@ pub(super) const MAX_PROOFS: usize = 8;
 /// `records` grouped into RRsets (same owner and type), in order of first
 /// appearance.
 pub(super) fn rrsets(records: &[Record]) -> Vec<Vec<Record>> {
+    let mut index: HashMap<(Name, RecordType), usize> = HashMap::new();
     let mut sets: Vec<Vec<Record>> = Vec::new();
     for record in records {
-        let set = sets.iter_mut().find(|set| {
-            set.first().is_some_and(|first| {
-                first.name() == record.name() && first.record_type() == record.record_type()
-            })
-        });
-        match set {
-            Some(set) => set.push(record.clone()),
-            None => sets.push(vec![record.clone()]),
+        let key = (record.name().clone(), record.record_type());
+        if let Some(&at) = index.get(&key) {
+            if let Some(set) = sets.get_mut(at) {
+                set.push(record.clone());
+            }
+        } else {
+            index.insert(key, sets.len());
+            sets.push(vec![record.clone()]);
         }
     }
     sets
@@ -937,6 +938,15 @@ mod tests {
         // The anchored key comes first.
         let anchored = ksk.dnskey(3600).dnskey().unwrap().key_tag;
         assert_eq!(keys[0].dnskey().unwrap().key_tag, anchored);
+    }
+
+    #[test]
+    fn rrsets_follow_first_appearance() {
+        let first = Record::a(name("a.example."), 300, Ipv4Addr::new(192, 0, 2, 1));
+        let cname = Record::cname(name("b.example."), 300, name("a.example."));
+        let second = Record::a(name("a.example."), 300, Ipv4Addr::new(192, 0, 2, 2));
+        let sets = rrsets(&[first.clone(), cname.clone(), second.clone()]);
+        assert_eq!(sets, vec![vec![first, second], vec![cname]]);
     }
 
     fn nsec(owner: &str, next: &str, types: &[RecordType]) -> Record {
