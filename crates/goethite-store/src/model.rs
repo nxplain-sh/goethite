@@ -80,6 +80,9 @@ pub enum BlockResponseKind {
     Nxdomain,
     /// REFUSED.
     Refused,
+    /// The addresses in `blocking_ipv4` and `blocking_ipv6`; a family
+    /// without one gets the null address, and other types an empty answer.
+    CustomIp,
 }
 
 /// Node-wide filtering settings.
@@ -92,6 +95,14 @@ pub struct SettingsSpec {
     /// How blocked names are answered.
     #[serde(default)]
     pub block_response: BlockResponseKind,
+    /// The address blocked `A` queries are answered with when
+    /// `block_response` is `custom_ip`; unset answers `0.0.0.0`.
+    #[serde(default)]
+    pub blocking_ipv4: Option<String>,
+    /// The address blocked `AAAA` queries are answered with when
+    /// `block_response` is `custom_ip`; unset answers `::`.
+    #[serde(default)]
+    pub blocking_ipv6: Option<String>,
     /// Time to live of null-IP answers, in seconds, at most 86,400.
     #[serde(default = "default_blocked_ttl")]
     pub blocked_ttl: u32,
@@ -108,6 +119,8 @@ impl Default for SettingsSpec {
         Self {
             protection: true,
             block_response: BlockResponseKind::default(),
+            blocking_ipv4: None,
+            blocking_ipv6: None,
             blocked_ttl: default_blocked_ttl(),
             list_update_hours: default_update_hours(),
             access: AccessSpec {
@@ -1029,6 +1042,22 @@ impl ScheduleSpec {
 impl SettingsSpec {
     fn validate(&self) -> Result<(), ValidationError> {
         self.access.validate()?;
+        if let Some(address) = &self.blocking_ipv4
+            && address.parse::<Ipv4Addr>().is_err()
+        {
+            return Err(invalid(
+                "settings.blocking_ipv4",
+                "must be an IPv4 address",
+            ));
+        }
+        if let Some(address) = &self.blocking_ipv6
+            && address.parse::<Ipv6Addr>().is_err()
+        {
+            return Err(invalid(
+                "settings.blocking_ipv6",
+                "must be an IPv6 address",
+            ));
+        }
         if self.blocked_ttl > 86_400 {
             return Err(invalid("settings.blocked_ttl", "must be at most 86400"));
         }

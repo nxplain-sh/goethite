@@ -3917,7 +3917,8 @@
         "enum": [
           "null_ip",
           "nxdomain",
-          "refused"
+          "refused",
+          "custom_ip"
         ]
       },
       "BlockedService": {
@@ -6060,6 +6061,20 @@
             "format": "int32",
             "description": "Time to live of null-IP answers, in seconds, at most 86,400.",
             "minimum": 0
+          },
+          "blocking_ipv4": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The address blocked `A` queries are answered with when\n`block_response` is `custom_ip`; unset answers `0.0.0.0`."
+          },
+          "blocking_ipv6": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The address blocked `AAAA` queries are answered with when\n`block_response` is `custom_ip`; unset answers `::`."
           },
           "list_update_hours": {
             "type": "integer",

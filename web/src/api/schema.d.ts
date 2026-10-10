@@ -1011,7 +1011,7 @@ export interface components {
          * @description How blocked names are answered.
          * @enum {string}
          */
-        BlockResponseKind: "null_ip" | "nxdomain" | "refused";
+        BlockResponseKind: "null_ip" | "nxdomain" | "refused" | "custom_ip";
         /** @description A service a group blocks, always or while a schedule is active. */
         BlockedService: {
             /**
@@ -2081,6 +2081,16 @@ export interface components {
              * @description Time to live of null-IP answers, in seconds, at most 86,400.
              */
             blocked_ttl?: number;
+            /**
+             * @description The address blocked `A` queries are answered with when
+             *     `block_response` is `custom_ip`; unset answers `0.0.0.0`.
+             */
+            blocking_ipv4?: string | null;
+            /**
+             * @description The address blocked `AAAA` queries are answered with when
+             *     `block_response` is `custom_ip`; unset answers `::`.
+             */
+            blocking_ipv6?: string | null;
             /**
              * Format: int32
              * @description How often downloaded lists are refreshed, in hours, 1 to 168.

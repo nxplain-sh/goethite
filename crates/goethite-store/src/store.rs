@@ -493,6 +493,10 @@ pub struct Seed {
 /// An entry of the cluster's log, as the store applies it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "a change carries its resource or the settings; boxing allocates per change"
+)]
 pub enum Command {
     /// A configuration change.
     Change(Change),
@@ -2082,6 +2086,28 @@ mod tests {
         let mut spec = store.config().settings.spec.clone();
         spec.access.blocked = too_many;
         assert!(store.update_settings(spec, None, &api()).is_err());
+    }
+
+    #[test]
+    fn custom_block_addresses_are_checked() {
+        let store = TempStore::new("block-ip");
+        let with = |ipv4: Option<&str>, ipv6: Option<&str>| {
+            let mut spec = store.config().settings.spec.clone();
+            spec.block_response = crate::BlockResponseKind::CustomIp;
+            spec.blocking_ipv4 = ipv4.map(str::to_owned);
+            spec.blocking_ipv6 = ipv6.map(str::to_owned);
+            store.update_settings(spec, None, &api())
+        };
+        with(Some("192.0.2.10"), Some("2001:db8::10")).unwrap();
+        with(Some("192.0.2.10"), None).unwrap();
+        let Err(StoreError::Invalid(error)) = with(Some("2001:db8::10"), None) else {
+            panic!("an IPv6 address in blocking_ipv4 was accepted");
+        };
+        assert_eq!(error.field, "settings.blocking_ipv4");
+        let Err(StoreError::Invalid(error)) = with(None, Some("192.0.2.10")) else {
+            panic!("an IPv4 address in blocking_ipv6 was accepted");
+        };
+        assert_eq!(error.field, "settings.blocking_ipv6");
     }
 
     #[test]

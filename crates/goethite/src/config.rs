@@ -870,6 +870,8 @@ impl FilterSection {
                 blocked_ttl: self.blocked_ttl,
                 list_update_hours: self.update_hours,
                 // Not in the config file: an import keeps the store's.
+                blocking_ipv4: None,
+                blocking_ipv6: None,
                 access: AccessSpec::default(),
             },
             lists,

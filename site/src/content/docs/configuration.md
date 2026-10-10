@@ -118,7 +118,7 @@ API.
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `enabled` | `true` | Whether filtering is on (the `protection` setting in the store). |
-| `block_response` | `"null_ip"` | How blocked names are answered: `"null_ip"` (`0.0.0.0` / `::`), `"nxdomain"` or `"refused"`. |
+| `block_response` | `"null_ip"` | How blocked names are answered: `"null_ip"` (`0.0.0.0` / `::`), `"nxdomain"`, `"refused"` or `"custom_ip"` (the `blocking_ipv4` and `blocking_ipv6` settings, through the API). |
 | `blocked_ttl` | `10` | TTL of the null-IP answers, in seconds (at most one day). |
 | `rules` | `[]` | Rules written into the config, at most 10,000. Each must be a supported rule; anything else is an error. |
 | `cache_dir` | `lists` in the state directory | Where downloaded lists are kept. Relative paths are relative to the config file. This one is read on every start. |
