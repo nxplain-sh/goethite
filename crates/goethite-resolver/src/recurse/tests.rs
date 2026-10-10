@@ -19,7 +19,7 @@ use goethite_proto::{
 };
 
 use super::infra::MAX_FETCHES_PER_SERVER;
-use super::{Budget, Exchanged, Network, Recursor, RecursorConfig};
+use super::{Budget, Exchanged, MAX_ADDRESSES_PER_NAME, Network, Recursor, RecursorConfig};
 use crate::exchange::ExchangeError;
 
 fn name(text: &str) -> Name {
@@ -658,6 +658,72 @@ async fn tcp_fallback_waits_the_server_timeout_not_the_whole_budget() {
         started.elapsed() < Duration::from_millis(2_500),
         "TCP waited the whole budget: {:?}",
         started.elapsed()
+    );
+}
+
+#[tokio::test]
+async fn name_server_addresses_are_capped() {
+    // Twenty A records at the name: a hostile zone would send thousands.
+    let mut records = Vec::new();
+    for last in 1..=20u8 {
+        records.push(Record::a(
+            name("ns.example."),
+            172_800,
+            Ipv4Addr::new(10, 0, 3, last),
+        ));
+    }
+    let mut fake = Fake::default();
+    fake.serve("10.0.0.1", ".", records);
+    let (recursor, _) = recursor(fake, config());
+    let mut budget = Budget::new(Duration::from_secs(3));
+    recursor
+        .find_addresses(&name("ns.example."), &mut budget, 0)
+        .await
+        .unwrap();
+    let kept = recursor
+        .infra
+        .addresses(&name("ns.example."), tokio::time::Instant::now())
+        .unwrap();
+    assert!(
+        kept.len() <= MAX_ADDRESSES_PER_NAME,
+        "kept {} addresses",
+        kept.len()
+    );
+}
+
+#[tokio::test]
+async fn glue_addresses_are_capped() {
+    let mut records = vec![Record::ns(name("example."), 172_800, name("ns.example."))];
+    for last in 1..=20u8 {
+        records.push(Record::a(
+            name("ns.example."),
+            172_800,
+            Ipv4Addr::new(10, 0, 3, last),
+        ));
+    }
+    let mut fake = Fake::default();
+    fake.serve("10.0.0.1", ".", records).serve(
+        "10.0.3.1",
+        "example.",
+        vec![Record::a(
+            name("www.example."),
+            300,
+            Ipv4Addr::new(192, 0, 2, 1),
+        )],
+    );
+    let (recursor, _) = recursor(fake, config());
+    let (response, _) = recursor
+        .resolve(&query("www.example.", RecordType::A))
+        .await;
+    assert_eq!(response.rcode, ResponseCode::NO_ERROR);
+    let kept = recursor
+        .infra
+        .addresses(&name("ns.example."), tokio::time::Instant::now())
+        .unwrap();
+    assert!(
+        kept.len() <= MAX_ADDRESSES_PER_NAME,
+        "kept {} addresses",
+        kept.len()
     );
 }
 

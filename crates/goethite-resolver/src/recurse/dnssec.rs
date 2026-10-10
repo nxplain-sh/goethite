@@ -23,6 +23,9 @@ use goethite_proto::{Name, Record, RecordType};
 pub(super) const MAX_CHECKS: u32 = 64;
 /// The most keys tried for one key tag (several keys may share one).
 pub(super) const MAX_KEYS_PER_TAG: usize = 4;
+/// The most keys kept for one zone: a hostile DNSKEY RRset can hold
+/// thousands, and every trust entry would keep them all.
+pub(super) const MAX_ZONE_KEYS: usize = 16;
 /// The most signatures tried for one RRset.
 pub(super) const MAX_SIGS_PER_RRSET: usize = 8;
 /// NSEC3 proofs with more iterations count as insecure (RFC 9276).
@@ -232,7 +235,20 @@ pub(super) fn keys_from_ds(
         .cloned()
         .collect();
     let verified = verify_rrset(&rrset, dnskeys, zone, &anchored, now, checks)?;
-    Some((keys, verified.ttl))
+    // Keep the anchored keys, then a few others (the zone's signing keys)
+    // rather than every usable key in a hostile DNSKEY set.
+    let mut kept = anchored;
+    if kept.len() < MAX_ZONE_KEYS {
+        for key in &keys {
+            if kept.len() >= MAX_ZONE_KEYS {
+                break;
+            }
+            if !kept.contains(key) {
+                kept.push(key.clone());
+            }
+        }
+    }
+    Some((kept, verified.ttl))
 }
 
 /// The DS records that can be used: supported algorithm and digest; and
@@ -902,6 +918,25 @@ mod tests {
         let mut checks = Checks::new(1);
         assert!(keys_from_ds(&zone, &ds, &dnskeys, NOW, &mut checks).is_none());
         assert!(checks.ran_out(), "the second digest needed a check");
+    }
+
+    #[test]
+    fn zone_keys_are_capped() {
+        let zone = name("example.");
+        let ksk = Key::generate(&zone);
+        let mut rrset = vec![ksk.dnskey(3600)];
+        for _ in 0..MAX_ZONE_KEYS {
+            rrset.push(Key::generate(&zone).dnskey(3600));
+        }
+        let mut dnskeys = rrset.clone();
+        dnskeys.push(sign(&ksk, &rrset));
+        let ds = vec![ksk.ds(86_400)];
+        let (keys, _) =
+            keys_from_ds(&zone, &ds, &dnskeys, NOW, &mut Checks::new(MAX_CHECKS)).unwrap();
+        assert_eq!(keys.len(), MAX_ZONE_KEYS);
+        // The anchored key comes first.
+        let anchored = ksk.dnskey(3600).dnskey().unwrap().key_tag;
+        assert_eq!(keys[0].dnskey().unwrap().key_tag, anchored);
     }
 
     fn nsec(owner: &str, next: &str, types: &[RecordType]) -> Record {

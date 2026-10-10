@@ -29,7 +29,7 @@ mod special;
 mod tests;
 mod validate;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::net::{IpAddr, SocketAddr};
 use std::pin::Pin;
@@ -72,6 +72,10 @@ const MAX_NS_LOOKUPS: usize = 4;
 
 /// The most addresses tried for one question to one zone.
 const MAX_ADDRESSES: usize = 12;
+
+/// The most addresses kept for one name server: a hostile referral can send
+/// thousands of glue records, once, and every trust entry would keep them.
+const MAX_ADDRESSES_PER_NAME: usize = 8;
 
 /// How often priming may be tried when it fails.
 const PRIME_RETRY: Duration = Duration::from_secs(60);
@@ -565,17 +569,15 @@ impl Recursor {
 
     /// Remembers glue addresses from a referral, by name server.
     fn learn_glue(&self, glue: Vec<(Name, IpAddr, u32)>, now: Instant) {
-        let mut by_server: Vec<(Name, Vec<IpAddr>, u32)> = Vec::new();
+        let mut by_server: HashMap<Name, (Vec<IpAddr>, u32)> = HashMap::new();
         for (server, ip, ttl) in glue {
-            match by_server.iter_mut().find(|(name, _, _)| *name == server) {
-                Some((_, ips, min_ttl)) => {
-                    ips.push(ip);
-                    *min_ttl = (*min_ttl).min(ttl);
-                }
-                None => by_server.push((server, vec![ip], ttl)),
+            let entry = by_server.entry(server).or_insert_with(|| (Vec::new(), ttl));
+            if entry.0.len() < MAX_ADDRESSES_PER_NAME {
+                entry.0.push(ip);
             }
+            entry.1 = entry.1.min(ttl);
         }
-        for (server, ips, ttl) in by_server {
+        for (server, (ips, ttl)) in by_server {
             self.infra.set_addresses(server, ips, ttl, now);
         }
     }
@@ -748,6 +750,7 @@ impl Recursor {
                     for record in segments.iter().flat_map(|found| &found.records) {
                         if record.record_type() == qtype
                             && let Some(ip) = record.ip()
+                            && ips.len() < MAX_ADDRESSES_PER_NAME
                         {
                             ips.push(ip);
                             ttl = ttl.min(record.ttl());
