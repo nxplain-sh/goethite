@@ -192,12 +192,12 @@ mod linux {
         ABI, Access, AccessFs, AccessNet, CompatLevel, Compatible, LandlockStatus, Ruleset,
         RulesetAttr, RulesetCreatedAttr, RulesetStatus, path_beneath_rules,
     };
+    #[cfg(target_arch = "x86_64")]
+    use seccompiler::sock_filter;
     use seccompiler::{
         BpfProgram, SeccompAction, SeccompCmpArgLen, SeccompCmpOp, SeccompCondition, SeccompFilter,
         SeccompRule, TargetArch,
     };
-    #[cfg(target_arch = "x86_64")]
-    use seccompiler::sock_filter;
     use tracing::{debug, info, warn};
 
     use super::Policy;

@@ -446,7 +446,7 @@ mod tests {
     #[test]
     fn svc_hints_lose_the_addresses_asked_for() {
         use hickory_proto::rr::Name as HickoryName;
-        use hickory_proto::rr::rdata::svcb::{IpHint, SvcParamKey, SvcParamValue as Param, SVCB};
+        use hickory_proto::rr::rdata::svcb::{IpHint, SVCB, SvcParamKey, SvcParamValue as Param};
         use hickory_proto::rr::rdata::{A, AAAA};
 
         let params = vec![
@@ -466,11 +466,7 @@ mod tests {
             "svc.example.".parse().unwrap(),
             RecordClass::IN,
             60,
-            RData::HTTPS(rdata::HTTPS(SVCB::new(
-                1,
-                HickoryName::root(),
-                params,
-            ))),
+            RData::HTTPS(rdata::HTTPS(SVCB::new(1, HickoryName::root(), params))),
         );
         let removed = record.prune_svc_hints(|ip| match ip {
             IpAddr::V4(v4) => v4.is_private(),

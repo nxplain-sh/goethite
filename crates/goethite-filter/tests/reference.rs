@@ -35,20 +35,18 @@ fn rule() -> impl Strategy<Value = (Source, Rule)> {
         prop::sample::select(vec![false, true]),
         prop::sample::select(vec![false, false, false, true]),
     )
-        .prop_map(
-            |(source, name, scope, action, important, badfilter)| {
-                (
-                    source,
-                    Rule {
-                        name,
-                        scope,
-                        action,
-                        important,
-                        badfilter,
-                    },
-                )
-            },
-        )
+        .prop_map(|(source, name, scope, action, important, badfilter)| {
+            (
+                source,
+                Rule {
+                    name,
+                    scope,
+                    action,
+                    important,
+                    badfilter,
+                },
+            )
+        })
 }
 
 proptest! {

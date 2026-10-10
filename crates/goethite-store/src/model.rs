@@ -111,7 +111,10 @@ impl Default for SettingsSpec {
             blocked_ttl: default_blocked_ttl(),
             list_update_hours: default_update_hours(),
             access: AccessSpec {
-                allowed: DEFAULT_ALLOWED.iter().map(|entry| (*entry).to_owned()).collect(),
+                allowed: DEFAULT_ALLOWED
+                    .iter()
+                    .map(|entry| (*entry).to_owned())
+                    .collect(),
                 blocked: Vec::new(),
             },
         }
@@ -123,8 +126,15 @@ impl Default for SettingsSpec {
 /// is not an open resolver. An empty list still means "everyone", so an
 /// admin can clear it on purpose.
 pub const DEFAULT_ALLOWED: &[&str] = &[
-    "127.0.0.0/8", "::1", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16",
-    "fe80::/10", "fc00::/7", "100.64.0.0/10",
+    "127.0.0.0/8",
+    "::1",
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+    "169.254.0.0/16",
+    "fe80::/10",
+    "fc00::/7",
+    "100.64.0.0/10",
 ];
 
 /// Which clients are answered, over every transport. An entry is an IP
