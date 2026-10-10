@@ -362,7 +362,8 @@ fn plan_dns(plan: &mut Plan, dns: &DnsInfo) {
         Some("refused") => plan.block_response = Some(BlockResponseKind::Refused),
         Some(other) => plan.skip(
             format!("blocking mode {other}"),
-            "goethite answers blocked names with 0.0.0.0, NXDOMAIN or REFUSED",
+            "goethite answers blocked names with 0.0.0.0, NXDOMAIN, REFUSED or an address of \
+             your own (set it through the API)",
         ),
         None => {}
     }

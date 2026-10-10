@@ -9,6 +9,9 @@ configuration format.
 
 ### Added
 
+- **Blocked names can answer with an address of your own**: `block_response = "custom_ip"` with
+  `blocking_ipv4` and `blocking_ipv6` (through the API or the web UI's Settings), for a block page
+  server. A family left unset answers the null address.
 - **`$important` and `$badfilter` in filter rules**: an `$important` block outranks an exception,
   an `$important` exception outranks that, and `$badfilter` disables the rule it names, from any
   list. Other modifiers stay unsupported, so a rule carrying one is skipped rather than misread.

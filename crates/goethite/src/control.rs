@@ -16,7 +16,7 @@ use goethite_resolver::{
     Access, BlockResponse, Cidr, ClientPolicy, GroupPolicy, LocalRecords, Policy, PolicyError,
     PolicyParts, PolicyState, ScheduledServices, ScheduledSources, ServiceFilter, ServiceMask,
 };
-use goethite_store::{AccessSpec, BlockResponseKind, ConfigSnapshot, Store};
+use goethite_store::{AccessSpec, BlockResponseKind, ConfigSnapshot, SettingsSpec, Store};
 use jiff::Timestamp;
 use tokio::sync::{Notify, watch};
 use tokio::task::JoinSet;
@@ -525,11 +525,7 @@ pub(crate) fn build_policy(
         source_ids: compiled.source_ids.clone(),
         groups,
         clients,
-        block_response: match settings.block_response {
-            BlockResponseKind::NullIp => BlockResponse::NullIp,
-            BlockResponseKind::Nxdomain => BlockResponse::NxDomain,
-            BlockResponseKind::Refused => BlockResponse::Refused,
-        },
+        block_response: block_response(settings),
         blocked_ttl: settings.blocked_ttl,
         protection: settings.protection,
         services: Arc::clone(catalog),
@@ -539,6 +535,26 @@ pub(crate) fn build_policy(
         ),
         records: local_records(config),
     })
+}
+
+/// The blocked-answer mode from `settings`.
+fn block_response(settings: &SettingsSpec) -> BlockResponse {
+    match settings.block_response {
+        BlockResponseKind::NullIp => BlockResponse::NullIp,
+        BlockResponseKind::Nxdomain => BlockResponse::NxDomain,
+        BlockResponseKind::Refused => BlockResponse::Refused,
+        // Validation makes sure a set address parses.
+        BlockResponseKind::CustomIp => BlockResponse::CustomIp {
+            ipv4: settings
+                .blocking_ipv4
+                .as_deref()
+                .and_then(|address| address.parse().ok()),
+            ipv6: settings
+                .blocking_ipv6
+                .as_deref()
+                .and_then(|address| address.parse().ok()),
+        },
+    }
 }
 
 /// The enabled local records, compiled.
