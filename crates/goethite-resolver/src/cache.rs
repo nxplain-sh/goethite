@@ -3,7 +3,7 @@
 //! The cache is split into shards, each behind its own mutex, so concurrent
 //! queries rarely contend; a lock is only ever held for a short synchronous
 //! map operation, never across an `.await`. Each shard holds a bounded number
-//! of entries and evicts the oldest first.
+//! of entries within a bounded number of bytes and evicts the oldest first.
 //!
 //! What is stored is deliberately narrow, to resist cache poisoning: only the
 //! CNAME chain that answers the question and the records at its end, never
@@ -21,7 +21,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use goethite_proto::{Name, Query, Record, RecordClass, RecordType, Response, ResponseCode};
+use goethite_proto::{
+    Name, Query, Record, RecordClass, RecordType, Response, ResponseCode, records_wire_len,
+};
 
 use crate::restore_question_case;
 
@@ -31,6 +33,15 @@ pub const MAX_CNAME_CHAIN: usize = 16;
 /// Answers with more records than this are passed on but not cached, which
 /// bounds the memory a single entry can take.
 pub const MAX_CACHED_RECORDS: usize = 32;
+
+/// The largest entry kept, in wire bytes of its records. A single record can
+/// approach the 64 KiB message limit and hickory allocates per TXT string, so
+/// a few oversized answers could otherwise fill the cache; they are
+/// forwarded but not kept.
+pub const MAX_ENTRY_BYTES: usize = 8 * 1024;
+
+/// Average wire bytes reserved per entry when sizing a shard's byte budget.
+const ENTRY_BYTE_ALLOWANCE: usize = 1024;
 
 /// The most entries a cache may be configured with.
 pub const MAX_ENTRIES: usize = 1_000_000;
@@ -102,6 +113,8 @@ struct Answer {
     authority: Vec<Record>,
     /// Whether DNSSEC proved it authentic.
     authentic: bool,
+    /// `answers` and `authority` in wire bytes, for the shard's byte budget.
+    bytes: usize,
     stored: Instant,
     expires: Instant,
 }
@@ -118,19 +131,30 @@ struct Shard {
     order: VecDeque<(Key, u64)>,
     next_generation: u64,
     capacity: usize,
+    /// Wire bytes of the answers held; entries keep the sum within `max_bytes`.
+    bytes: usize,
+    max_bytes: usize,
 }
 
 impl Shard {
     fn insert(&mut self, key: Key, answer: Arc<Answer>) {
-        let generation = self.next_generation;
-        self.next_generation = self.next_generation.wrapping_add(1);
-        if !self.entries.contains_key(&key) {
-            while self.entries.len() >= self.capacity {
-                if !self.evict_oldest() {
-                    break;
-                }
+        let bytes = answer.bytes;
+        if bytes > self.max_bytes {
+            return;
+        }
+        if let Some(old) = self.entries.remove(&key) {
+            self.bytes = self.bytes.saturating_sub(old.answer.bytes);
+        }
+        while self.entries.len() >= self.capacity
+            || self.bytes.saturating_add(bytes) > self.max_bytes
+        {
+            if !self.evict_oldest() {
+                break;
             }
         }
+        let generation = self.next_generation;
+        self.next_generation = self.next_generation.wrapping_add(1);
+        self.bytes = self.bytes.saturating_add(bytes);
         self.order.push_back((key.clone(), generation));
         self.entries.insert(key, Entry { answer, generation });
         if self.order.len() > self.capacity.saturating_mul(2).saturating_add(16) {
@@ -146,7 +170,9 @@ impl Shard {
                 .get(&key)
                 .is_some_and(|entry| entry.generation == generation)
             {
-                self.entries.remove(&key);
+                if let Some(entry) = self.entries.remove(&key) {
+                    self.bytes = self.bytes.saturating_sub(entry.answer.bytes);
+                }
                 return true;
             }
         }
@@ -189,6 +215,9 @@ impl Cache {
     pub fn new(mut config: CacheConfig) -> Self {
         config.max_entries = config.max_entries.min(MAX_ENTRIES);
         let capacity = config.max_entries.div_ceil(SHARDS);
+        let max_bytes = capacity
+            .saturating_mul(ENTRY_BYTE_ALLOWANCE)
+            .max(MAX_ENTRY_BYTES);
         let shards = (0..SHARDS)
             .map(|_| {
                 Mutex::new(Shard {
@@ -196,6 +225,8 @@ impl Cache {
                     order: VecDeque::new(),
                     next_generation: 0,
                     capacity,
+                    bytes: 0,
+                    max_bytes,
                 })
             })
             .collect();
@@ -251,7 +282,9 @@ impl Cache {
         let mut shard = self.shard(&key)?.lock().ok()?;
         let entry = shard.entries.get(&key)?;
         if entry.answer.expires <= Instant::now() {
+            let bytes = entry.answer.bytes;
             shard.entries.remove(&key);
+            shard.bytes = shard.bytes.saturating_sub(bytes);
             return None;
         }
         Some(Arc::clone(&entry.answer))
@@ -355,11 +388,16 @@ fn cacheable(query: &Query, response: &Response, config: &CacheConfig) -> Option
     };
     let stored = Instant::now();
     let expires = stored.checked_add(Duration::from_secs(u64::from(ttl)))?;
+    let bytes = records_wire_len(&answers).saturating_add(records_wire_len(&authority));
+    if bytes > MAX_ENTRY_BYTES {
+        return None;
+    }
     Some(Answer {
         rcode: response.rcode,
         answers,
         authority,
         authentic: response.authentic_data,
+        bytes,
         stored,
         expires,
     })
@@ -712,6 +750,67 @@ mod tests {
         assert!(cache.len() <= 32, "{}", cache.len());
         let newest = query("n999.example.", RecordType::A);
         assert!(cache.get(&newest).is_some(), "the newest entry survives");
+    }
+
+    /// A name whose wire form is long enough that a handful of records
+    /// exceed the per-entry byte cap.
+    fn long_qname(tag: &str) -> String {
+        format!(
+            "{tag}.{}.{}.{}.{}.example.",
+            "a".repeat(63),
+            "b".repeat(63),
+            "c".repeat(63),
+            "d".repeat(39)
+        )
+    }
+
+    #[test]
+    fn oversized_entries_are_refused() {
+        let cache = cache();
+        let qname = long_qname("big");
+        let q = query(&qname, RecordType::ANY);
+        let many: Vec<Record> = (0..MAX_CACHED_RECORDS)
+            .map(|i| a(&qname, 300, u8::try_from(i).unwrap()))
+            .collect();
+        cache.insert(&q, &answer(&q, many));
+        assert!(cache.get(&q).is_none(), "entry over the byte cap");
+        assert!(cache.is_empty(), "nothing oversized is kept");
+    }
+
+    #[test]
+    fn a_shard_keeps_its_byte_budget() {
+        let cache = Cache::new(CacheConfig {
+            max_entries: 32,
+            ..CacheConfig::default()
+        });
+        let index = |q: &Query| {
+            let hash = cache.hasher.hash_one(Key::for_query(q));
+            usize::try_from(hash.checked_rem(u64::try_from(SHARDS).unwrap()).unwrap()).unwrap()
+        };
+        let first = query(&long_qname("one"), RecordType::A);
+        let second = (0..10_000)
+            .map(|i| long_qname(&format!("two{i}")))
+            .find(|qname| index(&query(qname, RecordType::A)) == index(&first))
+            .map(|qname| query(&qname, RecordType::A))
+            .expect("two names in one shard");
+        // Two entries of about 4 KiB; the shard's 8 KiB budget fits one.
+        let entry = |q: &Query| {
+            let owner = q.question.name.to_string();
+            answer(
+                q,
+                (0..16)
+                    .map(|i| a(&owner, 300, u8::try_from(i).unwrap()))
+                    .collect(),
+            )
+        };
+        cache.insert(&first, &entry(&first));
+        assert!(cache.get(&first).is_some());
+        cache.insert(&second, &entry(&second));
+        assert!(cache.get(&second).is_some());
+        assert!(
+            cache.get(&first).is_none(),
+            "the byte budget evicted the older entry"
+        );
     }
 
     #[test]

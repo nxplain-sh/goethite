@@ -1025,6 +1025,9 @@ async fn spans_only_on_the_slow_path() {
     let spans = Spans::default();
     let _subscriber =
         tracing::subscriber::set_default(tracing_subscriber::registry().with(spans.clone()));
+    // Other tests run in parallel without a subscriber; re-evaluate the
+    // interest cache so their callsites do not stay disabled here.
+    tracing::callsite::rebuild_interest_cache();
     let resolver = Resolver::new(Vec::new())
         .with_cache(Cache::new(CacheConfig::default()))
         .with_forwarder(forwarder(vec![UpstreamConfig::udp(upstream.addr)]));

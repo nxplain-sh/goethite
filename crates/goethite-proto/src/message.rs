@@ -4,6 +4,7 @@ use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use hickory_proto::rr::{RData, rdata};
+use hickory_proto::serialize::binary::BinEncodable;
 
 use crate::codec::Escaped;
 use crate::{Name, Opcode, RecordClass, RecordType, ResponseCode};
@@ -251,6 +252,26 @@ impl Record {
     }
 }
 
+/// The size of `records` in wire bytes, with each name written out in full
+/// (no compression), for budgeting caches of answers from untrusted servers.
+pub fn records_wire_len(records: &[Record]) -> usize {
+    let mut out = Vec::new();
+    let mut encoder = hickory_proto::serialize::binary::BinEncoder::new(&mut out);
+    encoder.set_canonical_form(true);
+    encoder.set_name_encoding(hickory_proto::serialize::binary::NameEncoding::Uncompressed);
+    for record in records {
+        let wire = hickory_proto::rr::Record::from_rdata(
+            record.name.0.clone(),
+            record.ttl,
+            record.data.clone(),
+        );
+        if wire.emit(&mut encoder).is_err() {
+            return usize::MAX;
+        }
+    }
+    out.len()
+}
+
 impl fmt::Debug for Record {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
@@ -376,6 +397,18 @@ mod tests {
             },
             edns,
         }
+    }
+
+    #[test]
+    fn records_are_measured_in_full() {
+        let name: Name = "a-b-c.example.".parse().unwrap();
+        let records = vec![
+            Record::a(name.clone(), 300, Ipv4Addr::new(192, 0, 2, 1)),
+            Record::a(name, 300, Ipv4Addr::new(192, 0, 2, 2)),
+        ];
+        // 15 bytes of name plus 10 fixed and 4 of address, each; a second
+        // record would compress its name to two bytes if allowed.
+        assert_eq!(records_wire_len(&records), 2 * 29);
     }
 
     #[test]

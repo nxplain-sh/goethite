@@ -36,7 +36,10 @@ use goethite_proto::{
 
 pub use access::{Access, AccessList, MAX_ACCESS_ENTRIES};
 pub use blocking::BlockResponse;
-pub use cache::{Cache, CacheConfig, CacheStats, MAX_CACHED_RECORDS, MAX_CNAME_CHAIN, MAX_ENTRIES};
+pub use cache::{
+    Cache, CacheConfig, CacheStats, MAX_CACHED_RECORDS, MAX_CNAME_CHAIN, MAX_ENTRIES,
+    MAX_ENTRY_BYTES,
+};
 pub use cidr::{Cidr, CidrError};
 pub use forward::{
     Forwarder, ForwarderConfig, ForwarderError, MAX_UPSTREAMS, Transport, UpstreamConfig,
