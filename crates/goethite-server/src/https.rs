@@ -23,7 +23,7 @@ use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
 use hyper_util::server::conn::auto::Builder;
 use tokio::net::TcpStream;
-use tokio::sync::watch;
+use tokio::sync::{Notify, watch};
 use tokio::time::timeout;
 use tokio_rustls::server::TlsStream;
 use tracing::{debug, trace};
@@ -85,7 +85,6 @@ pub(crate) async fn serve_connection(
     let connection = builder.serve_connection(TokioIo::new(stream), service);
     tokio::pin!(connection);
     loop {
-        let quiet_until = activity.quiet_until(idle);
         tokio::select! {
             served = connection.as_mut() => {
                 if let Err(err) = served {
@@ -94,7 +93,7 @@ pub(crate) async fn serve_connection(
                 return;
             }
             () = stopped(&mut stop) => break,
-            () = tokio::time::sleep_until(quiet_until.into()) => {
+            () = activity.wait(idle) => {
                 if activity.is_idle(idle) {
                     trace!(%peer, "closing idle DNS over HTTPS connection");
                     break;
@@ -113,6 +112,8 @@ struct Activity {
     open: AtomicUsize,
     /// Milliseconds from `started` to the end of the last request.
     last: AtomicU64,
+    /// Woken when a request ends, to re-check the deadline.
+    notify: Notify,
 }
 
 impl Activity {
@@ -121,6 +122,7 @@ impl Activity {
             started: Instant::now(),
             open: AtomicUsize::new(0),
             last: AtomicU64::new(0),
+            notify: Notify::new(),
         }
     }
 
@@ -128,6 +130,22 @@ impl Activity {
     fn begin(self: &Arc<Self>) -> Busy {
         self.open.fetch_add(1, Ordering::Relaxed);
         Busy(Arc::clone(self))
+    }
+
+    /// Waits for the connection to be quiet for `idle`, or for a request to
+    /// end. A deadline already past means a request is open past it: wait
+    /// for the wake-up from its end instead of returning at once, which
+    /// would spin the caller until the request finishes.
+    async fn wait(&self, idle: Duration) {
+        let quiet_until = self.quiet_until(idle);
+        if Instant::now() >= quiet_until {
+            self.notify.notified().await;
+            return;
+        }
+        tokio::select! {
+            () = tokio::time::sleep_until(quiet_until.into()) => {}
+            () = self.notify.notified() => {}
+        }
     }
 
     /// When the connection has gone `idle` without a request, if none
@@ -153,6 +171,7 @@ impl Drop for Busy {
         let elapsed = u64::try_from(self.0.started.elapsed().as_millis()).unwrap_or(u64::MAX);
         self.0.last.store(elapsed, Ordering::Relaxed);
         self.0.open.fetch_sub(1, Ordering::Relaxed);
+        self.0.notify.notify_one();
     }
 }
 
@@ -388,4 +407,32 @@ fn plain(status: StatusCode, text: &str) -> Response<Full<Bytes>> {
         HeaderValue::from_static("text/plain; charset=utf-8"),
     );
     response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn an_open_request_does_not_spin_the_idle_wait() {
+        let activity = Arc::new(Activity::new());
+        let busy = activity.begin();
+        // The deadline has passed (a request outlived its idle period, as
+        // with a trickling POST body), but the request is still open.
+        assert!(!activity.is_idle(Duration::ZERO));
+        assert!(
+            timeout(Duration::from_millis(50), activity.wait(Duration::ZERO))
+                .await
+                .is_err(),
+            "the wait returned while a request was open"
+        );
+        // The request ends: the wake-up lets the caller re-check and close.
+        drop(busy);
+        timeout(Duration::from_secs(1), async {
+            activity.wait(Duration::ZERO).await;
+            assert!(activity.is_idle(Duration::ZERO));
+        })
+        .await
+        .expect("the wait woke when the request ended");
+    }
 }
