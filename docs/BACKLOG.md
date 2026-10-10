@@ -213,3 +213,6 @@ Phase 3's scope shipped in v0.3.0. These items came up along the way.
 - **[later] Lint workflows in CI** with actionlint and zizmor.
 - **[later] `multiple-versions = "deny"` in `deny.toml`** once the remaining duplicate
   (`syn`, through build-time dependencies) is gone.
+- **[later] A source link in the web UI and `goethite --version`**, set at build time. The AGPL
+  asks a changed goethite to offer its source to the people using it (ADR 0033); a link that a
+  fork only has to repoint makes that easy.

@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "description": "The goethite web UI: a single-page app embedded into the goethite binary.",
-  "license": "MIT OR Apache-2.0",
+  "license": "AGPL-3.0-only",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build && node scripts/budget.mjs && node scripts/docs.mjs",

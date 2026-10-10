@@ -7,6 +7,13 @@ configuration format.
 
 ## [Unreleased]
 
+### Changed
+
+- goethite is now licensed under the GNU Affero General Public License, version 3 only
+  (`AGPL-3.0-only`), instead of MIT OR Apache-2.0. Releases up to and including v0.5.0 keep MIT OR
+  Apache-2.0. Contributions come in under Apache-2.0
+  ([ADR 0033](docs/adr/0033-agpl-license.md)).
+
 ### Fixed
 
 - Deleting a filter list in the web UI no longer fails with a conflict when a group started using

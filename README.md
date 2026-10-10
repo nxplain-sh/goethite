@@ -119,15 +119,20 @@ Benchmarks and how to record them are in [`bench/`](bench/README.md). The layout
 
 ## License
 
-Licensed under either of
+goethite is free software under the
+[GNU Affero General Public License, version 3 only](LICENSE) (`AGPL-3.0-only`). You may run,
+study, change and share it. If you distribute it, or run a changed version that others use over a
+network (for a DNS server, every client that queries it), you must offer them its source under the
+same license.
 
-- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or <https://www.apache.org/licenses/LICENSE-2.0>)
-- MIT license ([LICENSE-MIT](LICENSE-MIT) or <https://opensource.org/licenses/MIT>)
-
-at your option.
+Releases up to and including v0.5.0 were published under MIT OR Apache-2.0 and keep that license.
+[ADR 0033](docs/adr/0033-agpl-license.md) explains the change.
 
 ### Contribution
 
 Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in
-the work by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any
-additional terms or conditions.
+goethite by you, as defined in the Apache-2.0 license, is licensed under the
+[Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0), without any additional
+terms or conditions. goethite ships it under the AGPL-3.0-only with the rest of the code. Because
+Apache-2.0 is permissive, the maintainers can also offer goethite, your contribution included,
+under other terms, such as a hosted service or a commercial license.

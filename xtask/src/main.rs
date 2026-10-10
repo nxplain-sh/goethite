@@ -70,9 +70,8 @@ const DIST_GLIBC: (u32, u32) = (2, 34);
 /// What a release tarball holds, from the repository root to its place in
 /// the tarball's top directory. The binary and THIRD-PARTY-LICENSES.txt
 /// come from the target directory.
-const DIST_FILES: [(&str, &str); 9] = [
-    ("LICENSE-APACHE", "LICENSE-APACHE"),
-    ("LICENSE-MIT", "LICENSE-MIT"),
+const DIST_FILES: [(&str, &str); 8] = [
+    ("LICENSE", "LICENSE"),
     ("README.md", "README.md"),
     ("CHANGELOG.md", "CHANGELOG.md"),
     ("deploy/goethite.toml", "goethite.toml"),
@@ -450,9 +449,9 @@ fn dist_binary(root: &Path) -> Result {
 /// licences ask that the notices go with the binary.
 fn dist_notices(root: &Path, host: &str) -> Result {
     const HEADER: &str = "\
-goethite is dual-licensed under the MIT licence and the Apache License, Version
-2.0 (LICENSE-MIT and LICENSE-APACHE). Its binary also contains the software
-below, whose licences ask that these notices go with it.
+goethite is licensed under the GNU Affero General Public License, version 3
+only (LICENSE). Its binary also contains the software below, whose licences ask
+that these notices go with it.
 
 ==============================================================================
 Rust crates
@@ -728,8 +727,7 @@ fn image(args: &[String]) -> Result {
     }
     for (from, to) in [
         ("deploy/container/goethite.toml", "goethite.toml"),
-        ("LICENSE-MIT", "LICENSE-MIT"),
-        ("LICENSE-APACHE", "LICENSE-APACHE"),
+        ("LICENSE", "LICENSE"),
     ] {
         fs::copy(root.join(from), context.join(to))?;
     }

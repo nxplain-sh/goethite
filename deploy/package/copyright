@@ -5,9 +5,8 @@ Source: https://github.com/nxplain-sh/goethite
 
 Files: *
 Copyright: goethite contributors
-License: MIT or Apache-2.0
- goethite is dual-licensed under the MIT licence and the Apache License,
- Version 2.0, at your option. The full texts are in
- /usr/share/doc/goethite/LICENSE-MIT and /usr/share/doc/goethite/LICENSE-APACHE.
+License: AGPL-3.0-only
+ goethite is licensed under the GNU Affero General Public License, version 3
+ only. The full text is in /usr/share/doc/goethite/LICENSE.
  The notices of the crates and npm packages built into the binary are in
  /usr/share/doc/goethite/THIRD-PARTY-LICENSES.txt.

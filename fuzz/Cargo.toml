@@ -3,7 +3,7 @@ name = "goethite-fuzz"
 description = "cargo-fuzz targets for goethite. Every parser gets one."
 version = "0.0.0"
 edition = "2024"
-license = "MIT OR Apache-2.0"
+license = "AGPL-3.0-only"
 publish = false
 
 [package.metadata]
