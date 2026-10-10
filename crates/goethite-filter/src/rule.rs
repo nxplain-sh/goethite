@@ -17,7 +17,8 @@
 //! | `@@\|\|good.example^` (etc.)    | the same patterns as exceptions: never block     |
 //! | `! comment`, `# comment`, `[Adblock Plus 2.0]`, blank | ignored               |
 //!
-//! Unsupported for now: regular expressions (`/.../`), modifiers (`$...`),
+//! Unsupported for now: cosmetic and HTML filtering rules (`example.com##...`,
+//! `example.com$$...`), regular expressions (`/.../`), modifiers (`$...`),
 //! patterns without a `||` or `|` anchor, wildcards inside names, and hosts
 //! entries with a real address (those are rewrites, not blocks).
 
@@ -100,14 +101,60 @@ const HOSTS_SYSTEM_NAMES: &[&str] = &[
     "0.0.0.0",
 ];
 
+/// Cosmetic and HTML-filtering markers of the AdGuard/uBlock syntax, which
+/// goethite does not support: reading `example.com##.banner` as a domain line
+/// would block the site it only restyles.
+const COSMETIC_MARKERS: &[&str] = &["##", "#@#", "#?#", "#$#", "#%#", "$$", "$@$"];
+
+/// The cosmetic markers that carry no domain part and so start a line.
+const LEADING_COSMETIC_MARKERS: &[&str] = &["##", "#@#", "#?#", "#$#", "#%#"];
+
+fn is_cosmetic(line: &str) -> bool {
+    COSMETIC_MARKERS.iter().any(|marker| line.contains(marker))
+}
+
+/// Strips a trailing `#` comment. A `#` starts a comment only at the start of
+/// the line or after whitespace, so `example.com##.banner` is not cut short.
+fn strip_comment(line: &str) -> &str {
+    let mut after_space = true;
+    for (index, ch) in line.char_indices() {
+        if ch == '#' && after_space {
+            return line.split_at(index).0.trim_end();
+        }
+        after_space = ch.is_whitespace();
+    }
+    line.trim_end()
+}
+
 /// Parses one line, passing each rule it holds to `add`.
 pub fn parse_line(line: &str, mut add: impl FnMut(Rule)) -> LineKind {
     if line.len() > MAX_LINE_LEN {
         return LineKind::Invalid("line too long");
     }
     let line = line.trim();
-    if line.is_empty() || line.starts_with('!') || line.starts_with('#') || line.starts_with('[') {
+    if line.is_empty() || line.starts_with('!') || line.starts_with('[') {
         return LineKind::Ignored;
+    }
+    if line.starts_with('#') {
+        // A global cosmetic rule; anything else starting with `#` is a
+        // comment.
+        return if LEADING_COSMETIC_MARKERS
+            .iter()
+            .any(|marker| line.starts_with(marker))
+        {
+            LineKind::Unsupported("cosmetic rule")
+        } else {
+            LineKind::Ignored
+        };
+    }
+    // Strip the comment before `is_adblock`, so a hosts line that ends with
+    // `# $ ...` is not taken for a modifier rule.
+    let line = strip_comment(line);
+    if line.is_empty() {
+        return LineKind::Ignored;
+    }
+    if is_cosmetic(line) {
+        return LineKind::Unsupported("cosmetic or HTML filtering rule");
     }
     if let Some(pattern) = line.strip_prefix("@@") {
         return parse_adblock(pattern, Action::Allow, &mut add);
@@ -115,11 +162,6 @@ pub fn parse_line(line: &str, mut add: impl FnMut(Rule)) -> LineKind {
     if is_adblock(line) {
         return parse_adblock(line, Action::Block, &mut add);
     }
-    // Hosts and domain lines may end with a `#` comment.
-    let line = line
-        .split_once('#')
-        .map_or(line, |(rule, _)| rule)
-        .trim_end();
     let mut tokens = line.split_whitespace();
     let Some(first) = tokens.next() else {
         return LineKind::Ignored;
@@ -463,6 +505,42 @@ mod tests {
         for root in [".", "..", "||.^", "@@||..^", "0.0.0.0 ..", "*.."] {
             assert!(matches!(parse(root).0, LineKind::Invalid(_)), "{root:?}");
         }
+    }
+
+    #[test]
+    fn cosmetic_rules_are_not_domain_blocks() {
+        for line in [
+            "example.com##.banner",
+            "example.com#@#.banner",
+            "example.com#?#.banner:has(.ad)",
+            "example.com#$#.banner { display: none }",
+            "example.com#%#window.ads = 0",
+            "example.com$$script[tag-content=\"ad\"]",
+            "example.com$@$script[tag-content=\"ad\"]",
+            "##.banner",
+            "#@#.banner",
+        ] {
+            let (kind, rules) = parse(line);
+            assert!(rules.is_empty(), "{line:?} parsed as {rules:?}");
+            assert!(
+                matches!(kind, LineKind::Unsupported(_)),
+                "{line:?} -> {kind:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn hash_is_a_comment_only_after_whitespace() {
+        let (kind, rules) = parse("0.0.0.0 ads.example # $ modifiers");
+        assert_eq!(kind, LineKind::Rules(1));
+        assert_eq!(
+            rules,
+            vec![rule("ads.example", Scope::Exact, Action::Block)]
+        );
+        assert!(matches!(
+            parse("ads.example#comment").0,
+            LineKind::Invalid(_)
+        ));
     }
 
     #[test]

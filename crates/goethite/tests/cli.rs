@@ -488,6 +488,35 @@ mod serving {
         );
     }
 
+    /// The DNS server starts first: a control plane that cannot start, such
+    /// as an API certificate that does not parse, leaves the node answering
+    /// queries.
+    #[test]
+    fn answers_when_the_control_plane_cannot_start() {
+        let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+        let (cert, key) = (dir.join("bad_api.crt"), dir.join("bad_api.key"));
+        std::fs::write(&cert, "not a certificate").unwrap();
+        std::fs::write(&key, "not a key").unwrap();
+        let config = format!(
+            "[server]\nlisten = \"127.0.0.1:0\"\n\n[[upstream]]\naddress = \"{}\"\n\n\
+             [api]\nlisten = \"127.0.0.1:0\"\ntls_cert = {:?}\ntls_key = {:?}\n",
+            upstream(),
+            cert.display().to_string(),
+            key.display().to_string()
+        );
+        let mut server = Running::start_config("control_plane_fails", &config);
+        server.wait_for_log("cannot start the control plane");
+        let udp = field(&server.find_log(DNS_LISTENING), "udp");
+        let answer = ask(udp, "example.com.");
+        assert_eq!(answer.metadata.response_code, ResponseCode::NoError);
+        assert_eq!(
+            answer.answers[0].data,
+            RData::A(A(Ipv4Addr::new(192, 0, 2, 53)))
+        );
+        server.signal("TERM");
+        assert!(server.wait_for_exit().success());
+    }
+
     /// Nothing reads goethite's log any more (its supervisor died, a pipe
     /// closed): it goes on answering, and still stops on SIGTERM.
     #[test]
@@ -536,6 +565,46 @@ mod serving {
             null,
             "config rules stay"
         );
+
+        server.signal("TERM");
+        assert!(server.wait_for_exit().success());
+    }
+
+    /// A list added through the API downloads at once, not at the next
+    /// scheduled refresh (`list_update_hours` away). The URL goes nowhere,
+    /// so the download fails; that it was tried is the point.
+    #[test]
+    fn a_list_added_through_the_api_downloads_at_once() {
+        let mut server = Running::start("list_added_refreshes", upstream());
+        _ = server.wait_for_log(DNS_LISTENING);
+        let api_addr = field(&server.find_log("API listening"), "address");
+
+        let (status, list) = api(
+            api_addr,
+            "POST /api/v1/lists HTTP/1.1",
+            r#"{"name": "Ads", "url": "https://127.0.0.1:9/ads.txt"}"#,
+        );
+        assert_eq!(status, 201, "{list}");
+        let id = list["id"].as_str().unwrap();
+
+        let deadline = std::time::Instant::now() + WAIT;
+        loop {
+            let (_, status) = api(api_addr, "GET /api/v1/status HTTP/1.1", "");
+            let attempted = status["lists"].as_array().is_some_and(|lists| {
+                lists
+                    .iter()
+                    .any(|list| list["id"] == id && !list["last_attempt"].is_null())
+            });
+            if attempted {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the list was never tried: {:#?}",
+                server.log
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        }
 
         server.signal("TERM");
         assert!(server.wait_for_exit().success());

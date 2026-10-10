@@ -27,6 +27,7 @@ mod witness;
 
 use std::future::Future;
 use std::io::IsTerminal;
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -415,7 +416,14 @@ fn resolver(config: &Config, state: &Arc<PolicyState>) -> Result<Resolver> {
     info!(max_entries = config.cache.max_entries, "cache");
     let mut resolver = Resolver::new(vec![test_record()?, health_record()?]).with_cache(cache);
     if config.recursion.enabled {
-        let recursion = config.recursion.to_recursor_config(has_ipv6_route);
+        let mut recursion = config.recursion.to_recursor_config(has_ipv6_route);
+        recursion.local_addresses = config
+            .server
+            .listen
+            .iter()
+            .map(SocketAddr::ip)
+            .filter(|ip| !ip.is_unspecified())
+            .collect();
         info!(
             qname_minimisation = recursion.qname_minimisation,
             ipv6 = recursion.ipv6,
@@ -515,9 +523,10 @@ async fn serve(
         started: Timestamp::now(),
         leak,
     };
-    let mut plane = Some(
-        plane::ControlPlane::start(config, config_path, &sockets, secrets, &data, true).await?,
-    );
+    // The control plane may fail to start (a certificate that is not valid
+    // yet, a store that cannot be used): the node then answers without it
+    // rather than not at all.
+    let mut plane = start_control_plane(config, config_path, &sockets, secrets, &data).await?;
     let mut dns = tokio::spawn(server.run(until(stopped.clone())));
     for (name, fd) in sockets.named() {
         notify::store(name, fd);
@@ -571,6 +580,26 @@ async fn serve(
         plane.stop().await?;
     }
     Ok(())
+}
+
+/// Starts the control plane. Under fail-closed filtering a failure is the
+/// operator's choice not to run unfiltered, so it is returned; any other
+/// failure is logged and the node answers without the control plane.
+async fn start_control_plane(
+    config: &Config,
+    config_path: &Path,
+    sockets: &Sockets,
+    secrets: &Secrets,
+    data: &plane::DataPlane,
+) -> Result<Option<plane::ControlPlane>> {
+    match plane::ControlPlane::start(config, config_path, sockets, secrets, data, true).await {
+        Ok(plane) => Ok(Some(plane)),
+        Err(err) if config.filter.on_failure == config::OnFailure::Closed => Err(err),
+        Err(err) => {
+            error!("cannot start the control plane: {err:#}; answering queries without it");
+            Ok(None)
+        }
+    }
 }
 
 /// Where the upgrade's private socket goes: systemd's runtime directory

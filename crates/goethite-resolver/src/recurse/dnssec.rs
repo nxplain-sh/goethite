@@ -4,13 +4,15 @@
 //! the recursor fetches the records and keeps the chain of trust.
 //!
 //! Everything is bounded against hostile zones (KeyTrap, CVE-2023-50387,
-//! and NSEC3 hash floods): every signature check spends from a budget for
-//! the client's query, at most [`MAX_KEYS_PER_TAG`] keys are tried for one
-//! key tag and [`MAX_SIGS_PER_RRSET`] signatures for one RRset, and NSEC3
-//! proofs with more than [`MAX_NSEC3_ITERATIONS`] iterations count as
-//! insecure (RFC 9276) and are never hashed.
+//! and NSEC3 hash floods): every signature check and every DS digest spends
+//! from a budget for the client's query, at most [`MAX_KEYS_PER_TAG`] keys
+//! are tried for one key tag and [`MAX_SIGS_PER_RRSET`] signatures for one
+//! RRset, keys are matched to DS records by tag and algorithm before any
+//! digest, and NSEC3 proofs with more than [`MAX_NSEC3_ITERATIONS`]
+//! iterations count as insecure (RFC 9276) and are never hashed.
 
 use std::cmp::Ordering;
+use std::collections::HashMap;
 
 use goethite_proto::dnssec::{
     self, Dnskey, Nsec, Nsec3, Rrsig, algorithm_supported, digest_supported,
@@ -21,6 +23,9 @@ use goethite_proto::{Name, Record, RecordType};
 pub(super) const MAX_CHECKS: u32 = 64;
 /// The most keys tried for one key tag (several keys may share one).
 pub(super) const MAX_KEYS_PER_TAG: usize = 4;
+/// The most keys kept for one zone: a hostile DNSKEY RRset can hold
+/// thousands, and every trust entry would keep them all.
+pub(super) const MAX_ZONE_KEYS: usize = 16;
 /// The most signatures tried for one RRset.
 pub(super) const MAX_SIGS_PER_RRSET: usize = 8;
 /// NSEC3 proofs with more iterations count as insecure (RFC 9276).
@@ -133,6 +138,11 @@ pub(super) fn verify_rrset(
     let first = rrset.first()?;
     let owner = first.name();
     let labels = owner.labels().filter(|label| *label != b"*").count();
+    // The key tag of each key is computed once, not per signature.
+    let keys: Vec<(&Record, Dnskey)> = keys
+        .iter()
+        .filter_map(|key| Some((key, key.dnskey()?)))
+        .collect();
     let candidates = sigs.iter().filter_map(|record| {
         let rrsig = record.rrsig()?;
         (record.name() == owner
@@ -145,11 +155,10 @@ pub(super) fn verify_rrset(
         .then_some((record, rrsig))
     });
     for (record, rrsig) in candidates.take(MAX_SIGS_PER_RRSET) {
-        let matching = keys.iter().filter(|key| {
-            key.dnskey()
-                .is_some_and(|k| k.key_tag == rrsig.key_tag && k.algorithm == rrsig.algorithm)
-        });
-        for key in matching.take(MAX_KEYS_PER_TAG) {
+        let matching = keys
+            .iter()
+            .filter(|(_, key)| key.key_tag == rrsig.key_tag && key.algorithm == rrsig.algorithm);
+        for (key, _) in matching.take(MAX_KEYS_PER_TAG) {
             if !checks.spend() {
                 return None;
             }
@@ -187,19 +196,59 @@ pub(super) fn keys_from_ds(
 ) -> Option<(Vec<Record>, u32)> {
     let usable = usable_ds(ds);
     let keys = usable_keys(dnskeys);
-    let anchored: Vec<Record> = keys
-        .iter()
-        .filter(|key| usable.iter().any(|ds| dnssec::ds_matches(ds, key, zone)))
-        .take(MAX_KEYS_PER_TAG)
-        .cloned()
-        .collect();
+    // DS records by the key tag and algorithm they name: a key is hashed
+    // only against DS records that claim it, and each digest spends a check
+    // (KeyTrap, CVE-2023-50387).
+    let mut by_tag: HashMap<(u16, u8), Vec<&Record>> = HashMap::new();
+    for record in &usable {
+        if let Some(ds) = record.ds() {
+            by_tag
+                .entry((ds.key_tag, ds.algorithm))
+                .or_default()
+                .push(record);
+        }
+    }
+    let mut anchored = Vec::new();
+    for key in &keys {
+        if anchored.len() >= MAX_KEYS_PER_TAG {
+            break;
+        }
+        let Some(fields) = key.dnskey() else {
+            continue;
+        };
+        let Some(candidates) = by_tag.get(&(fields.key_tag, fields.algorithm)) else {
+            continue;
+        };
+        for record in candidates {
+            if !checks.spend() {
+                return None;
+            }
+            if dnssec::ds_matches(record, key, zone) {
+                anchored.push(key.clone());
+                break;
+            }
+        }
+    }
     let rrset: Vec<Record> = dnskeys
         .iter()
         .filter(|record| record.record_type() == RecordType::DNSKEY && record.name() == zone)
         .cloned()
         .collect();
     let verified = verify_rrset(&rrset, dnskeys, zone, &anchored, now, checks)?;
-    Some((keys, verified.ttl))
+    // Keep the anchored keys, then a few others (the zone's signing keys)
+    // rather than every usable key in a hostile DNSKEY set.
+    let mut kept = anchored;
+    if kept.len() < MAX_ZONE_KEYS {
+        for key in &keys {
+            if kept.len() >= MAX_ZONE_KEYS {
+                break;
+            }
+            if !kept.contains(key) {
+                kept.push(key.clone());
+            }
+        }
+    }
+    Some((kept, verified.ttl))
 }
 
 /// The DS records that can be used: supported algorithm and digest; and
@@ -292,6 +341,11 @@ pub(super) fn nsec_nxdomain(name: &Name, proof: &[Record]) -> bool {
     let Some((owner, nsec)) = covering_nsec(proof, name) else {
         return false;
     };
+    // The next name is below `name`: that makes `name` an empty
+    // non-terminal, which exists, so this is no NXDOMAIN proof.
+    if nsec.next.is_within(name) && nsec.next != *name {
+        return false;
+    }
     let encloser = [
         common_ancestor(name, owner),
         common_ancestor(name, &nsec.next),
@@ -343,10 +397,13 @@ pub(super) fn nsec_nodata(name: &Name, qtype: RecordType, proof: &[Record]) -> b
         && nsecs(proof).any(|(owner, nsec)| *owner == wildcard && without(&nsec))
 }
 
-/// NSEC proof for an answer synthesized from a wildcard: `name` itself
-/// does not exist.
-pub(super) fn nsec_wildcard(name: &Name, proof: &[Record]) -> bool {
-    covering_nsec(proof, name).is_some()
+/// NSEC proof for an answer synthesized from the wildcard below `encloser`:
+/// the next closer name does not exist (RFC 4035 5.3.4).
+pub(super) fn nsec_wildcard(name: &Name, encloser: &Name, proof: &[Record]) -> bool {
+    let Some(next_closer) = name.suffix(encloser.label_count().saturating_add(1)) else {
+        return false;
+    };
+    covering_nsec(proof, &next_closer).is_some()
 }
 
 /// The NSEC3 records of a proof, all with the same parameters as the
@@ -622,16 +679,17 @@ pub(super) const MAX_PROOFS: usize = 8;
 /// `records` grouped into RRsets (same owner and type), in order of first
 /// appearance.
 pub(super) fn rrsets(records: &[Record]) -> Vec<Vec<Record>> {
+    let mut index: HashMap<(Name, RecordType), usize> = HashMap::new();
     let mut sets: Vec<Vec<Record>> = Vec::new();
     for record in records {
-        let set = sets.iter_mut().find(|set| {
-            set.first().is_some_and(|first| {
-                first.name() == record.name() && first.record_type() == record.record_type()
-            })
-        });
-        match set {
-            Some(set) => set.push(record.clone()),
-            None => sets.push(vec![record.clone()]),
+        let key = (record.name().clone(), record.record_type());
+        if let Some(&at) = index.get(&key) {
+            if let Some(set) = sets.get_mut(at) {
+                set.push(record.clone());
+            }
+        } else {
+            index.insert(key, sets.len());
+            sets.push(vec![record.clone()]);
         }
     }
     sets
@@ -841,6 +899,64 @@ mod tests {
         assert!(keys_from_ds(&zone, &ds, &zsk_signed, NOW, &mut Checks::new(8)).is_none());
     }
 
+    #[test]
+    fn ds_digests_spend_from_the_budget() {
+        let zone = name("example.");
+        let ksk = Key::generate(&zone);
+        let rrset = vec![ksk.dnskey(3600)];
+        let mut dnskeys = rrset.clone();
+        dnskeys.push(sign(&ksk, &rrset));
+        let ds = vec![ksk.ds(86_400)];
+        let mut checks = Checks::new(8);
+        assert!(keys_from_ds(&zone, &ds, &dnskeys, NOW, &mut checks).is_some());
+        assert_eq!(checks.left(), 6, "one digest and one signature check");
+    }
+
+    #[test]
+    fn ds_digests_stop_at_the_budget() {
+        let zone = name("example.");
+        let ksk = Key::generate(&zone);
+        let rrset = vec![ksk.dnskey(3600)];
+        let mut dnskeys = rrset.clone();
+        dnskeys.push(sign(&ksk, &rrset));
+        let tag = ksk.dnskey(3600).dnskey().unwrap().key_tag;
+        // A DS with the key's tag and algorithm, but a different digest:
+        // only comparing digests tells it apart, which must spend a check.
+        let forged = Record::ds_record(zone.clone(), 86_400, tag, 15, 2, vec![0; 32]);
+        let ds = vec![forged, ksk.ds(86_400)];
+        let mut checks = Checks::new(1);
+        assert!(keys_from_ds(&zone, &ds, &dnskeys, NOW, &mut checks).is_none());
+        assert!(checks.ran_out(), "the second digest needed a check");
+    }
+
+    #[test]
+    fn zone_keys_are_capped() {
+        let zone = name("example.");
+        let ksk = Key::generate(&zone);
+        let mut rrset = vec![ksk.dnskey(3600)];
+        for _ in 0..MAX_ZONE_KEYS {
+            rrset.push(Key::generate(&zone).dnskey(3600));
+        }
+        let mut dnskeys = rrset.clone();
+        dnskeys.push(sign(&ksk, &rrset));
+        let ds = vec![ksk.ds(86_400)];
+        let (keys, _) =
+            keys_from_ds(&zone, &ds, &dnskeys, NOW, &mut Checks::new(MAX_CHECKS)).unwrap();
+        assert_eq!(keys.len(), MAX_ZONE_KEYS);
+        // The anchored key comes first.
+        let anchored = ksk.dnskey(3600).dnskey().unwrap().key_tag;
+        assert_eq!(keys[0].dnskey().unwrap().key_tag, anchored);
+    }
+
+    #[test]
+    fn rrsets_follow_first_appearance() {
+        let first = Record::a(name("a.example."), 300, Ipv4Addr::new(192, 0, 2, 1));
+        let cname = Record::cname(name("b.example."), 300, name("a.example."));
+        let second = Record::a(name("a.example."), 300, Ipv4Addr::new(192, 0, 2, 2));
+        let sets = rrsets(&[first.clone(), cname.clone(), second.clone()]);
+        assert_eq!(sets, vec![vec![first, second], vec![cname]]);
+    }
+
     fn nsec(owner: &str, next: &str, types: &[RecordType]) -> Record {
         signing::nsec(&name(owner), 300, &name(next), types)
     }
@@ -875,8 +991,33 @@ mod tests {
         assert!(nsec_nodata(&name("d.example."), T::DS, &insecure));
         // But that delegation NSEC proves nothing about other types there.
         assert!(!nsec_nodata(&name("d.example."), T::TXT, &insecure));
-        assert!(nsec_wildcard(&name("c.example."), &proof));
+        assert!(nsec_wildcard(
+            &name("c.example."),
+            &name("example."),
+            &proof
+        ));
+        // A wildcard at example would need b.example not to exist: an
+        // on-path attacker with b.example's own NSEC is not believed.
+        let attack = vec![nsec("b.example.", "c.example.", &[T::A, T::NSEC, T::RRSIG])];
+        assert!(!nsec_wildcard(
+            &name("a.b.example."),
+            &name("example."),
+            &attack
+        ));
         // An empty non-terminal: b.c.example has records, c.example none.
+        let ent = vec![
+            nsec(
+                "example.",
+                "a.example.",
+                &[T::SOA, T::NS, T::NSEC, T::RRSIG],
+            ),
+            nsec("a.example.", "b.c.example.", &[T::A, T::NSEC, T::RRSIG]),
+        ];
+        assert!(
+            !nsec_nxdomain(&name("c.example."), &ent),
+            "c.example exists"
+        );
+        assert!(nsec_nodata(&name("c.example."), T::TXT, &ent));
         let ent = vec![nsec(
             "a.example.",
             "b.c.example.",

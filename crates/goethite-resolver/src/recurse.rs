@@ -13,7 +13,8 @@
 //! Everything is bounded: [`MAX_SENT`] queries and the configured time for
 //! one client query, all lookups included; [`MAX_REFERRALS`] referrals for
 //! one name; name server address lookups nested [`MAX_DEPTH`] deep; the
-//! CNAME chain; exchanges in flight; and the infrastructure tables.
+//! CNAME chain; exchanges in flight, per server and per zone too; and the
+//! infrastructure tables.
 //!
 //! Answers are validated with DNSSEC (RFC 4033 to 4035, RFC 5155) unless
 //! that is turned off or the client sets CD: secure ones get the AD bit,
@@ -28,7 +29,7 @@ mod special;
 mod tests;
 mod validate;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::net::{IpAddr, SocketAddr};
 use std::pin::Pin;
@@ -72,6 +73,10 @@ const MAX_NS_LOOKUPS: usize = 4;
 /// The most addresses tried for one question to one zone.
 const MAX_ADDRESSES: usize = 12;
 
+/// The most addresses kept for one name server: a hostile referral can send
+/// thousands of glue records, once, and every trust entry would keep them.
+const MAX_ADDRESSES_PER_NAME: usize = 8;
+
 /// How often priming may be tried when it fails.
 const PRIME_RETRY: Duration = Duration::from_secs(60);
 
@@ -99,6 +104,9 @@ pub struct RecursorConfig {
     /// DS records for the root zone to trust instead of IANA's trust
     /// anchors, for tests.
     pub anchors: Option<Vec<Record>>,
+    /// The node's own addresses. Recursion never asks them: a delegation or
+    /// glue pointing there would make goethite resolve against itself.
+    pub local_addresses: Vec<IpAddr>,
 }
 
 impl Default for RecursorConfig {
@@ -113,6 +121,7 @@ impl Default for RecursorConfig {
             roots: None,
             dnssec: true,
             anchors: None,
+            local_addresses: Vec::new(),
         }
     }
 }
@@ -217,6 +226,20 @@ impl Budget {
             return Err(RecurseError::Deadline);
         }
         Ok(left)
+    }
+}
+
+/// A fetch slot claimed for one server and zone, released when the query
+/// ends either way.
+struct Fetch<'a> {
+    infra: &'a Infra,
+    ip: IpAddr,
+    zone: Name,
+}
+
+impl Drop for Fetch<'_> {
+    fn drop(&mut self) {
+        self.infra.release_fetch(self.ip, &self.zone);
     }
 }
 
@@ -429,11 +452,24 @@ impl Recursor {
         let mut segments = Vec::new();
         let mut seen = HashSet::new();
         let mut at = name.clone();
+        let mut links = 0_usize;
         for _ in 0..=MAX_CNAME_CHAIN {
             if !seen.insert(at.clone()) {
                 return Err(RecurseError::Chain);
             }
             let found = self.lookup(&at, qtype, budget, depth).await?;
+            // One segment's zone may hold a whole chain of its own: count
+            // every link, so the total stays within the limit.
+            links = links.saturating_add(
+                found
+                    .records
+                    .iter()
+                    .filter(|record| record.record_type() == RecordType::CNAME)
+                    .count(),
+            );
+            if links > MAX_CNAME_CHAIN {
+                return Err(RecurseError::Chain);
+            }
             let next = found.next.clone();
             segments.push(found);
             match next {
@@ -514,12 +550,19 @@ impl Recursor {
                     minimise = false;
                 }
                 Kind::Answer { .. } | Kind::NoData { .. } | Kind::NxDomain { .. } => {
-                    let (rcode, records, next, soa) = match kind {
+                    let (rcode, found_name, records, next, soa) = match kind {
                         Kind::Answer { records, next } => {
-                            (ResponseCode::NO_ERROR, records, next, None)
+                            (ResponseCode::NO_ERROR, name.clone(), records, next, None)
                         }
-                        Kind::NoData { soa } => (ResponseCode::NO_ERROR, Vec::new(), None, soa),
-                        _ => (ResponseCode::NX_DOMAIN, Vec::new(), None, kind_soa(kind)),
+                        Kind::NoData { soa } => {
+                            (ResponseCode::NO_ERROR, name.clone(), Vec::new(), None, soa)
+                        }
+                        Kind::NxDomain { records, end, soa } => {
+                            (ResponseCode::NX_DOMAIN, end, records, None, soa)
+                        }
+                        Kind::Referral { .. } | Kind::Lame | Kind::Failed(_) => {
+                            return Err(RecurseError::NoServer);
+                        }
                     };
                     let evidence = if self.config.dnssec {
                         dnssec::evidence(&zone, response.answers.iter().chain(&response.authority))
@@ -527,7 +570,7 @@ impl Recursor {
                         Vec::new()
                     };
                     return Ok(Found {
-                        name: name.clone(),
+                        name: found_name,
                         qtype,
                         rcode,
                         records,
@@ -546,17 +589,15 @@ impl Recursor {
 
     /// Remembers glue addresses from a referral, by name server.
     fn learn_glue(&self, glue: Vec<(Name, IpAddr, u32)>, now: Instant) {
-        let mut by_server: Vec<(Name, Vec<IpAddr>, u32)> = Vec::new();
+        let mut by_server: HashMap<Name, (Vec<IpAddr>, u32)> = HashMap::new();
         for (server, ip, ttl) in glue {
-            match by_server.iter_mut().find(|(name, _, _)| *name == server) {
-                Some((_, ips, min_ttl)) => {
-                    ips.push(ip);
-                    *min_ttl = (*min_ttl).min(ttl);
-                }
-                None => by_server.push((server, vec![ip], ttl)),
+            let entry = by_server.entry(server).or_insert_with(|| (Vec::new(), ttl));
+            if entry.0.len() < MAX_ADDRESSES_PER_NAME {
+                entry.0.push(ip);
             }
+            entry.1 = entry.1.min(ttl);
         }
-        for (server, ips, ttl) in by_server {
+        for (server, (ips, ttl)) in by_server {
             self.infra.set_addresses(server, ips, ttl, now);
         }
     }
@@ -629,6 +670,22 @@ impl Recursor {
         })
     }
 
+    /// Whether recursion must never send a query to `ip`: loopback,
+    /// unspecified, multicast or broadcast addresses, or one of the node's
+    /// own, which would make goethite resolve against itself (Unbound's
+    /// `do-not-query-localhost`). The configured root hints are exempt; they
+    /// are a test hook and are never loopback in production.
+    fn refused(&self, ip: IpAddr) -> bool {
+        if self.roots.iter().any(|(_, ips)| ips.contains(&ip)) {
+            return false;
+        }
+        ip.is_loopback()
+            || ip.is_unspecified()
+            || ip.is_multicast()
+            || matches!(ip, IpAddr::V4(ip) if ip.is_broadcast())
+            || self.config.local_addresses.contains(&ip)
+    }
+
     /// Asks `zone`'s servers about `name`, one after another, until one
     /// gives a usable response; looks up name server addresses as needed.
     async fn ask_with_response(
@@ -648,7 +705,9 @@ impl Recursor {
                 .iter()
                 .filter_map(|server| self.known_addresses(server, now))
                 .flat_map(|ips| ips.iter().copied().collect::<Vec<_>>())
-                .filter(|ip| (ip.is_ipv4() || self.config.ipv6) && !tried.contains(ip))
+                .filter(|ip| {
+                    (ip.is_ipv4() || self.config.ipv6) && !tried.contains(ip) && !self.refused(*ip)
+                })
                 .collect();
             ips.sort_unstable();
             ips.dedup();
@@ -659,7 +718,7 @@ impl Recursor {
                 }
                 tried.insert(ip);
                 let server = SocketAddr::new(ip, self.config.port);
-                let response = match self.query(server, name, qtype, budget).await {
+                let response = match self.query(zone, server, name, qtype, budget).await {
                     Ok(response) => response,
                     Err(err) if err.is_fatal() => return Err(err),
                     Err(_) => continue,
@@ -711,6 +770,7 @@ impl Recursor {
                     for record in segments.iter().flat_map(|found| &found.records) {
                         if record.record_type() == qtype
                             && let Some(ip) = record.ip()
+                            && ips.len() < MAX_ADDRESSES_PER_NAME
                         {
                             ips.push(ip);
                             ttl = ttl.min(record.ttl());
@@ -730,6 +790,7 @@ impl Recursor {
     /// Sends one query to `server`, in a span of its own.
     async fn query(
         &self,
+        zone: &Name,
         server: SocketAddr,
         name: &Name,
         qtype: RecordType,
@@ -747,7 +808,7 @@ impl Recursor {
             span.record("name", field::display(name));
         }
         let result = self
-            .query_unspanned(server, name, qtype, budget)
+            .query_unspanned(zone, server, name, qtype, budget)
             .instrument(span.clone())
             .await;
         match &result {
@@ -761,22 +822,31 @@ impl Recursor {
     /// again without 0x20 if the server does not keep case.
     async fn query_unspanned(
         &self,
+        zone: &Name,
         server: SocketAddr,
         name: &Name,
         qtype: RecordType,
         budget: &mut Budget,
     ) -> Result<Response, RecurseError> {
         let ip = server.ip();
+        // A server, or a zone, that stalls may not take the whole pool of
+        // in-flight exchanges: refuse rather than queue.
+        if !self.infra.claim_fetch(ip, zone) {
+            debug!(%server, %zone, "too many fetches in flight; not asking");
+            return Err(RecurseError::NoServer);
+        }
+        let _fetch = Fetch {
+            infra: &self.infra,
+            ip,
+            zone: zone.clone(),
+        };
         let mut randomize = self.infra.keeps_case(ip);
         let mut tcp = false;
         loop {
             let left = budget.spend()?;
             let outgoing = outgoing(name, qtype, randomize, self.config.dnssec);
-            let wait = if tcp {
-                left
-            } else {
-                self.infra.attempt_timeout(ip).min(left)
-            };
+            // TCP too waits a few round-trip times, not the whole budget.
+            let wait = self.infra.attempt_timeout(ip).min(left);
             let started = Instant::now();
             let result = timeout(wait, async {
                 let _permit = self.in_flight.acquire().await;
@@ -879,7 +949,7 @@ pub fn check_dnssec(
         .collect();
     let _ = dnssec::nsec_nxdomain(name, &proofs);
     let _ = dnssec::nsec_nodata(name, qtype, &proofs);
-    let _ = dnssec::nsec_wildcard(name, &proofs);
+    let _ = dnssec::nsec_wildcard(name, zone, &proofs);
     let _ = dnssec::nsec3_nxdomain(zone, name, &proofs);
     let _ = dnssec::nsec3_nodata(zone, name, qtype, &proofs);
     let _ = dnssec::nsec3_wildcard(zone, name, zone, &proofs);
@@ -945,13 +1015,6 @@ fn outgoing(name: &Name, qtype: RecordType, randomize: bool, dnssec_ok: bool) ->
             dnssec_ok,
             ..Edns::ours()
         }),
-    }
-}
-
-fn kind_soa(kind: Kind) -> Option<Record> {
-    match kind {
-        Kind::NoData { soa } | Kind::NxDomain { soa } => soa,
-        _ => None,
     }
 }
 

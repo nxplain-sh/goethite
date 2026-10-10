@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use goethite_api::{ApiListeners, Serving, serve_router};
+use goethite_api::{ApiListeners, HANDSHAKE_TIMEOUT, Serving, serve_router};
 use goethite_cluster::raft::node::RaftNode;
 use goethite_cluster::raft::{members_of, state_of};
 use goethite_cluster::server::{self, Shared};
@@ -105,6 +105,7 @@ pub(crate) fn run(config_path: &Path) -> Result<()> {
             router: server::router(shared),
             tls: Some(identity.server_config(peers.clone())?),
             max_connections: MAX_CONNECTIONS,
+            first_request_timeout: HANDSHAKE_TIMEOUT,
         };
         let (stop, stopped) = watch::channel(false);
         let serve = tokio::spawn(serve_router(

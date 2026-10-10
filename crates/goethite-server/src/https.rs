@@ -23,7 +23,7 @@ use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
 use hyper_util::server::conn::auto::Builder;
 use tokio::net::TcpStream;
-use tokio::sync::watch;
+use tokio::sync::{Notify, watch};
 use tokio::time::timeout;
 use tokio_rustls::server::TlsStream;
 use tracing::{debug, trace};
@@ -42,6 +42,12 @@ const MAX_STREAMS: u32 = 64;
 /// The largest request head: request line and headers. A `GET` of the
 /// largest DNS message does not fit; such messages are sent with `POST`.
 const MAX_HEAD: usize = 64 * 1024;
+
+/// The HTTP/2 flow-control windows: enough for one largest body per stream,
+/// and a few bodies in flight together, instead of hyper's 1 MiB defaults a
+/// client could fill with tiny frames.
+const STREAM_WINDOW: u32 = 65_536;
+const CONNECTION_WINDOW: u32 = 262_144;
 
 /// How long the connection's last requests may take once it is closing.
 const CLOSE_GRACE: Duration = Duration::from_secs(5);
@@ -81,11 +87,12 @@ pub(crate) async fn serve_connection(
         .http2()
         .timer(TokioTimer::new())
         .max_concurrent_streams(MAX_STREAMS)
-        .max_header_list_size(u32::try_from(MAX_HEAD).unwrap_or(u32::MAX));
+        .max_header_list_size(u32::try_from(MAX_HEAD).unwrap_or(u32::MAX))
+        .initial_stream_window_size(STREAM_WINDOW)
+        .initial_connection_window_size(CONNECTION_WINDOW);
     let connection = builder.serve_connection(TokioIo::new(stream), service);
     tokio::pin!(connection);
     loop {
-        let quiet_until = activity.quiet_until(idle);
         tokio::select! {
             served = connection.as_mut() => {
                 if let Err(err) = served {
@@ -94,7 +101,7 @@ pub(crate) async fn serve_connection(
                 return;
             }
             () = stopped(&mut stop) => break,
-            () = tokio::time::sleep_until(quiet_until.into()) => {
+            () = activity.wait(idle) => {
                 if activity.is_idle(idle) {
                     trace!(%peer, "closing idle DNS over HTTPS connection");
                     break;
@@ -113,6 +120,8 @@ struct Activity {
     open: AtomicUsize,
     /// Milliseconds from `started` to the end of the last request.
     last: AtomicU64,
+    /// Woken when a request ends, to re-check the deadline.
+    notify: Notify,
 }
 
 impl Activity {
@@ -121,6 +130,7 @@ impl Activity {
             started: Instant::now(),
             open: AtomicUsize::new(0),
             last: AtomicU64::new(0),
+            notify: Notify::new(),
         }
     }
 
@@ -128,6 +138,22 @@ impl Activity {
     fn begin(self: &Arc<Self>) -> Busy {
         self.open.fetch_add(1, Ordering::Relaxed);
         Busy(Arc::clone(self))
+    }
+
+    /// Waits for the connection to be quiet for `idle`, or for a request to
+    /// end. A deadline already past means a request is open past it: wait
+    /// for the wake-up from its end instead of returning at once, which
+    /// would spin the caller until the request finishes.
+    async fn wait(&self, idle: Duration) {
+        let quiet_until = self.quiet_until(idle);
+        if Instant::now() >= quiet_until {
+            self.notify.notified().await;
+            return;
+        }
+        tokio::select! {
+            () = tokio::time::sleep_until(quiet_until.into()) => {}
+            () = self.notify.notified() => {}
+        }
     }
 
     /// When the connection has gone `idle` without a request, if none
@@ -153,6 +179,7 @@ impl Drop for Busy {
         let elapsed = u64::try_from(self.0.started.elapsed().as_millis()).unwrap_or(u64::MAX);
         self.0.last.store(elapsed, Ordering::Relaxed);
         self.0.open.fetch_sub(1, Ordering::Relaxed);
+        self.0.notify.notify_one();
     }
 }
 
@@ -313,14 +340,35 @@ impl Context {
             return Err(too_large);
         }
         let body = Limited::new(request.into_body(), limit);
-        match timeout(self.body_timeout, body.collect()).await {
-            Ok(Ok(collected)) => Ok((kind, collected.to_bytes().to_vec())),
+        match timeout(self.body_timeout, one_buffer(body)).await {
+            Ok(Ok(bytes)) => Ok((kind, bytes)),
             Ok(Err(err)) if err.is::<LengthLimitError>() => Err(too_large),
             Ok(Err(err)) => {
                 debug!(peer = %self.peer, %err, "cannot read a DNS over HTTPS body");
                 Err((StatusCode::BAD_REQUEST, "cannot read the body"))
             }
             Err(_) => Err((StatusCode::REQUEST_TIMEOUT, "the body took too long")),
+        }
+    }
+}
+
+/// Reads `body` frame by frame into one buffer. Unlike `collect`, which
+/// keeps a buffer per frame until the end, a flood of tiny frames costs one
+/// buffer; the caller's [`Limited`] caps its size.
+async fn one_buffer<B>(mut body: B) -> Result<Vec<u8>, B::Error>
+where
+    B: hyper::body::Body<Data = Bytes> + Unpin,
+{
+    let mut out = Vec::new();
+    loop {
+        match body.frame().await {
+            None => return Ok(out),
+            Some(Ok(frame)) => {
+                if let Ok(data) = frame.into_data() {
+                    out.extend_from_slice(&data);
+                }
+            }
+            Some(Err(err)) => return Err(err),
         }
     }
 }
@@ -388,4 +436,62 @@ fn plain(status: StatusCode, text: &str) -> Response<Full<Bytes>> {
         HeaderValue::from_static("text/plain; charset=utf-8"),
     );
     response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A body of one-byte frames.
+    struct TinyFrames(usize);
+
+    impl hyper::body::Body for TinyFrames {
+        type Data = Bytes;
+        type Error = Infallible;
+
+        fn poll_frame(
+            self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Option<Result<hyper::body::Frame<Bytes>, Infallible>>> {
+            let frames = self.get_mut();
+            if frames.0 == 0 {
+                return std::task::Poll::Ready(None);
+            }
+            frames.0 = frames.0.saturating_sub(1);
+            std::task::Poll::Ready(Some(Ok(hyper::body::Frame::data(Bytes::from_static(b"x")))))
+        }
+    }
+
+    #[tokio::test]
+    async fn a_flood_of_tiny_frames_costs_one_buffer() {
+        let bytes = one_buffer(TinyFrames(10_000)).await.unwrap();
+        assert_eq!(bytes, vec![b'x'; 10_000]);
+        let err = one_buffer(Limited::new(TinyFrames(11), 10))
+            .await
+            .unwrap_err();
+        assert!(err.is::<LengthLimitError>());
+    }
+
+    #[tokio::test]
+    async fn an_open_request_does_not_spin_the_idle_wait() {
+        let activity = Arc::new(Activity::new());
+        let busy = activity.begin();
+        // The deadline has passed (a request outlived its idle period, as
+        // with a trickling POST body), but the request is still open.
+        assert!(!activity.is_idle(Duration::ZERO));
+        assert!(
+            timeout(Duration::from_millis(50), activity.wait(Duration::ZERO))
+                .await
+                .is_err(),
+            "the wait returned while a request was open"
+        );
+        // The request ends: the wake-up lets the caller re-check and close.
+        drop(busy);
+        timeout(Duration::from_secs(1), async {
+            activity.wait(Duration::ZERO).await;
+            assert!(activity.is_idle(Duration::ZERO));
+        })
+        .await
+        .expect("the wait woke when the request ended");
+    }
 }

@@ -25,7 +25,7 @@ pub use codec::{DecodeError, DnsCodec, EncodeError, ErrorContext, ResponseError,
 pub use hickory_codec::HickoryCodec;
 pub use message::{
     Edns, HEADER_LEN, MAX_UDP_PAYLOAD, MIN_UDP_PAYLOAD, QUERY_PADDING_BLOCK, Query, Question,
-    RESPONSE_PADDING_BLOCK, Record, Response,
+    RESPONSE_PADDING_BLOCK, Record, Response, records_wire_len,
 };
 pub use name::{Name, NameError};
 pub use types::{Opcode, RecordClass, RecordType, ResponseCode};

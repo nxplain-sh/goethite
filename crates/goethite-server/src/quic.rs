@@ -264,6 +264,25 @@ fn client_id(connection: &Connection, shared: &Shared) -> Option<String> {
     doh::client_id_from_server_name(&asked, ours)
 }
 
+/// Reads one stream into a single buffer of at most [`doq::MAX_STREAM_LEN`]
+/// bytes. Unlike quinn's `read_to_end`, which keeps every chunk until the
+/// end, a flood of tiny chunks costs one buffer.
+async fn read_stream(recv: &mut RecvStream) -> Result<Vec<u8>, quinn::ReadToEndError> {
+    let mut stream = Vec::new();
+    loop {
+        match recv.read_chunk(usize::MAX, true).await {
+            Ok(Some(chunk)) => {
+                if stream.len().saturating_add(chunk.bytes.len()) > doq::MAX_STREAM_LEN {
+                    return Err(quinn::ReadToEndError::TooLong);
+                }
+                stream.extend_from_slice(&chunk.bytes);
+            }
+            Ok(None) => return Ok(stream),
+            Err(err) => return Err(err.into()),
+        }
+    }
+}
+
 /// Answers the query on one stream. An error is the client's protocol
 /// error, which closes the connection.
 async fn answer(
@@ -274,7 +293,7 @@ async fn answer(
     client_id: Option<Arc<str>>,
     idle: Duration,
 ) -> Result<(), doq::DoqError> {
-    let stream = match timeout(idle, recv.read_to_end(doq::MAX_STREAM_LEN)).await {
+    let stream = match timeout(idle, read_stream(&mut recv)).await {
         Ok(Ok(stream)) => stream,
         Ok(Err(quinn::ReadToEndError::TooLong)) => return Err(doq::DoqError::TooLong),
         Ok(Err(err)) => {

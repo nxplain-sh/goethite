@@ -93,7 +93,15 @@ impl Recursor {
             let result = if segment.records.is_empty() {
                 self.validate_negative(segment, budget, v).await?
             } else {
-                self.validate_positive(segment, budget, v).await?
+                let positive = self.validate_positive(segment, budget, v).await?;
+                if segment.rcode == ResponseCode::NX_DOMAIN {
+                    // The chain ends in a name that does not exist: its
+                    // denial needs proving too (RFC 6604).
+                    let negative = self.validate_negative(segment, budget, v).await?;
+                    positive.max(negative)
+                } else {
+                    positive
+                }
             };
             security = security.max(result);
             if security == Security::Bogus {
@@ -256,7 +264,7 @@ impl Recursor {
         };
         let owner = first.name();
         let (proofs, _) = dnssec::verified_proofs(evidence, signer, &keys, v.now, &mut v.checks);
-        if dnssec::nsec_wildcard(owner, &proofs) {
+        if dnssec::nsec_wildcard(owner, &encloser, &proofs) {
             return Ok(Security::Secure);
         }
         let denial = dnssec::nsec3_wildcard(signer, owner, &encloser, &proofs);

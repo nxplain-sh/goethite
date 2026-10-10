@@ -57,7 +57,10 @@ pub use cluster::{
 pub use docs::{EmbeddedDocs, SCALAR as DOCS_SCALAR};
 pub use error::{ApiError, ErrorBody, ErrorDetail};
 pub use openapi::{openapi, openapi_json};
-pub use serve::{ApiListeners, MAX_CONNECTIONS, PeerCertificate, Serving, serve, serve_router};
+pub use serve::{
+    ApiListeners, HANDSHAKE_TIMEOUT, MAX_CONNECTIONS, MAX_CONNECTIONS_PER_PEER, PeerCertificate,
+    Serving, serve, serve_router,
+};
 pub use web::{EmbeddedWeb, WebAssets};
 
 /// The checks made on every request's `Host`, `Origin` and path, for the
@@ -88,7 +91,10 @@ pub struct ApiConfig {
 /// What changed in the store, so the data plane knows what to recompile.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Change {
-    /// Lists or custom rules: the filter must be recompiled.
+    /// Filter lists: the filter must be recompiled, and the lists fetched
+    /// now rather than at the next scheduled refresh.
+    Lists,
+    /// Custom rules: the filter must be recompiled.
     Filter,
     /// Groups, clients, schedules, local records or settings: only the
     /// policy.

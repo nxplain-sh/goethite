@@ -6,17 +6,18 @@
 //! how long the TLS handshake and the request headers may take, and in how
 //! long shutdown waits for them.
 
+use std::collections::HashMap;
 use std::future::Future;
 use std::io;
-use std::net::{SocketAddr, TcpListener as StdListener};
-use std::sync::Arc;
+use std::net::{IpAddr, SocketAddr, TcpListener as StdListener};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
 use hyper_util::server::conn::auto::Builder;
 use hyper_util::service::TowerToHyperService;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{Semaphore, watch};
+use tokio::sync::{Semaphore, oneshot, watch};
 use tokio::task::JoinSet;
 use tokio::time::timeout;
 use tokio_rustls::TlsAcceptor;
@@ -28,8 +29,16 @@ use crate::{Api, router};
 /// The most API connections served at once.
 pub const MAX_CONNECTIONS: usize = 64;
 
+/// The most connections served at once from one peer address.
+pub const MAX_CONNECTIONS_PER_PEER: usize = 16;
+
 /// How long the TLS handshake and the request headers may take.
-const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How often a quiet HTTP/2 connection is pinged, and how long the reply
+/// may take: a peer that went away is dropped instead of holding a slot.
+const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(30);
+const KEEP_ALIVE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// How long shutdown waits for open connections.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
@@ -100,6 +109,7 @@ pub async fn serve(
         router: router(&api),
         tls: api.config.tls.clone(),
         max_connections: MAX_CONNECTIONS,
+        first_request_timeout: HANDSHAKE_TIMEOUT,
     };
     serve_router(listeners, serving, shutdown).await
 }
@@ -114,6 +124,9 @@ pub struct Serving {
     pub tls: Option<Arc<rustls::ServerConfig>>,
     /// The most connections served at once; more are closed at once.
     pub max_connections: usize,
+    /// How long a connection may wait for its first request; without one it
+    /// is closed, so silent connections cannot hold its slot.
+    pub first_request_timeout: Duration,
 }
 
 impl std::fmt::Debug for Serving {
@@ -122,6 +135,7 @@ impl std::fmt::Debug for Serving {
             .field("name", &self.name)
             .field("tls", &self.tls.is_some())
             .field("max_connections", &self.max_connections)
+            .field("first_request_timeout", &self.first_request_timeout)
             .finish_non_exhaustive()
     }
 }
@@ -147,6 +161,7 @@ pub async fn serve_router(
         router,
         tls,
         max_connections,
+        first_request_timeout,
     } = serving;
     let tls = tls.map(TlsAcceptor::from);
     let scheme = if tls.is_some() { "https" } else { "http" };
@@ -163,6 +178,7 @@ pub async fn serve_router(
             router.clone(),
             tls.clone(),
             Arc::clone(&slots),
+            first_request_timeout,
             stop_rx.clone(),
         ));
     }
@@ -172,14 +188,55 @@ pub async fn serve_router(
     Ok(())
 }
 
+/// Live connections by peer address, to cap one client.
+#[derive(Default)]
+struct PeerConnections(Mutex<HashMap<IpAddr, usize>>);
+
+impl PeerConnections {
+    /// Counts one connection from `ip`, or refuses when it has too many.
+    fn take(self: &Arc<Self>, ip: IpAddr) -> Option<PeerConnection> {
+        let mut counts = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let count = counts.entry(ip).or_insert(0);
+        if *count >= MAX_CONNECTIONS_PER_PEER {
+            return None;
+        }
+        *count = count.saturating_add(1);
+        drop(counts);
+        Some(PeerConnection {
+            counts: Arc::clone(self),
+            ip,
+        })
+    }
+}
+
+/// One counted connection; uncounted when dropped.
+struct PeerConnection {
+    counts: Arc<PeerConnections>,
+    ip: IpAddr,
+}
+
+impl Drop for PeerConnection {
+    fn drop(&mut self) {
+        let mut counts = self.counts.0.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(count) = counts.get_mut(&self.ip) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                counts.remove(&self.ip);
+            }
+        }
+    }
+}
+
 async fn accept(
     name: &'static str,
     listener: TcpListener,
     router: axum::Router,
     tls: Option<TlsAcceptor>,
     slots: Arc<Semaphore>,
+    first_request_timeout: Duration,
     mut stop: watch::Receiver<bool>,
 ) {
+    let peers = Arc::new(PeerConnections::default());
     let mut connections = JoinSet::new();
     loop {
         let accepted = tokio::select! {
@@ -199,11 +256,39 @@ async fn accept(
             debug!(%peer, "too many {name} connections, closing");
             continue;
         };
-        let router = router.clone().layer(axum::Extension(PeerAddr(peer)));
+        let Some(connection_slot) = peers.take(peer.ip()) else {
+            debug!(%peer, "too many {name} connections from one address, closing");
+            continue;
+        };
+        // The first request stops the deadline; until then a connection
+        // that sends nothing holds its slot for a short time only.
+        let (first_tx, first_rx) = oneshot::channel::<()>();
+        let first_tx = Arc::new(Mutex::new(Some(first_tx)));
+        let router =
+            router
+                .clone()
+                .layer(axum::Extension(PeerAddr(peer)))
+                .layer(axum::middleware::from_fn(
+                    move |request: axum::extract::Request, next: axum::middleware::Next| {
+                        let first_tx = Arc::clone(&first_tx);
+                        async move {
+                            if let Some(tx) = first_tx
+                                .lock()
+                                .unwrap_or_else(PoisonError::into_inner)
+                                .take()
+                            {
+                                let _ = tx.send(());
+                            }
+                            next.run(request).await
+                        }
+                    },
+                ));
         let tls = tls.clone();
         connections.spawn(async move {
             let _permit = permit;
-            if let Err(err) = connection(stream, tls, router).await {
+            let _connection_slot = connection_slot;
+            if let Err(err) = connection(stream, tls, router, first_rx, first_request_timeout).await
+            {
                 debug!(%peer, %err, "{name} connection ended");
             }
         });
@@ -227,34 +312,56 @@ async fn connection(
     stream: TcpStream,
     tls: Option<TlsAcceptor>,
     router: axum::Router,
+    mut first_request: oneshot::Receiver<()>,
+    first_request_timeout: Duration,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut builder = Builder::new(TokioExecutor::new());
     builder
         .http1()
         .timer(TokioTimer::new())
         .header_read_timeout(HANDSHAKE_TIMEOUT);
-    builder.http2().timer(TokioTimer::new());
-    match tls {
-        Some(acceptor) => {
-            let stream = timeout(HANDSHAKE_TIMEOUT, acceptor.accept(stream)).await??;
-            let certificate = stream
-                .get_ref()
-                .1
-                .peer_certificates()
-                .and_then(|chain| chain.first())
-                .map(|cert| PeerCertificate(Arc::from(cert.as_ref())));
-            let router = match certificate {
-                Some(certificate) => router.layer(axum::Extension(certificate)),
-                None => router,
-            };
-            builder
-                .serve_connection(TokioIo::new(stream), TowerToHyperService::new(router))
-                .await
+    builder
+        .http2()
+        .timer(TokioTimer::new())
+        .keep_alive_interval(KEEP_ALIVE_INTERVAL)
+        .keep_alive_timeout(KEEP_ALIVE_TIMEOUT);
+    let mut serving = std::pin::pin!(async move {
+        match tls {
+            Some(acceptor) => {
+                let stream = timeout(HANDSHAKE_TIMEOUT, acceptor.accept(stream)).await??;
+                let certificate = stream
+                    .get_ref()
+                    .1
+                    .peer_certificates()
+                    .and_then(|chain| chain.first())
+                    .map(|cert| PeerCertificate(Arc::from(cert.as_ref())));
+                let router = match certificate {
+                    Some(certificate) => router.layer(axum::Extension(certificate)),
+                    None => router,
+                };
+                builder
+                    .serve_connection(TokioIo::new(stream), TowerToHyperService::new(router))
+                    .await
+            }
+            None => {
+                builder
+                    .serve_connection(TokioIo::new(stream), TowerToHyperService::new(router))
+                    .await
+            }
         }
-        None => {
-            builder
-                .serve_connection(TokioIo::new(stream), TowerToHyperService::new(router))
-                .await
+    });
+    let first_arrived = tokio::select! {
+        result = serving.as_mut() => {
+            result?;
+            return Ok(());
         }
+        () = tokio::time::sleep(first_request_timeout) => false,
+        _ = &mut first_request => true,
+    };
+    if !first_arrived {
+        debug!("no request arrived in time; closing the connection");
+        return Ok(());
     }
+    serving.as_mut().await?;
+    Ok(())
 }

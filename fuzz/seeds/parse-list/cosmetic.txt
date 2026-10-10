@@ -1,0 +1,13 @@
+! Cosmetic and HTML filtering rules are unsupported, never blocks
+example.com##.banner
+example.com#@#.banner
+example.com#?#.banner:has(.ad)
+example.com#$#.banner { display: none }
+example.com#%#window.ads = 0
+example.com$$script[tag-content="ad"]
+example.com$@$script[tag-content="ad"]
+##.banner
+#@#.banner
+# hosts comment containing ## and $$
+0.0.0.0 ads.example # $ modifiers
+ads.example#not-a-comment
