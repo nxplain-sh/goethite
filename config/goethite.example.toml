@@ -240,6 +240,18 @@ web_ui = true
 # The API reference at /api/docs, for loopback clients only.
 docs = false
 
+# [telemetry]
+# Sends the metrics to an OpenTelemetry collector over OTLP/HTTP as well as
+# serving them at /metrics. Nothing is sent without an endpoint. goethite
+# resolves the collector's name through its own upstreams and local records,
+# not /etc/resolv.conf: give an address, or a name those answer. The header
+# and CA files are read before goethite drops its privileges.
+# endpoint = "https://collector.example:4318"  # /v1/metrics is appended
+# headers_file = "/etc/goethite/otlp-headers"   # "Name: value" lines, e.g. an API key
+# ca_file = "/etc/goethite/otlp-ca.pem"         # a private CA instead of the public roots
+# metrics = true
+# interval = 60                                 # seconds between exports, 10 to 3600
+
 # [cluster]
 # goethite nodes sharing one configuration: they agree on every change with
 # Raft, over mutual TLS. Two nodes and a witness (`goethite witness`, which

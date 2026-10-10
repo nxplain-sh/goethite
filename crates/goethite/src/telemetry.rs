@@ -6,7 +6,11 @@
 //! else is read from its owner when the metrics are collected: the data
 //! plane's parts directly, and what the control plane owns (the filter, the
 //! lists, the query log) through the [`Node`] it publishes while it runs.
+//!
+//! With `[telemetry] endpoint` set, the metrics are also sent to an
+//! OpenTelemetry collector over OTLP/HTTP ([`otlp`]).
 
+pub(crate) mod otlp;
 mod queries;
 
 use std::sync::Arc;
@@ -18,13 +22,16 @@ use goethite_resolver::{Resolver, Transport, UpstreamStatus};
 use goethite_server::ServerStats;
 use opentelemetry::KeyValue;
 use opentelemetry::metrics::{AsyncInstrument, Meter, MeterProvider as _};
+use opentelemetry_otlp::MetricExporter;
 use opentelemetry_sdk::Resource;
-use opentelemetry_sdk::metrics::SdkMeterProvider;
+use opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider};
 use tracing::warn;
 
 use crate::config::Config;
 use crate::node::Node;
 use crate::observe::protocol;
+use crate::secrets::Secrets;
+use otlp::ExportFailures;
 
 pub(crate) use queries::QueryMetrics;
 
@@ -38,6 +45,8 @@ pub(crate) struct Telemetry {
     /// The control plane's node, while it runs.
     node: Arc<ArcSwapOption<Node>>,
     started: SystemTime,
+    /// Failed exports, when the metrics are sent to a collector.
+    failures: Option<ExportFailures>,
 }
 
 impl std::fmt::Debug for Telemetry {
@@ -47,28 +56,46 @@ impl std::fmt::Debug for Telemetry {
 }
 
 impl Telemetry {
-    /// The metrics for a node run with `config`.
+    /// The metrics for a node run with `config`: served at `/metrics`, and
+    /// sent to the collector `[telemetry]` names, if it names one. Call it
+    /// on the runtime, after the sandbox is applied: the export runs on a
+    /// thread of its own.
     ///
     /// # Errors
     ///
-    /// As [`Telemetry::new`].
-    pub(crate) fn from_config(config: &Config) -> Result<Self> {
-        Self::new(
-            config
-                .cluster
-                .as_ref()
-                .map(|cluster| cluster.node.to_string()),
-        )
+    /// If the export cannot be set up (its headers or CA are unusable).
+    pub(crate) fn from_config(
+        config: &Config,
+        secrets: &Secrets,
+        resolver: &Arc<Resolver>,
+    ) -> Result<Self> {
+        let failures = ExportFailures::default();
+        let export = otlp::metrics_reader(&config.telemetry, secrets, resolver, &failures)?
+            .map(|reader| (reader, failures));
+        let instance = config
+            .cluster
+            .as_ref()
+            .map(|cluster| cluster.node.to_string());
+        Self::build(instance, export)
     }
 
-    /// A meter provider with the per-query instruments. `instance` names
-    /// this node (its cluster name), if it has one.
+    /// A meter provider with the per-query instruments, served at
+    /// `/metrics` only. `instance` names this node (its cluster name), if
+    /// it has one.
     ///
     /// # Errors
     ///
     /// If the Prometheus registry refuses the exporter, which never happens
     /// with a fresh registry.
+    #[cfg(test)]
     pub(crate) fn new(instance: Option<String>) -> Result<Self> {
+        Self::build(instance, None)
+    }
+
+    fn build(
+        instance: Option<String>,
+        export: Option<(PeriodicReader<MetricExporter>, ExportFailures)>,
+    ) -> Result<Self> {
         let registry = prometheus::Registry::new();
         let exporter = opentelemetry_prometheus::exporter()
             .with_registry(registry.clone())
@@ -82,10 +109,14 @@ impl Telemetry {
         if let Some(instance) = instance {
             resource = resource.with_attribute(KeyValue::new("service.instance.id", instance));
         }
-        let provider = SdkMeterProvider::builder()
+        let mut provider = SdkMeterProvider::builder()
             .with_reader(exporter)
-            .with_resource(resource.build())
-            .build();
+            .with_resource(resource.build());
+        let (reader, failures) = export.unzip();
+        if let Some(reader) = reader {
+            provider = provider.with_reader(reader);
+        }
+        let provider = provider.build();
         let meter = provider.meter("goethite");
         let queries = Arc::new(QueryMetrics::new(&meter));
         Ok(Self {
@@ -95,6 +126,7 @@ impl Telemetry {
             queries,
             node: Arc::new(ArcSwapOption::empty()),
             started: SystemTime::now(),
+            failures,
         })
     }
 
@@ -120,6 +152,16 @@ impl Telemetry {
         listeners(&self.meter, server);
         resolution(&self.meter, resolver);
         control_plane(&self.meter, &self.node);
+        if let Some(failures) = &self.failures {
+            let metrics = Arc::clone(&failures.metrics);
+            counter(
+                &self.meter,
+                "goethite.telemetry.export_failures",
+                "Requests to the OpenTelemetry collector that failed (retries included), by \
+                 signal.",
+                move |o| o.observe(metrics.failed(), &[KeyValue::new("signal", "metrics")]),
+            );
+        }
         let version = KeyValue::new("version", env!("CARGO_PKG_VERSION"));
         gauge(
             &self.meter,
@@ -139,10 +181,11 @@ impl Telemetry {
             .build();
     }
 
-    /// Stops the meter provider.
+    /// Stops the meter provider, sending the metrics a last time if they go
+    /// to a collector. Blocks until that is done or has timed out.
     pub(crate) fn shutdown(&self) {
         if let Err(err) = self.provider.shutdown() {
-            warn!(%err, "cannot shut the metrics down");
+            warn!(%err, "could not send the metrics a last time");
         }
     }
 }

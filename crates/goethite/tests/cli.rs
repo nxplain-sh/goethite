@@ -203,6 +203,22 @@ fn check_config_rejects_problems() {
             "cannot read the DNS certificate",
         ),
         (
+            "check_bad_telemetry_headers",
+            &format!(
+                "[telemetry]\nendpoint = \"https://collector.example:4318\"\nheaders_file = {:?}\n",
+                config_file("bad_otlp_headers", "x-key secret")
+                    .display()
+                    .to_string()
+            ),
+            "line 1: not \"Name: value\"",
+        ),
+        (
+            "check_missing_telemetry_ca",
+            "[telemetry]\nendpoint = \"https://collector.example:4318\"\n\
+             ca_file = \"/nonexistent/otlp-ca.pem\"\n",
+            "cannot read the telemetry CA",
+        ),
+        (
             "check_bad_dns_certificate",
             &format!(
                 "[server.tls]\ncert = {path:?}\nkey = {path:?}\ndot = \"127.0.0.1:853\"\n",
@@ -1260,6 +1276,105 @@ mod serving {
         assert!(!text.contains("otel_scope"), "{text}");
         server.signal("TERM");
         assert!(server.wait_for_exit().success());
+    }
+
+    /// A request to the fake collector: its head and its body.
+    struct Received {
+        head: String,
+        body: Vec<u8>,
+    }
+
+    /// A fake OpenTelemetry collector: answers every OTLP request with 200
+    /// and hands it over on the channel.
+    fn collector() -> (SocketAddr, mpsc::Receiver<Received>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (sent, received) = mpsc::channel();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let mut stream = BufReader::new(stream.unwrap());
+                let mut head = String::new();
+                loop {
+                    let mut line = String::new();
+                    if stream.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
+                        break;
+                    }
+                    head.push_str(&line);
+                }
+                let len = head
+                    .lines()
+                    .find_map(|l| {
+                        l.to_ascii_lowercase()
+                            .strip_prefix("content-length:")
+                            .map(|v| v.trim().parse::<usize>().unwrap())
+                    })
+                    .unwrap_or(0);
+                let mut body = vec![0; len];
+                stream.read_exact(&mut body).unwrap();
+                stream
+                    .get_mut()
+                    .write_all(b"HTTP/1.1 200 OK\r\ncontent-type: application/x-protobuf\r\ncontent-length: 0\r\n\r\n")
+                    .unwrap();
+                if sent.send(Received { head, body }).is_err() {
+                    break;
+                }
+            }
+        });
+        (addr, received)
+    }
+
+    /// With `[telemetry] endpoint`, the metrics go to the collector over
+    /// OTLP/HTTP with the configured headers, and a last time on shutdown.
+    #[test]
+    fn sends_metrics_over_otlp() {
+        let (collector, requests) = collector();
+        let headers = config_file(
+            "otlp_headers",
+            "# the key\nAuthorization: Bearer test-key\n",
+        );
+        let mut server = Running::start_with(
+            "otlp",
+            upstream(),
+            &format!(
+                "\n[telemetry]\nendpoint = \"http://{collector}\"\nheaders_file = {:?}\n\
+                 interval = 3600\n",
+                headers.display().to_string()
+            ),
+        );
+        let udp = field(&server.wait_for_log(DNS_LISTENING), "udp");
+        server.find_log("sending metrics over OTLP");
+        ask(udp, "example.com.");
+        server.signal("TERM");
+        assert!(server.wait_for_exit().success());
+
+        let request = requests.recv_timeout(WAIT).unwrap();
+        assert!(
+            request.head.starts_with("POST /v1/metrics HTTP/1.1"),
+            "{}",
+            request.head
+        );
+        let head = request.head.to_ascii_lowercase();
+        assert!(
+            head.contains("content-type: application/x-protobuf"),
+            "{head}"
+        );
+        assert!(head.contains("authorization: bearer test-key"), "{head}");
+        for name in [
+            "goethite.queries",
+            "goethite.query.duration",
+            "goethite.cache.lookups",
+            "goethite.filter.rules",
+            "goethite.telemetry.export_failures",
+            "service.name",
+        ] {
+            assert!(
+                request
+                    .body
+                    .windows(name.len())
+                    .any(|window| window == name.as_bytes()),
+                "missing {name}"
+            );
+        }
     }
 
     #[test]

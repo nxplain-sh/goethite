@@ -162,8 +162,9 @@ scrape_configs:
 ```
 
 goethite keeps these metrics with the OpenTelemetry SDK and serves them through its Prometheus
-reader, under the same names as before. An OpenTelemetry Collector reads them with its
-`prometheus` receiver and the same scrape configuration:
+reader, under the same names as before. It can also send them to a collector over OTLP; see
+[Metrics and telemetry](../observability/). An OpenTelemetry Collector can instead read
+`/metrics` with its `prometheus` receiver and the same scrape configuration:
 
 ```yaml
 receivers:

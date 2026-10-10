@@ -34,6 +34,7 @@ export const sidebar = [
 	{ label: 'Recursion', slug: 'recursion' },
 	{ label: 'High availability', slug: 'ha' },
 	{ label: 'REST API', slug: 'api' },
+	{ label: 'Metrics and telemetry', slug: 'observability' },
 	{ label: 'Web UI', slug: 'web-ui' },
 	{ label: 'Terminal UI', slug: 'tui' },
 	{ label: 'Security settings', slug: 'security' },

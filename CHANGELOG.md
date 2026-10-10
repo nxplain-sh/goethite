@@ -9,6 +9,17 @@ configuration format.
 
 ### Added
 
+- **Sending metrics to an OpenTelemetry collector** over OTLP/HTTP, with a new `[telemetry]`
+  table: `endpoint`, a `headers_file` for an API key, a `ca_file` for a private CA, and
+  `interval`.
+  - Nothing is sent without an endpoint, and `/metrics` stays as it was.
+  - goethite sends the requests with its own HTTP client: rustls with ring, names resolved
+    through its own upstreams.
+  - Exports never touch the DNS path. Failures are counted in
+    `goethite_telemetry_export_failures_total` and logged once per outage.
+
+  See [Metrics and telemetry](https://nxplain-sh.github.io/goethite/observability/).
+
 - **A Cluster page in the web UI**, on nodes in a cluster: the cluster's health in a word, the
   voters it can lose, a card per member (up or down, leader, voter, witness, version, how many
   changes behind the leader), how this node follows the leader, and the recovery steps where they

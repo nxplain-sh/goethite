@@ -246,7 +246,10 @@ goethite opens connections only to:
 - **`api.filterlists.com`**, over HTTPS, only when someone opens Find lists in the web UI, at
   most once a day ([FilterLists directory](../filtering/#finding-more-lists); `[filter]
   directory = false` turns it off);
-- the other **members of its cluster**, if it is in one.
+- the other **members of its cluster**, if it is in one;
+- the **OpenTelemetry collector** in `[telemetry] endpoint`, if one is set, every `interval`
+  seconds and once when goethite stops. It receives the [metrics](../observability/): counts
+  and states, with no names looked up and no client addresses.
 
 Names are resolved through goethite's own upstreams. The web UI's pages talk to goethite only;
 links to list home pages open in a new tab.

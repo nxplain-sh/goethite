@@ -235,6 +235,25 @@ anyone.
 | `private_domains` | `["lan", "home.arpa", "internal", "local"]` | Names below these may resolve to private addresses. Setting it replaces the defaults. |
 | `sandbox` | `true` | Whether goethite confines itself with Landlock and seccomp on Linux ([the sandbox](../security/#the-sandbox)). Also read by `goethite witness` and `goethite vrrp`. |
 
+## `[telemetry]`
+
+Sends goethite's metrics to an OpenTelemetry collector over OTLP/HTTP, as well as serving them at
+`/metrics`. Nothing is sent without `endpoint`. See [Metrics and telemetry](../observability/).
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `endpoint` | unset | The collector's OTLP/HTTP base URL, `http://` or `https://`, such as `https://collector.example:4318`. goethite appends `/v1/metrics`. |
+| `headers_file` | unset | A file of `Name: value` lines sent as headers with every export, such as an API key: at most 16 headers and 8 KiB. Blank lines and lines starting with `#` are skipped. |
+| `ca_file` | unset | CA certificates (PEM) to verify the collector with, instead of the public roots. |
+| `metrics` | `true` | Whether the metrics are sent. |
+| `interval` | `60` | Seconds between exports, 10 to 3600. |
+
+goethite resolves the collector's name through its own upstreams and
+[local records](../local-records/), not the system's resolver: use an address, or a name those
+answer. `headers_file` and `ca_file` are read before goethite drops its privileges, so they may be
+readable by root only. Over plain HTTP beyond loopback, goethite warns that the metrics and the
+headers can be read on the way.
+
 ## Logging
 
 Logs go to standard error, and the `RUST_LOG` environment variable sets the level (default

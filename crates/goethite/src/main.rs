@@ -3,6 +3,7 @@
 mod certs;
 mod cluster;
 mod config;
+mod connect;
 mod control;
 mod download;
 mod filterlists;
@@ -472,7 +473,7 @@ async fn serve(
     let mut upgrades = upgrade_signal()?;
     let state = Arc::new(PolicyState::new(Policy::none()));
     let resolver = Arc::new(resolver(config, &state)?);
-    let telemetry = telemetry::Telemetry::from_config(config)?;
+    let telemetry = telemetry::Telemetry::from_config(config, secrets, &resolver)?;
     let observer_log = Arc::new(ArcSwapOption::empty());
     let leak = Arc::new(LeakTests::new());
     let mut server = Server::new(
@@ -555,10 +556,12 @@ async fn serve(
     if !handed_over {
         notify::stopping();
     }
+    // A last export, while the control plane's metrics are still there. It
+    // waits on a task on this runtime.
+    tokio::task::block_in_place(|| data.telemetry.shutdown());
     if let Some(plane) = plane {
         plane.stop().await?;
     }
-    data.telemetry.shutdown();
     Ok(())
 }
 
@@ -853,6 +856,10 @@ fn check_config(config_path: &Path) -> Result<()> {
     if let Some(pem) = &secrets.dns_tls {
         certs::Served::new("DNS certificate", pem, None)?;
     }
+    if let Some(text) = &secrets.telemetry_headers {
+        telemetry::otlp::headers(text)?;
+    }
+    telemetry::otlp::roots(secrets.telemetry_ca.as_deref())?;
     info!(config = %config_path.display(), "configuration is valid");
     Ok(())
 }
