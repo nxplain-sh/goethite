@@ -32,9 +32,7 @@ for (const [path, entry] of Object.entries(lock.packages).sort(byPath)) {
 		texts.push(`(No licence file in the package.) Copyright ${by}, under the ${entry.license} licence.`)
 	}
 	notices.push(
-		[RULE, `${name} ${entry.version}, licence: ${entry.license ?? 'not stated'}`, '', ...texts].join(
-			'\n',
-		),
+		[RULE, `${name} ${entry.version}, licence: ${entry.license ?? 'not stated'}`, '', ...texts].join('\n'),
 	)
 }
 process.stdout.write(`${notices.join('\n\n')}\n`)

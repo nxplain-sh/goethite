@@ -202,7 +202,13 @@ export function QueryLog({ search }: { search: LogSearch }) {
 									className="log-row"
 									data-index={item.index}
 									ref={virtualizer.measureElement}
-									style={{ position: 'absolute', top: 0, left: 0, right: 0, transform: `translateY(${item.start}px)` }}
+									style={{
+										position: 'absolute',
+										top: 0,
+										left: 0,
+										right: 0,
+										transform: `translateY(${item.start}px)`,
+									}}
 								>
 									{row.getAllCells().map((cell) => (
 										<div

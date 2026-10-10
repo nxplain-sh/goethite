@@ -21,7 +21,7 @@
 # Website
 /site/node_modules/
 /site/dist/
-/site/.astro/
+/site/.tanstack/
 
 # Editors and OS
 .DS_Store

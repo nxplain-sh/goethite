@@ -29,8 +29,8 @@ export function Rules() {
 		<div className="grid-page">
 			<h1>Custom rules</h1>
 			<p className="muted">
-				They apply to every client while filtering is on, in any group. Any syntax the filter lists
-				use works: <span className="mono">||ads.example^</span> blocks a domain and its subdomains,{' '}
+				They apply to every client while filtering is on, in any group. Any syntax the filter lists use works:{' '}
+				<span className="mono">||ads.example^</span> blocks a domain and its subdomains,{' '}
 				<span className="mono">@@||good.example^</span> allows one.
 			</p>
 			<AddRule />

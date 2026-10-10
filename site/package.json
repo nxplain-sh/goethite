@@ -1,26 +1,45 @@
 {
   "name": "goethite-site",
   "private": true,
-  "type": "module",
-  "description": "Project website and docs for goethite (Astro Starlight, deployed to GitHub Pages).",
+  "description": "Project website and docs for goethite (TanStack Start, prerendered to static HTML, deployed to GitHub Pages).",
   "license": "AGPL-3.0-only",
+  "type": "module",
   "scripts": {
-    "dev": "astro dev",
-    "build": "astro build",
-    "preview": "astro preview",
-    "astro": "astro"
-  },
-  "engines": {
-    "node": ">=22.19.0"
+    "dev": "vp dev",
+    "build": "vp build && pagefind --site dist/client",
+    "preview": "node scripts/serve.mjs",
+    "check": "vp check",
+    "fmt": "vp fmt"
   },
   "dependencies": {
-    "@astrojs/starlight": "0.42.5",
     "@fontsource-variable/jetbrains-mono": "5.3.0",
     "@fontsource-variable/space-grotesk": "5.3.0",
     "@scalar/api-reference": "1.73.1",
-    "astro": "7.3.6"
+    "@tanstack/react-router": "1.170.42",
+    "@tanstack/react-start": "1.168.61",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "github-slugger": "2.0.0",
+    "pagefind": "1.5.2",
+    "rehype-stringify": "10.0.1",
+    "remark-gfm": "4.0.1",
+    "remark-parse": "11.0.0",
+    "remark-rehype": "11.1.2",
+    "shiki": "4.5.0",
+    "unified": "11.0.5",
+    "vite": "npm:@voidzero-dev/vite-plus-core@1.1.0",
+    "vite-plus": "1.1.0",
+    "yaml": "2.9.1"
   },
   "overrides": {
-    "postcss-selector-parser": "7.1.6"
+    "vite": "npm:@voidzero-dev/vite-plus-core@1.1.0"
+  },
+  "engines": {
+    "node": ">=22.19.0"
   }
 }

@@ -38,8 +38,8 @@ export function Cluster() {
 				<h1>Cluster</h1>
 				<div className="panel">
 					<p>
-						This node is not in a cluster. Nodes that share one configuration, with a witness and a floating IP, are
-						set up in their config files: see{' '}
+						This node is not in a cluster. Nodes that share one configuration, with a witness and a floating
+						IP, are set up in their config files: see{' '}
 						<a href={`${DOCS_URL}ha/`} target="_blank" rel="noopener noreferrer">
 							High availability
 						</a>
@@ -55,7 +55,8 @@ export function Cluster() {
 			<div className="page-head">
 				<h1>Cluster</h1>
 				<span className="muted mono">
-					{cluster.cluster == null ? 'in no cluster yet' : `cluster ${cluster.cluster}`} · term {cluster.term ?? 0}
+					{cluster.cluster == null ? 'in no cluster yet' : `cluster ${cluster.cluster}`} · term{' '}
+					{cluster.term ?? 0}
 				</span>
 			</div>
 			<HealthBand cluster={cluster} />
@@ -132,7 +133,9 @@ function sentence(state: Health, cluster: ClusterStatus, down: string[]): string
 
 /** `a`, `a and b`, `a, b and c`. */
 function list(items: string[]): string {
-	return items.length <= 1 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`
+	return items.length <= 1
+		? items.join('')
+		: `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`
 }
 
 const STATE_LABEL: Record<NonNullable<Member['state']>, string> = {
@@ -159,8 +162,7 @@ function MemberCard({
 	const leads = member.node === cluster.leader
 	const classes = ['member', leads ? 'leader' : '', member.reachable ? '' : 'down'].filter(Boolean).join(' ')
 	// A learner's state says what its membership says.
-	const showState =
-		member.state != null && !(member.state === 'learner' && member.membership === 'learner')
+	const showState = member.state != null && !(member.state === 'learner' && member.membership === 'learner')
 	return (
 		<article className={classes} aria-label={member.node}>
 			<header>
@@ -168,12 +170,22 @@ function MemberCard({
 				{member.this_node ? <span className="this-node">this node</span> : null}
 			</header>
 			<div className="badges">
-				{member.reachable ? <span className="badge ok">UP</span> : <span className="badge blocked">DOWN</span>}
+				{member.reachable ? (
+					<span className="badge ok">UP</span>
+				) : (
+					<span className="badge blocked">DOWN</span>
+				)}
 				{showState && member.state != null ? (
-					<span className={member.state === 'leader' ? 'badge accent' : 'badge'}>{STATE_LABEL[member.state]}</span>
+					<span className={member.state === 'leader' ? 'badge accent' : 'badge'}>
+						{STATE_LABEL[member.state]}
+					</span>
 				) : null}
 				<span className="badge">
-					{member.membership === 'voter' ? 'VOTER' : member.membership === 'learner' ? 'LEARNER' : 'NOT ADDED YET'}
+					{member.membership === 'voter'
+						? 'VOTER'
+						: member.membership === 'learner'
+							? 'LEARNER'
+							: 'NOT ADDED YET'}
 				</span>
 				{member.witness ? <span className="badge inverted">WITNESS</span> : null}
 			</div>
@@ -234,7 +246,13 @@ function LagNote({ config, reference }: { config: ConfigVersion; reference: Conf
 }
 
 /** How this node follows the leader. */
-function SyncPanel({ sync, leader }: { sync: NonNullable<ClusterStatus['sync']>; leader: ClusterStatus['leader'] }) {
+function SyncPanel({
+	sync,
+	leader,
+}: {
+	sync: NonNullable<ClusterStatus['sync']>
+	leader: ClusterStatus['leader']
+}) {
 	return (
 		<Panel title="Following the leader">
 			<dl className="facts">
@@ -267,7 +285,9 @@ function Recovery({ cluster }: { cluster: ClusterStatus }) {
 					</p>
 					<Guarded
 						label={cluster.cluster == null ? 'Start a cluster here' : 'Take the cluster over'}
-						confirm={cluster.cluster == null ? `Start it on ${cluster.node}` : `Take it over from ${cluster.node}`}
+						confirm={
+							cluster.cluster == null ? `Start it on ${cluster.node}` : `Take it over from ${cluster.node}`
+						}
 						force="even though a leader answers: two clusters run until one side joins the other"
 						run={(force) => call(api.POST('/api/v1/cluster/promote', { body: { force } }))}
 						onDone={settle}
@@ -278,9 +298,9 @@ function Recovery({ cluster }: { cluster: ClusterStatus }) {
 				<div key={other.node} className="recovery-action">
 					<h3>Join {other.node}&apos;s cluster</h3>
 					<p>
-						{other.node} leads another cluster. One side has to join the other. To keep this cluster, choose to join
-						on {other.node}&apos;s own page instead. To keep {other.node}&apos;s, {cluster.node} leaves this cluster,
-						and {other.node} adds it and replaces its configuration with its own.
+						{other.node} leads another cluster. One side has to join the other. To keep this cluster, choose
+						to join on {other.node}&apos;s own page instead. To keep {other.node}&apos;s, {cluster.node}{' '}
+						leaves this cluster, and {other.node} adds it and replaces its configuration with its own.
 					</p>
 					<Guarded
 						label={`Join ${other.node}'s cluster`}
@@ -293,8 +313,8 @@ function Recovery({ cluster }: { cluster: ClusterStatus }) {
 			))}
 			{takeOver || others.length > 0 ? null : (
 				<p className="muted">
-					Nothing to recover: {cluster.leader} leads, and changes go through it. When the cluster cannot elect a
-					leader, this page offers to take it over from {cluster.node}.
+					Nothing to recover: {cluster.leader} leads, and changes go through it. When the cluster cannot elect
+					a leader, this page offers to take it over from {cluster.node}.
 				</p>
 			)}
 			<p className="hint">
@@ -316,9 +336,7 @@ function RemoveMember({ node }: { node: string }) {
 				label="Remove"
 				confirm={`Remove ${node} for good`}
 				note={`First take ${node} out of every member's config file and restart them, or it is added again.`}
-				run={() =>
-					call(api.DELETE('/api/v1/cluster/members/{node}', { params: { path: { node } } }))
-				}
+				run={() => call(api.DELETE('/api/v1/cluster/members/{node}', { params: { path: { node } } }))}
 				onDone={settle}
 				small
 			/>

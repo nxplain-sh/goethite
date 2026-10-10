@@ -139,7 +139,6 @@ code,
 	margin-top: var(--space-5);
 }
 
-
 .topbar {
 	display: flex;
 	flex-wrap: wrap;
@@ -212,7 +211,9 @@ code,
 	font: inherit;
 	font-weight: 700;
 	cursor: pointer;
-	transition: transform 60ms, box-shadow 60ms;
+	transition:
+		transform 60ms,
+		box-shadow 60ms;
 }
 
 .button:hover {

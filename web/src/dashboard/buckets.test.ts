@@ -1,7 +1,7 @@
 // Times are in Europe/Berlin, which leaves summer time on 25 October 2026.
 process.env.TZ = 'Europe/Berlin'
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 
 import type { StatsReport } from '../api/client'
 import { buckets } from './buckets'

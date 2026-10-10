@@ -212,6 +212,14 @@ Phase 3's scope shipped in v0.3.0. These items came up along the way.
   value that the web UI and the TUI show read-only, and want a token scoped to it.
 - **[later] Site polish:** OG images, search tuning, a logo, and a richer landing page.
 - **[later] Lint workflows in CI** with actionlint and zizmor.
+- **[P5] Complete the web UI's SBOM.** `cargo xtask dist` makes it with `npm sbom --omit=dev`,
+  and npm's `.dev` selector also drops every package that a development tool shares with a runtime
+  one: on 2026-10-10 the SBOM listed 320 of the 344 runtime packages in `web/package-lock.json`
+  (317 of 334 after the move to Vite+, whose Vitest browser packages share three more), while
+  `npm run licenses` reads the lockfile and has them all. Without `--omit=dev`, npm marks exactly
+  the lockfile's runtime packages `"scope": "required"`; keeping those components (and their
+  `dependencies` entries) in xtask's post-processing would match the licence notices. Check the
+  result with a full `cargo xtask dist`.
 - **[later] `multiple-versions = "deny"` in `deny.toml`** once the remaining duplicate
   (`syn`, through build-time dependencies) is gone.
 - **[later] A source link in the web UI and `goethite --version`**, set at build time. The AGPL

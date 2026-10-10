@@ -183,14 +183,21 @@ export function BlockedServices({
 					))}
 					<p className="hint">
 						{count(services.length)} services from{' '}
-						<a href="https://github.com/AdguardTeam/HostlistsRegistry" target="_blank" rel="noreferrer noopener">
+						<a
+							href="https://github.com/AdguardTeam/HostlistsRegistry"
+							target="_blank"
+							rel="noreferrer noopener"
+						>
 							AdGuard's HostlistsRegistry
 						</a>{' '}
 						({catalog.data.license}),{' '}
 						{catalog.data.source.startsWith('https://')
 							? 'which this node downloads with the lists'
 							: `which this node reads from ${catalog.data.source}`}
-						{catalog.data.downloaded_at == null ? '' : `; this copy is from ${dateTime(catalog.data.downloaded_at)}`}.
+						{catalog.data.downloaded_at == null
+							? ''
+							: `; this copy is from ${dateTime(catalog.data.downloaded_at)}`}
+						.
 					</p>
 					{catalog.data.error == null ? null : (
 						<p className="hint">The last download failed: {catalog.data.error}</p>

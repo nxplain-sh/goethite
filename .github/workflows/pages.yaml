@@ -8,22 +8,29 @@ on:
       - "CHANGELOG.md"
       - "crates/goethite-api/openapi.json"
       - ".github/workflows/pages.yaml"
+  # CI skips pull requests that only change site/, so the site is checked
+  # and built here. Only a push to main deploys.
+  pull_request:
+    paths:
+      - "site/**"
+      - "CHANGELOG.md"
+      - "crates/goethite-api/openapi.json"
+      - ".github/workflows/pages.yaml"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 # One deployment at a time; never cancel a deployment that is already running.
+# A pull request's newer push replaces its older run.
 concurrency:
-  group: pages
-  cancel-in-progress: false
+  group: ${{ github.event_name == 'pull_request' && format('site-{0}', github.ref) || 'pages' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
     name: Build site
     runs-on: ubuntu-24.04
-    env:
-      ASTRO_TELEMETRY_DISABLED: "1"
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -41,17 +48,31 @@ jobs:
         working-directory: site
         run: npm ci --ignore-scripts
 
-      - name: Build
+      - name: Format, lint and type-check (vp check)
+        working-directory: site
+        run: npm run check
+
+      - name: Build (prerender every page, index them for search)
         working-directory: site
         run: npm run build
 
+      - name: Check the route tree is committed
+        working-directory: site
+        run: |
+          if ! git diff --exit-code -- src/routeTree.gen.ts; then
+            echo "::error::site/src/routeTree.gen.ts is out of date: run 'npm run build' in site/ and commit it"
+            exit 1
+          fi
+
       - name: Upload Pages artifact
+        if: github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
-          path: site/dist
+          path: site/dist/client
 
   deploy:
     name: Deploy to GitHub Pages
+    if: github.event_name != 'pull_request'
     needs: build
     runs-on: ubuntu-24.04
     permissions:

@@ -78,8 +78,8 @@ export function Editor({
 			)}
 			{managedBy === 'config_file' ? (
 				<div className="notice" role="status">
-					This {what} comes from the config file's [filter] table: the next `goethite import`
-					puts it back as the file says.
+					This {what} comes from the config file's [filter] table: the next `goethite import` puts it back as
+					the file says.
 				</div>
 			) : null}
 			<ErrorNotice error={error} />

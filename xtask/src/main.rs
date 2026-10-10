@@ -124,7 +124,8 @@ fn main() -> ExitCode {
 }
 
 /// Cheap checks first, so a formatting slip does not cost a test run. The
-/// web UI has its own checks: `npm run build` and `npm test` in `web/`.
+/// web UI and the site have their own: `npm run check` (Vite+), `npm test` and
+/// `npm run build` in `web/`, `npm run check` and `npm run build` in `site/`.
 fn ci() -> Result {
     cargo(&["fmt", "--all", "--check"])?;
     toolchain()?;

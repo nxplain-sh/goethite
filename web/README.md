@@ -1,16 +1,19 @@
 # web/
 
-The goethite web UI: a single-page app built with Vite, React, TypeScript (strict), TanStack
-Router, Query, Table, Virtual and Charts. It talks only to the REST API, through a typed client generated
-from [`openapi.json`](../crates/goethite-api/openapi.json). The build in `dist/` is embedded into
-the `goethite` binary and served next to the API with a strict Content Security Policy. See
+The goethite web UI: a single-page app built with [Vite+](https://viteplus.dev), React, TypeScript
+(strict), TanStack Router, Query, Table, Virtual and Charts. It talks only to the REST API, through
+a typed client generated from [`openapi.json`](../crates/goethite-api/openapi.json). The build in
+`dist/` is embedded into the `goethite` binary and served next to the API with a strict Content
+Security Policy. See
 [ADR 0002](../docs/adr/0002-tanstack-router-spa-embedded.md),
-[ADR 0009](../docs/adr/0009-web-ui-serving.md) and
-[ADR 0017](../docs/adr/0017-dashboard-charts.md).
+[ADR 0009](../docs/adr/0009-web-ui-serving.md),
+[ADR 0017](../docs/adr/0017-dashboard-charts.md) and
+[ADR 0035](../docs/adr/0035-site-on-tanstack-start-and-vite-plus.md).
 
 ```sh
 npm ci --ignore-scripts
-npm run build   # type-check, build to dist/, check the size budget, build dist-docs/
+npm run check   # vp check: Oxfmt, Oxlint, type-check; `npm run fmt` fixes the format
+npm run build   # build to dist/, check the size budget, build dist-docs/
 npm test        # Vitest: the forms' logic (src/forms)
 npm run e2e     # Playwright: Chromium against a real goethite (e2e/), after
                 # `npx playwright install chromium`
@@ -55,3 +58,7 @@ date, and the type-check then shows every page the change affects.
 - The design tokens live in [`src/styles/tokens.css`](src/styles/tokens.css); every text and
   background pair there is at least 4.5:1. There is one theme, light.
 - `scripts/budget.mjs` caps the bundle (200 KiB of gzipped JavaScript). Raise it only on purpose.
+- Test files import from `vite-plus/test`, not `vitest`, and config from `vite-plus`, not `vite`.
+  `vite` is aliased to Vite+'s core
+  (`npm:@voidzero-dev/vite-plus-core`) in `devDependencies` and `overrides`; bump it together with
+  `vite-plus`.

@@ -113,9 +113,9 @@ export function RecommendedLists({
 		<section className="panel" aria-label="Recommended lists">
 			<h2>Recommended lists</h2>
 			<p className="muted">
-				Each checked to download and read cleanly. Sizes are what each list says it has, or what goethite
-				read once it is added; lines a DNS server cannot apply, such as cosmetic or path rules, are skipped
-				and counted. Looking for something else?{' '}
+				Each checked to download and read cleanly. Sizes are what each list says it has, or what goethite read
+				once it is added; lines a DNS server cannot apply, such as cosmetic or path rules, are skipped and
+				counted. Looking for something else?{' '}
 				<Link to="/lists/find">Find lists in the FilterLists directory</Link>.
 			</p>
 			<ErrorNotice error={recommended.error ?? groups.error} />
@@ -124,8 +124,8 @@ export function RecommendedLists({
 			)}
 			{base.length > 1 ? (
 				<div className="notice" role="status">
-					Overlap: {base.map((item) => item.name).join(' and ')} are all on. Base lists overlap a lot, so one is
-					enough; turn the others off, or use a preset.
+					Overlap: {base.map((item) => item.name).join(' and ')} are all on. Base lists overlap a lot, so one
+					is enough; turn the others off, or use a preset.
 				</div>
 			) : null}
 			<Category title="Base list" hint="Pick one: base lists overlap a lot, so a second adds little.">
@@ -206,7 +206,14 @@ function RecommendedRow({
 			: stated === undefined
 				? null
 				: `about ${count(stated)} entries`
-	const action = excluded.length > 0 ? `Switch from ${excluded.map((other) => other.spec.name).join(', ')}` : on ? null : list === undefined ? 'Add' : 'Turn on'
+	const action =
+		excluded.length > 0
+			? `Switch from ${excluded.map((other) => other.spec.name).join(', ')}`
+			: on
+				? null
+				: list === undefined
+					? 'Add'
+					: 'Turn on'
 
 	return (
 		<>
@@ -392,7 +399,12 @@ function ApplyPreset({
 		<div className="subform apply-preset">
 			<div className="field">
 				<label htmlFor={`${id}-group`}>Use {preset.name} for</label>
-				<select id={`${id}-group`} className="select" value={groupId} onChange={(event) => setGroupId(event.target.value)}>
+				<select
+					id={`${id}-group`}
+					className="select"
+					value={groupId}
+					onChange={(event) => setGroupId(event.target.value)}
+				>
 					{groups.map((candidate) => (
 						<option key={candidate.id} value={candidate.id}>
 							{candidate.spec.name}
