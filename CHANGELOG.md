@@ -22,6 +22,11 @@ configuration format.
   (`AGPL-3.0-only`), instead of MIT OR Apache-2.0. Releases up to and including v0.5.0 keep MIT OR
   Apache-2.0. Contributions come in under Apache-2.0
   ([ADR 0033](docs/adr/0033-agpl-license.md)).
+- **The website is built with TanStack Start** instead of Astro Starlight: every page is still
+  static HTML at the same address, with the same docs, search, light and dark themes and API
+  reference. The web UI and the site build with [Vite+](https://viteplus.dev), which adds a
+  formatter, a linter and type-aware lint checks (`npm run check`) to both
+  ([ADR 0035](docs/adr/0035-site-on-tanstack-start-and-vite-plus.md)).
 
 ### Removed
 

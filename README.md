@@ -91,7 +91,7 @@ cd web && npm ci --ignore-scripts && npm run build
 | `crates/goethite`           | The binary: CLI, wiring, signal handling                                |
 | `xtask/`                    | Repository automation: `cargo xtask ci` runs the checks CI runs         |
 | `web/`                      | Web UI (Vite+, React, TanStack Router), embedded into the binary        |
-| `site/`                     | Project website and docs (Astro Starlight), deployed to GitHub Pages    |
+| `site/`                     | Project website and docs (TanStack Start), deployed to GitHub Pages     |
 | `fuzz/`                     | cargo-fuzz targets                                                      |
 | `tests/chaos/`              | Chaos tests: two nodes, a witness and a client in network namespaces    |
 | `tests/packages/`           | Installs the .deb and .rpm on each supported distribution               |

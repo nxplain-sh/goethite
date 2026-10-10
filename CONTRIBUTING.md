@@ -86,7 +86,7 @@ CI (`.github/workflows/ci.yaml`) runs fmt, clippy and rustdoc with `-D warnings`
 tests on linux amd64 (`ubuntu-24.04`) and arm64 (`ubuntu-24.04-arm`), an MSRV check, `cargo deny`
 and `cargo audit`. It runs on pull requests, weekly and on demand, but not on pushes: a pull
 request's run already tests the merge result. A pull request that only changes Markdown files,
-`docs/` or `site/` runs no CI at all.
+`docs/` or `site/` runs no CI at all; the Site workflow (`pages.yaml`) checks and builds `site/`.
 The fuzz targets build on pull requests that change the parsers; the chaos lab runs weekly and on
 demand. All actions are pinned to commit SHAs. Keep it that way when you edit workflows.
 
@@ -260,14 +260,17 @@ The page runs under a strict CSP: no inline scripts or styles, no `eval`, nothin
 
 ## Website
 
-The project site lives in `site/` (Astro Starlight) and deploys to GitHub Pages from `main` via
-`.github/workflows/pages.yaml`. Deployment needs Pages enabled with source "GitHub Actions" (see
-[Repository settings](#repository-settings-maintainers)).
+The project site lives in `site/` (TanStack Start, prerendered to static HTML, on Vite+); see
+[`site/README.md`](site/README.md). `.github/workflows/pages.yaml` checks and builds it on pull
+requests that change it and deploys it to GitHub Pages from `main`. Deployment needs Pages enabled
+with source "GitHub Actions" (see [Repository settings](#repository-settings-maintainers)).
 
 ```sh
 cd site
 npm ci --ignore-scripts
-npm run dev
+npm run dev        # http://localhost:4321/goethite/
+npm run check      # vp check: Oxfmt, Oxlint and the type-check
+npm run build && npm run preview   # the built site, search included
 ```
 
 ## Releasing (maintainers)

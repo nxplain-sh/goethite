@@ -41,7 +41,7 @@ crates/
   goethite/           the binary: CLI (clap), wiring, systemd integration
 xtask/                repository automation: `cargo xtask ci` runs what CI runs
 web/                  React + TanStack Router SPA built with Vite+ (embedded into the binary)
-site/                 project website + docs (Astro Starlight), deployed to GitHub Pages
+site/                 project website + docs (TanStack Start, prerendered), deployed to GitHub Pages
 fuzz/                 cargo-fuzz targets (own nightly workspace)
 bench/                dnsperf script + recorded results; criterion benches live in crates/*/benches/
 tests/chaos/          chaos lab: two nodes, a witness and a client in network namespaces
@@ -58,6 +58,7 @@ The layout follows the [standard Rust project layout](https://github.com/miguelm
 - Rust stable, edition 2024, MSRV pinned in `rust-toolchain.toml` and `Cargo.toml`
 - tokio (multi-thread), hickory-proto, axum, utoipa, rustls, arc-swap, fst, redb, serde + toml, tracing, clap, ratatui, thiserror (libraries) / anyhow (binary only)
 - Web: Vite+ (`vp`: Vite, Vitest, Oxlint, Oxfmt), React, TypeScript (strict), TanStack Router (SPA, NOT TanStack Start: the strict CSP forbids its inline scripts), TanStack Query, TanStack Table + Virtual; typed API client generated from the OpenAPI spec; served from the binary via rust-embed with an SPA fallback route
+- Site: TanStack Start on Vite+, prerendered to static HTML; Markdown compiled at build time; Pagefind search
 
 ## Security rules (non-negotiable)
 
@@ -78,7 +79,7 @@ The layout follows the [standard Rust project layout](https://github.com/miguelm
 
 ## Code conventions
 
-- `cargo xtask ci` must pass: it runs every check CI runs.
+- `cargo xtask ci` must pass: it runs every Rust check CI runs. `web/` and `site/` are checked by their own npm scripts (`npm run check` is `vp check`: format, lint, type-check).
 - Modules with children use `foo.rs` beside `foo/`; only shared integration-test helpers live in `tests/<name>/mod.rs`. File names in `tests/`, `benches/` and `examples/` are kebab-case: they are target names.
 - Errors: `thiserror` in libraries, `anyhow` only in the binary. Log with `tracing`, never `println!`.
 - Public items get doc comments. Architectural decisions get a short ADR in `docs/adr/`.
@@ -87,7 +88,7 @@ The layout follows the [standard Rust project layout](https://github.com/miguelm
 
 ## Website and API docs
 
-- `site/` is an Astro Starlight site, deployed to GitHub Pages by a GitHub Actions workflow ([`nxplain-sh.github.io/goethite`](https://nxplain-sh.github.io/goethite/) unless a custom domain is set). Same neobrutalist look as the app; self-hosted fonts.
+- `site/` is a TanStack Start site prerendered to static HTML, deployed to GitHub Pages by a GitHub Actions workflow ([`nxplain-sh.github.io/goethite`](https://nxplain-sh.github.io/goethite/) unless a custom domain is set). Same neobrutalist look as the app; self-hosted fonts.
 - Content: landing page, install + quick start, config reference, filter syntax, HA guide, security (threat model, verifying signed releases), benchmarks, changelog.
 - API reference: Scalar, rendered from `openapi.json`, which CI generates from the Rust code (utoipa) and commits as an artifact for the site. CI fails on breaking API changes to `/api/v1` (e.g. with oasdiff) unless the change is marked intentional.
 - In the binary, `/api/docs` (Scalar) is OFF by default, loopback-only when enabled, and serves bundled assets — never a CDN — so the strict CSP still holds.
@@ -109,5 +110,5 @@ Shared by the web UI and (where possible) the TUI.
 - Branch from `development` as `<kind>/<what>` (`feature/`, `fix/`, `refactor/`, `chore/`, `docs/`) and target `development`; rename a tool-generated branch before its first push. Only releases target `main`. Names, merging and hotfixes: [`docs/branching.md`](docs/branching.md); cutting a release: [`docs/releases.md`](docs/releases.md).
 - Keep each change to its task. Note other work you notice in [`docs/BACKLOG.md`](docs/BACKLOG.md) instead of building it.
 - Ask before adding a dependency, changing the public API, or changing anything in the security rules above.
-- Before saying a task is done: `cargo xtask ci` and (for parser changes) a short fuzz run pass. Summarize what changed and what is left.
+- Before saying a task is done: `cargo xtask ci`, `npm run check` in `web/` or `site/` when they changed, and (for parser changes) a short fuzz run pass. Summarize what changed and what is left.
 - Development binds to port `15353` by default so it runs without root; production uses `53`. (Not `5353`: that is the multicast DNS port, held by mDNSResponder on macOS and often by Avahi on Linux.)
