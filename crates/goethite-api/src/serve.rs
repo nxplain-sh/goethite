@@ -16,6 +16,7 @@ use std::time::Duration;
 use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
 use hyper_util::server::conn::auto::Builder;
 use hyper_util::service::TowerToHyperService;
+use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Semaphore, oneshot, watch};
 use tokio::task::JoinSet;
@@ -28,6 +29,9 @@ use crate::{Api, router};
 
 /// The most API connections served at once.
 pub const MAX_CONNECTIONS: usize = 64;
+
+/// The listen backlog, as the DNS listeners use.
+const TCP_BACKLOG: i32 = 1024;
 
 /// The most connections served at once from one peer address.
 pub const MAX_CONNECTIONS_PER_PEER: usize = 16;
@@ -57,11 +61,9 @@ impl ApiListeners {
         addresses
             .iter()
             .map(|addr| {
-                let listener = StdListener::bind(addr).map_err(|err| {
+                bind_listener(*addr).map_err(|err| {
                     io::Error::new(err.kind(), format!("cannot bind the API on {addr}: {err}"))
-                })?;
-                listener.set_nonblocking(true)?;
-                Ok(listener)
+                })
             })
             .collect::<io::Result<_>>()
             .map(Self)
@@ -88,6 +90,22 @@ impl ApiListeners {
     pub fn local_addrs(&self) -> io::Result<Vec<SocketAddr>> {
         self.0.iter().map(StdListener::local_addr).collect()
     }
+}
+
+/// Binds one TCP listener with `IPV6_V6ONLY`, as the DNS listeners do: a
+/// wildcard `[::]` that also holds the IPv4 wildcard makes `0.0.0.0` beside
+/// it fail with "address in use", and the docs spell dual-stack that way.
+fn bind_listener(addr: SocketAddr) -> io::Result<StdListener> {
+    let socket = Socket::new(Domain::for_address(addr), Type::STREAM, Some(Protocol::TCP))?;
+    if addr.is_ipv6() {
+        socket.set_only_v6(true)?;
+    }
+    // As the standard library does: restarting must not wait for TIME_WAIT.
+    #[cfg(unix)]
+    socket.set_reuse_address(true)?;
+    socket.bind(&SockAddr::from(addr))?;
+    socket.listen(TCP_BACKLOG)?;
+    Ok(socket.into())
 }
 
 /// Serves the API on `listeners` until `shutdown` completes.

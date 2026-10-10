@@ -24,7 +24,7 @@ use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use anyhow::{Context, Result, bail};
 use goethite_api::ApiListeners;
 use goethite_server::{Listeners, MAX_UDP_SOCKETS};
-use socket2::{SockRef, Type};
+use socket2::{Domain, Protocol, SockRef, Socket, Type};
 use tracing::warn;
 
 use crate::config::Config;
@@ -220,11 +220,32 @@ impl Sockets {
 
 /// A TCP listener for the API or the cluster.
 fn bind_tcp(addr: SocketAddr, what: &str) -> Result<TcpListener> {
-    let listener =
-        TcpListener::bind(addr).with_context(|| format!("cannot bind {what} on {addr}"))?;
+    let socket = Socket::new(Domain::for_address(addr), Type::STREAM, Some(Protocol::TCP))
+        .with_context(|| format!("cannot bind {what} on {addr}"))?;
+    // `[::]` alone is IPv6 only, so the dual-stack `0.0.0.0` beside it binds.
+    if addr.is_ipv6() {
+        socket
+            .set_only_v6(true)
+            .with_context(|| format!("cannot bind {what} on {addr}"))?;
+    }
+    // As the standard library does: restarting must not wait for TIME_WAIT.
+    #[cfg(unix)]
+    socket
+        .set_reuse_address(true)
+        .with_context(|| format!("cannot bind {what} on {addr}"))?;
+    socket
+        .bind(&addr.into())
+        .with_context(|| format!("cannot bind {what} on {addr}"))?;
+    socket
+        .listen(TCP_BACKLOG)
+        .with_context(|| format!("cannot bind {what} on {addr}"))?;
+    let listener: TcpListener = socket.into();
     listener.set_nonblocking(true)?;
     Ok(listener)
 }
+
+/// The listen backlog of the API and cluster listeners.
+const TCP_BACKLOG: i32 = 1024;
 
 /// A duplicate of `socket` to keep: the original goes to its server.
 fn duplicate(socket: &impl AsFd) -> Result<OwnedFd> {
