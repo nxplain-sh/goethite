@@ -117,6 +117,9 @@ configuration format.
 
 ### Fixed
 
+- The seccomp filter denies the x32 system calls on x86-64: they share the x86-64 audit
+  architecture and their numbers matched no rule, so a system call the filter takes away was
+  reachable as its x32 number on a kernel built with x32 support.
 - The API, cluster and witness listeners bind with `IPV6_V6ONLY` like the DNS ones, so the
   documented dual-stack pair `listen = ["0.0.0.0:8053", "[::]:8053"]` starts instead of failing
   with "address in use"; a `[::]` listener alone is IPv6-only, and IPv4 peers no longer arrive as

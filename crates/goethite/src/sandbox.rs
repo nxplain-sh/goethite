@@ -196,6 +196,8 @@ mod linux {
         BpfProgram, SeccompAction, SeccompCmpArgLen, SeccompCmpOp, SeccompCondition, SeccompFilter,
         SeccompRule, TargetArch,
     };
+    #[cfg(target_arch = "x86_64")]
+    use seccompiler::sock_filter;
     use tracing::{debug, info, warn};
 
     use super::Policy;
@@ -207,6 +209,66 @@ mod linux {
     /// `EPERM`: what a denied system call returns, as if it were refused
     /// for want of a privilege.
     const EPERM: u32 = 1;
+
+    /// The seccomp return values of the raw BPF program below: allow, and
+    /// `EPERM` with the errno in its low 16 bits.
+    #[cfg(target_arch = "x86_64")]
+    const SECCOMP_RET_ALLOW: u32 = 0x7fff_0000;
+    #[cfg(target_arch = "x86_64")]
+    const SECCOMP_RET_ERRNO_EPERM: u32 = 0x0005_0001;
+
+    /// Denies the x32 system calls on x86-64.
+    ///
+    /// x32 shares the x86-64 audit architecture, so seccompiler's
+    /// architecture check passes them, and each call number is the x86-64
+    /// number with `0x40000000` set, which none of the rules names: without
+    /// this, a denied call is reachable as its x32 number. Stacked with the
+    /// named-call filter, it returns `EPERM` for every number at or above
+    /// that bit, and lets everything else (including an i386 call, which
+    /// the named-call filter declines on its own architecture check) pass.
+    #[cfg(target_arch = "x86_64")]
+    const X32_DENIED: [sock_filter; 6] = [
+        // The audit architecture.
+        sock_filter {
+            code: 0x20, // BPF_LD | BPF_W | BPF_ABS
+            jt: 0,
+            jf: 0,
+            k: 4,
+        },
+        // Not x86-64: to the allow, three instructions on.
+        sock_filter {
+            code: 0x15, // BPF_JMP | BPF_JEQ | BPF_K
+            jt: 0,
+            jf: 3,
+            k: 0xc000_003e, // AUDIT_ARCH_X86_64
+        },
+        // The system call number.
+        sock_filter {
+            code: 0x20,
+            jt: 0,
+            jf: 0,
+            k: 0,
+        },
+        // At or above the x32 bit: the deny below; under it: the allow.
+        sock_filter {
+            code: 0x35, // BPF_JMP | BPF_JGE | BPF_K
+            jt: 0,
+            jf: 1,
+            k: 0x4000_0000,
+        },
+        sock_filter {
+            code: 0x06, // BPF_RET | BPF_K
+            jt: 0,
+            jf: 0,
+            k: SECCOMP_RET_ERRNO_EPERM,
+        },
+        sock_filter {
+            code: 0x06,
+            jt: 0,
+            jf: 0,
+            k: SECCOMP_RET_ALLOW,
+        },
+    ];
 
     /// Socket families (the same numbers on every architecture).
     const AF_UNIX: u64 = 1;
@@ -451,18 +513,35 @@ mod linux {
             arch,
         )?;
         let program = BpfProgram::try_from(filter)?;
+        // x32 calls pass the architecture check of the named-call filter and
+        // match none of its rules: a raw filter stacked with it denies them.
+        #[cfg(target_arch = "x86_64")]
+        match seccompiler::apply_filter(&X32_DENIED) {
+            Ok(()) => {}
+            Err(err) if refused(&err) => {
+                // An outer sandbox refuses the filter, as below; goethite is
+                // confined by whatever refused it.
+            }
+            Err(err) => return Err(err.into()),
+        }
         match seccompiler::apply_filter(&program) {
             Ok(()) => Ok(Some(denied)),
             // Refused rather than broken: an outer filter (EPERM, EACCES)
             // or a kernel without seccomp (ENOSYS). An invalid filter
             // (EINVAL) would be goethite's own bug, and stays an error.
-            Err(seccompiler::Error::Seccomp(err))
-                if matches!(err.raw_os_error(), Some(1 | 13 | 38)) =>
-            {
-                Ok(None)
-            }
+            Err(err) if refused(&err) => Ok(None),
             Err(err) => Err(err.into()),
         }
+    }
+
+    /// Whether seccomp refused a filter: an outer filter (EPERM, EACCES) or
+    /// a kernel without seccomp (ENOSYS), rather than a bug of ours.
+    fn refused(err: &seccompiler::Error) -> bool {
+        matches!(
+            err,
+            seccompiler::Error::Seccomp(source)
+                if matches!(source.raw_os_error(), Some(1 | 13 | 38))
+        )
     }
 
     #[cfg(test)]
@@ -494,6 +573,42 @@ mod linux {
                 Some(dir) => refused_child(&PathBuf::from(dir)),
                 None => run_child("an_outer_sandbox_refusing_the_calls_is_not_fatal"),
             }
+        }
+
+        /// An x32 system call (an x86-64 number with `0x40000000` set) is
+        /// sent to the raw filter and denied, whatever the named-call
+        /// filter says.
+        #[test]
+        #[cfg(target_arch = "x86_64")]
+        fn x32_calls_are_denied() {
+            match std::env::var_os(CHILD) {
+                Some(_) => x32_child(),
+                None => run_child("x32_calls_are_denied"),
+            }
+        }
+
+        /// Applies the x32 filter and makes one x32 call: `EPERM`, or
+        /// `ENOSYS` on a kernel built without x32.
+        #[cfg(target_arch = "x86_64")]
+        #[allow(unsafe_code, reason = "issuing the x32 call the filter denies")]
+        fn x32_child() {
+            seccompiler::apply_filter(&X32_DENIED).unwrap();
+            // SAFETY: the x32 `getpid` call takes no arguments and writes
+            // only the return register.
+            let pid = unsafe {
+                let pid: i64;
+                std::arch::asm!(
+                    "syscall",
+                    in("rax") 0x4000_0027_u64, // x32 getpid
+                    lateout("rax") pid,
+                    out("rcx") _,
+                    out("r11") _,
+                );
+                pid
+            };
+            assert!(pid < 0, "x32 getpid returned {pid}");
+            let errno = -pid;
+            assert!(errno == 1 || errno == 38, "x32 getpid failed with {errno}");
         }
 
         /// Runs the test `name` again in a child process, as the child.
