@@ -234,3 +234,20 @@ Flat out (`-T 4`), v0.5.0 answered 173,734 q/s and v0.4.0 123,469 q/s. No query 
 v0.5.0 is within v0.4.0's range or better in every column, so the sandbox and the new checks show
 no regression. As in v0.4.0's run, neither version kept the p99 under a millisecond on this busy
 host; the sub-millisecond target still needs a run on a quiet machine before it can be claimed.
+
+2026-10-10, OpenTelemetry ([ADR 0034](../docs/adr/0034-opentelemetry.md); commit `37f2f5a`)
+against v0.5.0 (the release binary), same VM, interleaved in the same session. The Mac was quiet
+this time (load average under 2).
+
+- **What changed:** metrics kept by the SDK with bound instruments, the new subscriber layers, and
+  spans after a cache miss.
+- **Setup:** the same minimal config for both (Quad9 over DNS over TLS, query log on, no
+  `[telemetry]`), served from the cache, 20 s per run with `-c 4`.
+
+| Offered load | Version | Answered | p50 | p90 | p99 | p99.9 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 50,000 q/s, 3 rounds | v0.5.0 | 49,997–49,999 q/s | 34 µs | 62–67 µs | 125–223 µs | 1.18–1.63 ms |
+| | OpenTelemetry | 49,953–49,999 q/s | 34–35 µs | 65–67 µs | 151–179 µs | 1.15–1.57 ms |
+
+No query was lost. The two builds are within each other's noise. On a quiet host, both keep the
+p99 well under a millisecond at 50,000 q/s.
