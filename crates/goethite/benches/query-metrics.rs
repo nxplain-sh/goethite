@@ -1,5 +1,5 @@
 //! What counting one answered query costs: v0.5.0's atomics against the
-//! OpenTelemetry instruments that replaced them (ADR 0034), bound as
+//! OpenTelemetry instruments that replaced them (ADR 0040), bound as
 //! goethite binds them and, for scale, unbound.
 
 use std::hint::black_box;

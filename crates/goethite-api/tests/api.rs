@@ -1791,3 +1791,16 @@ async fn user_changes_are_audited_without_secrets() {
     );
     assert!(!audit.text.contains("argon2"), "no hash in the audit log");
 }
+
+/// The documented dual-stack pair binds side by side: the IPv6 wildcard must
+/// be `IPV6_V6ONLY`, or it holds the IPv4 wildcard too and the second bind
+/// fails with "address in use".
+#[test]
+fn binds_dual_stack_wildcards() {
+    let Ok(ipv6) = ApiListeners::bind(&["[::]:0".parse().unwrap()]) else {
+        return; // this host has no IPv6
+    };
+    let port = ipv6.local_addrs().unwrap()[0].port();
+    let v4: SocketAddr = format!("0.0.0.0:{port}").parse().unwrap();
+    ApiListeners::bind(&[v4]).unwrap();
+}

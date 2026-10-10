@@ -1306,7 +1306,7 @@ mod serving {
     }
 
     /// `/metrics` serves the data plane's and the control plane's metrics
-    /// under the names they had before OpenTelemetry (ADR 0034).
+    /// under the names they had before OpenTelemetry (ADR 0040).
     #[test]
     fn serves_metrics() {
         let mut server = Running::start("metrics", upstream());
