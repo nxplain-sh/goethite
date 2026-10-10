@@ -117,6 +117,29 @@ Benchmarks and how to record them are in [`bench/`](bench/README.md). The layout
 - [Competitor features](docs/competitor-features.md): AdGuard Home, Pi-hole and Numa set against
   goethite
 
+## Independent implementation
+
+goethite is its own code, written from scratch. Nothing in it is copied from Pi-hole, AdGuard Home,
+NextDNS, Numa or any other DNS filter, translated from another language, or used as a template.
+What it does comes from the DNS RFCs, the published formats of the filter lists it reads (hosts
+files, domain lists, AdGuard-style rules) and its own design, which the [ADRs](docs/adr/) record.
+
+Other projects were studied, never copied, in two places, both linked so anyone can check them:
+
+- [Competitor features](docs/competitor-features.md) records what the other projects do, citing
+  their documentation and source, so goethite can decide what to build. It lists features, not
+  code.
+- `goethite migrate` reads Pi-hole's and AdGuard Home's web APIs, so the shape of their answers was
+  checked against their source, for interoperability only
+  ([ADR 0030](docs/adr/0030-migrating-from-pihole-and-adguard-home.md)).
+
+No third-party data is compiled into goethite either: filter lists and AdGuard's blocked-services
+catalog (GPL-3.0) are downloaded at runtime from their publishers, under their own licenses
+([ADR 0019](docs/adr/0019-blocked-services.md),
+[ADR 0022](docs/adr/0022-recommended-list-catalog.md)).
+The libraries goethite builds on, such as hickory-proto, are declared dependencies whose licenses
+`cargo deny` checks. Contributions are held to the same rule: send only code you wrote yourself.
+
 ## License
 
 goethite is free software under the
