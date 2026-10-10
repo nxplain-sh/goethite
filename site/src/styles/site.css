@@ -500,7 +500,8 @@ pre {
 	margin: 1.25rem 0;
 }
 
-.shiki {
+/* Shiki writes .shiki (plugins/markdown.ts); the landing page's commands use the same block. */
+.code pre {
 	margin: 0;
 	padding: 1rem 1.1rem;
 	overflow-x: auto;
