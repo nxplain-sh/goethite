@@ -710,7 +710,7 @@ fn dist_sboms(root: &Path, out: &Path, host: &str, version: &str, name: &str) ->
     ])
 }
 
-/// The container image (deploy/container/Containerfile) for every
+/// The container image (deploy/container/Dockerfile) for every
 /// architecture with a release tarball in target/dist: the binaries come out
 /// of the tarballs, so the image holds exactly what was released. Without
 /// arguments it is written to target/dist as an OCI archive; with
@@ -770,7 +770,7 @@ fn image(args: &[String]) -> Result {
     }
     let epoch = capture(git(&root).args(["log", "-1", "--format=%ct", "HEAD"]))?;
     let revision = capture(git(&root).args(["rev-parse", "HEAD"]))?;
-    let containerfile = root.join("deploy").join("container").join("Containerfile");
+    let containerfile = root.join("deploy").join("container").join("Dockerfile");
     let mut build = Command::new("docker");
     build
         .args(["buildx", "build", "--platform", &platforms.join(",")])
@@ -819,7 +819,7 @@ fn image(args: &[String]) -> Result {
     Ok(())
 }
 
-/// The `org.opencontainers.image.*` labels a Containerfile sets, one
+/// The `org.opencontainers.image.*` labels a Dockerfile sets, one
 /// `key="value"` per line, as `key=value` with `${VERSION}` and
 /// `${REVISION}` filled in.
 fn oci_labels(containerfile: &str, version: &str, revision: &str) -> Vec<String> {

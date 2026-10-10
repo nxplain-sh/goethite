@@ -11,7 +11,7 @@ for the floating IP, the [HA guide](../site/src/content/docs/ha.md).
 | [`systemd/goethite-witness.service`](systemd/goethite-witness.service) | A cluster witness on a third machine: votes, never leads, serves no DNS; no privileges at all            |
 | [`goethite.toml`](goethite.toml)                                 | The server config the packages and the tarball install as `/etc/goethite/goethite.toml`                       |
 | [`package/`](package/)                                           | The .deb and .rpm packages: nfpm's description, the install and removal scripts, the Debian copyright file    |
-| [`container/`](container/)                                       | The container image (its Containerfile and config) and a Compose file that runs one node unprivileged from the start |
+| [`container/`](container/)                                       | The container image (its Dockerfile, with Containerfile as a symlink to it, and config) and a Compose file that runs one node unprivileged from the start |
 | [`container/cluster/`](container/cluster/)                       | Compose files and example configs for a cluster: `node/` for each DNS node with its floating IP, `witness/` for the witness |
 
 CI checks `goethite.service` and `goethite-witness.service` with `systemd-analyze verify`. `systemd-analyze security <unit>`

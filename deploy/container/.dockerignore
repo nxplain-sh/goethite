@@ -1,0 +1,6 @@
+# Only the files the Dockerfile copies belong in the image, and `cargo xtask
+# image` generates its build context in target/dist/image for that. This file
+# is for a manual build with this directory as the context: the Compose files
+# here are not inputs.
+compose.yaml
+cluster/
