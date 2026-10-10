@@ -978,18 +978,43 @@ async fn local_records_answer_first_and_lead_to_upstream_answers() {
     assert_eq!(tracker.response.rcode, ResponseCode::NX_DOMAIN);
 }
 
-/// Records the spans opened, and the `name` fields recorded on them.
-#[derive(Clone, Default)]
-struct Spans(Arc<Mutex<(Vec<String>, Vec<String>)>>);
+/// Records the spans opened on the thread that claims it, and the `name`
+/// fields recorded on them. Spans other tests open are ignored.
+///
+/// The subscriber is installed process-wide (once) because a scoped one
+/// races with the other tests in this binary: the first thread to touch a
+/// callsite fills in the process-wide interest cache for it, and a thread
+/// with no subscriber disables it for everyone.
+struct Spans {
+    thread: std::sync::OnceLock<std::thread::ThreadId>,
+    log: Mutex<(Vec<String>, Vec<String>)>,
+}
 
-impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for Spans {
+static SPANS: Spans = Spans {
+    thread: std::sync::OnceLock::new(),
+    log: Mutex::new((Vec::new(), Vec::new())),
+};
+
+struct SpansLayer;
+
+impl Spans {
+    fn claimed_by_this_thread(&self) -> bool {
+        self.thread.get() == Some(&std::thread::current().id())
+    }
+}
+
+impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for SpansLayer {
     fn on_new_span(
         &self,
         attrs: &tracing::span::Attributes<'_>,
         _: &tracing::span::Id,
         _: tracing_subscriber::layer::Context<'_, S>,
     ) {
-        self.0
+        if !SPANS.claimed_by_this_thread() {
+            return;
+        }
+        SPANS
+            .log
             .lock()
             .unwrap()
             .0
@@ -1010,7 +1035,10 @@ impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for Spans {
                 }
             }
         }
-        values.record(&mut Names(&mut self.0.lock().unwrap().1));
+        if !SPANS.claimed_by_this_thread() {
+            return;
+        }
+        values.record(&mut Names(&mut SPANS.log.lock().unwrap().1));
     }
 }
 
@@ -1021,32 +1049,36 @@ impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for Spans {
 async fn spans_only_on_the_slow_path() {
     use tracing_subscriber::layer::SubscriberExt as _;
 
+    static INSTALL: std::sync::Once = std::sync::Once::new();
+    SPANS.thread.get_or_init(|| std::thread::current().id());
+    INSTALL.call_once(|| {
+        tracing::subscriber::set_global_default(tracing_subscriber::registry().with(SpansLayer))
+            .unwrap();
+    });
+
     let upstream = fake(always(Ipv4Addr::new(192, 0, 2, 7)), silent()).await;
-    let spans = Spans::default();
-    let _subscriber =
-        tracing::subscriber::set_default(tracing_subscriber::registry().with(spans.clone()));
-    // Other tests run in parallel without a subscriber; re-evaluate the
-    // interest cache so their callsites do not stay disabled here.
-    tracing::callsite::rebuild_interest_cache();
     let resolver = Resolver::new(Vec::new())
         .with_cache(Cache::new(CacheConfig::default()))
         .with_forwarder(forwarder(vec![UpstreamConfig::udp(upstream.addr)]));
 
     let first = resolver.resolve(&query("example.com."), CLIENT).await;
     assert_eq!(first.outcome, Outcome::Upstream(0));
-    assert_eq!(spans.0.lock().unwrap().0, ["resolve", "upstream"]);
+    assert_eq!(SPANS.log.lock().unwrap().0, ["resolve", "upstream"]);
     let again = resolver.resolve(&query("example.com."), CLIENT).await;
     assert_eq!(again.outcome, Outcome::Cached);
     assert_eq!(
-        spans.0.lock().unwrap().0.len(),
+        SPANS.log.lock().unwrap().0.len(),
         2,
         "a cache hit opens no span"
     );
-    assert!(spans.0.lock().unwrap().1.is_empty(), "no names by default");
+    assert!(
+        SPANS.log.lock().unwrap().1.is_empty(),
+        "no names by default"
+    );
 
     let detailed = Resolver::new(Vec::new())
         .with_forwarder(forwarder(vec![UpstreamConfig::udp(upstream.addr)]))
         .with_span_details(true);
     detailed.resolve(&query("named.example."), CLIENT).await;
-    assert_eq!(spans.0.lock().unwrap().1, ["named.example."]);
+    assert_eq!(SPANS.log.lock().unwrap().1, ["named.example."]);
 }
