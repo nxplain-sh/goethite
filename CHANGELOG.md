@@ -7,6 +7,8 @@ configuration format.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-10
+
 ### Added
 
 - **Sending metrics, logs and traces to an OpenTelemetry collector** over OTLP/HTTP, with a new
@@ -474,7 +476,8 @@ production on Linux. It is pre-alpha software: try it, but do not rely on it yet
   criterion benchmarks, a dnsperf script, and CI with clippy, tests on amd64 and arm64,
   cargo-deny and cargo-audit.
 
-[Unreleased]: https://github.com/nxplain-sh/goethite/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/nxplain-sh/goethite/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/nxplain-sh/goethite/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/nxplain-sh/goethite/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/nxplain-sh/goethite/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/nxplain-sh/goethite/compare/v0.2.0...v0.3.0

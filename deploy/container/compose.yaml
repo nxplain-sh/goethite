@@ -21,7 +21,7 @@ services:
   goethite:
     # The newest release of this minor version. `cargo xtask versions`
     # checks that it is the repository's.
-    image: ghcr.io/nxplain-sh/goethite:0.5
+    image: ghcr.io/nxplain-sh/goethite:0.6
     restart: unless-stopped
     ports:
       # Where systemd-resolved holds 127.0.0.53:53, or to answer on one

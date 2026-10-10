@@ -1,6 +1,6 @@
 {
   "name": "goethite-web",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "private": true,
   "description": "The goethite web UI: a single-page app embedded into the goethite binary.",
   "license": "AGPL-3.0-only",

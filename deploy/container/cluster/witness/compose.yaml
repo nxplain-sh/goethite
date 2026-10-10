@@ -22,7 +22,7 @@ services:
   witness:
     # The newest release of this minor version. `cargo xtask versions`
     # checks that it is the repository's. Upgrade it with the nodes.
-    image: ghcr.io/nxplain-sh/goethite:0.5
+    image: ghcr.io/nxplain-sh/goethite:0.6
     command: ["witness", "--config", "/etc/goethite/goethite.toml"]
     restart: unless-stopped
     ports:
