@@ -43,6 +43,12 @@ const MAX_STREAMS: u32 = 64;
 /// largest DNS message does not fit; such messages are sent with `POST`.
 const MAX_HEAD: usize = 64 * 1024;
 
+/// The HTTP/2 flow-control windows: enough for one largest body per stream,
+/// and a few bodies in flight together, instead of hyper's 1 MiB defaults a
+/// client could fill with tiny frames.
+const STREAM_WINDOW: u32 = 65_536;
+const CONNECTION_WINDOW: u32 = 262_144;
+
 /// How long the connection's last requests may take once it is closing.
 const CLOSE_GRACE: Duration = Duration::from_secs(5);
 
@@ -81,7 +87,9 @@ pub(crate) async fn serve_connection(
         .http2()
         .timer(TokioTimer::new())
         .max_concurrent_streams(MAX_STREAMS)
-        .max_header_list_size(u32::try_from(MAX_HEAD).unwrap_or(u32::MAX));
+        .max_header_list_size(u32::try_from(MAX_HEAD).unwrap_or(u32::MAX))
+        .initial_stream_window_size(STREAM_WINDOW)
+        .initial_connection_window_size(CONNECTION_WINDOW);
     let connection = builder.serve_connection(TokioIo::new(stream), service);
     tokio::pin!(connection);
     loop {
@@ -332,14 +340,35 @@ impl Context {
             return Err(too_large);
         }
         let body = Limited::new(request.into_body(), limit);
-        match timeout(self.body_timeout, body.collect()).await {
-            Ok(Ok(collected)) => Ok((kind, collected.to_bytes().to_vec())),
+        match timeout(self.body_timeout, one_buffer(body)).await {
+            Ok(Ok(bytes)) => Ok((kind, bytes)),
             Ok(Err(err)) if err.is::<LengthLimitError>() => Err(too_large),
             Ok(Err(err)) => {
                 debug!(peer = %self.peer, %err, "cannot read a DNS over HTTPS body");
                 Err((StatusCode::BAD_REQUEST, "cannot read the body"))
             }
             Err(_) => Err((StatusCode::REQUEST_TIMEOUT, "the body took too long")),
+        }
+    }
+}
+
+/// Reads `body` frame by frame into one buffer. Unlike `collect`, which
+/// keeps a buffer per frame until the end, a flood of tiny frames costs one
+/// buffer; the caller's [`Limited`] caps its size.
+async fn one_buffer<B>(mut body: B) -> Result<Vec<u8>, B::Error>
+where
+    B: hyper::body::Body<Data = Bytes> + Unpin,
+{
+    let mut out = Vec::new();
+    loop {
+        match body.frame().await {
+            None => return Ok(out),
+            Some(Ok(frame)) => {
+                if let Ok(data) = frame.into_data() {
+                    out.extend_from_slice(&data);
+                }
+            }
+            Some(Err(err)) => return Err(err),
         }
     }
 }
@@ -412,6 +441,36 @@ fn plain(status: StatusCode, text: &str) -> Response<Full<Bytes>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A body of one-byte frames.
+    struct TinyFrames(usize);
+
+    impl hyper::body::Body for TinyFrames {
+        type Data = Bytes;
+        type Error = Infallible;
+
+        fn poll_frame(
+            self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Option<Result<hyper::body::Frame<Bytes>, Infallible>>> {
+            let frames = self.get_mut();
+            if frames.0 == 0 {
+                return std::task::Poll::Ready(None);
+            }
+            frames.0 = frames.0.saturating_sub(1);
+            std::task::Poll::Ready(Some(Ok(hyper::body::Frame::data(Bytes::from_static(b"x")))))
+        }
+    }
+
+    #[tokio::test]
+    async fn a_flood_of_tiny_frames_costs_one_buffer() {
+        let bytes = one_buffer(TinyFrames(10_000)).await.unwrap();
+        assert_eq!(bytes, vec![b'x'; 10_000]);
+        let err = one_buffer(Limited::new(TinyFrames(11), 10))
+            .await
+            .unwrap_err();
+        assert!(err.is::<LengthLimitError>());
+    }
 
     #[tokio::test]
     async fn an_open_request_does_not_spin_the_idle_wait() {
