@@ -1,10 +1,22 @@
 name: CI
 
+# No `push` trigger. Changes reach development and main through pull
+# requests, and a pull request's run already tests the merge result
+# (refs/pull/N/merge), so a run on the push that merges it would test the
+# same tree a second time. A direct push to development is checked by the
+# next pull request into main.
 on:
-  push:
-    branches: [main, development]
+  # Documentation cannot break the build, so a pull request that only changes
+  # documentation starts nothing. A pull request into main always runs, since
+  # it releases a version bumped in Cargo.toml. If one ever does not, its
+  # required checks stay pending; `gh workflow run ci.yaml --ref development`
+  # reports them on its head commit.
   pull_request:
-  # Weekly, so new advisories against unchanged dependencies are noticed.
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+  # Weekly, so new advisories against unchanged dependencies are noticed. It
+  # runs on main, and every branch can restore main's caches.
   schedule:
     - cron: "17 4 * * 1"
   workflow_dispatch:
@@ -235,6 +247,8 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  # The pinned toolchain is the MSRV (ADR 0025), so clippy already builds
+  # every target with it. This only checks that the two still agree.
   msrv:
     name: MSRV
     runs-on: ubuntu-24.04
@@ -251,11 +265,6 @@ jobs:
             "$msrv" | "$msrv".*) ;;
             *) echo "::error::rust-toolchain.toml ($pinned) does not match rust-version ($msrv)"; exit 1 ;;
           esac
-          echo "MSRV=$msrv" >> "$GITHUB_ENV"
-      - name: Install the MSRV toolchain
-        run: rustup toolchain install "$MSRV" --profile minimal
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - run: cargo +"$MSRV" check --workspace --all-targets --all-features --locked
 
   deny:
     name: cargo-deny
