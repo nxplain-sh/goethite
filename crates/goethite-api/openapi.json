@@ -435,6 +435,25 @@
         ]
       }
     },
+    "/api/v1/cache/flush": {
+      "post": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Empties the answer cache now. Fresh names are resolved again on their next\nquery.",
+        "operationId": "flush_cache",
+        "responses": {
+          "200": {
+            "description": "The cache is empty"
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      }
+    },
     "/api/v1/clients": {
       "get": {
         "tags": [
@@ -3811,7 +3830,7 @@
       },
       "AuditAction": {
         "type": "string",
-        "description": "What an audit entry records: `create`, `update` or `delete` (a resource or the settings), `import` (the config file's `[filter]` table), `pause` or `resume` (filtering), `refresh` (a list download), `replicate` (the cluster's whole configuration, taken from another member), `promote` (this node took the cluster over) or `demote` (this node left its cluster to join another). More may be added: show unknown values as they are.",
+        "description": "What an audit entry records: `create`, `update` or `delete` (a resource or the settings), `import` (the config file's `[filter]` table), `pause` or `resume` (filtering), `refresh` (a list download), `flush` (the answer cache), `replicate` (the cluster's whole configuration, taken from another member), `promote` (this node took the cluster over) or `demote` (this node left its cluster to join another). More may be added: show unknown values as they are.",
         "x-extensible-enum": [
           "create",
           "update",
@@ -3820,6 +3839,7 @@
           "pause",
           "resume",
           "refresh",
+          "flush",
           "replicate",
           "promote",
           "demote"

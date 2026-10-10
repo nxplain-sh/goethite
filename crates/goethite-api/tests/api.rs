@@ -47,6 +47,7 @@ struct FakeControl {
     applied: Mutex<Vec<Change>>,
     paused: Mutex<Option<SystemTime>>,
     refreshed: Mutex<usize>,
+    flushed: Mutex<usize>,
     /// Where changes go; local when unset.
     writes: Mutex<Option<Writes>>,
     /// Changes forwarded to the "primary".
@@ -99,6 +100,10 @@ impl Control for FakeControl {
 
     fn refresh_lists(&self) {
         *self.refreshed.lock().unwrap() += 1;
+    }
+
+    fn flush_cache(&self) {
+        *self.flushed.lock().unwrap() += 1;
     }
 
     fn pause(&self, until: Option<SystemTime>) {
@@ -677,6 +682,25 @@ async fn the_token_is_required_once_configured() {
     let health = server.get("/api/v1/health").await;
     assert_eq!(health.status, StatusCode::OK);
     assert_eq!(health.body["status"], "ok");
+}
+
+#[tokio::test]
+async fn flushing_the_cache_is_audited() {
+    let server = start(true);
+    let flushed = server.post("/api/v1/cache/flush", json!({})).await;
+    assert_eq!(flushed.status, StatusCode::OK, "{}", flushed.text);
+    assert_eq!(*server.control.flushed.lock().unwrap(), 1);
+    let audit = server.get("/api/v1/audit?limit=8").await;
+    assert!(
+        audit
+            .body
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["action"] == "flush"),
+        "{}",
+        audit.text
+    );
 }
 
 #[tokio::test]

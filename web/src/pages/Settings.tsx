@@ -3,7 +3,7 @@ import { type FormEvent, useState } from 'react'
 
 import { ApiError, type BlockResponseKind, type Settings as Stored } from '../api/client'
 import { statusQuery } from '../api/queries'
-import { checkUpdate, saveSettings, settingsQuery } from '../api/resources'
+import { checkUpdate, flushCache, saveSettings, settingsQuery } from '../api/resources'
 import { Loading } from '../components/editor'
 import { CheckField, SelectField, TextAreaField, TextField } from '../components/form'
 import { ErrorNotice } from '../components/ui'
@@ -95,6 +95,7 @@ function SettingsForm({
 	}
 	const status = useQuery(statusQuery)
 	const check = useMutation({ mutationFn: checkUpdate })
+	const flush = useMutation({ mutationFn: flushCache })
 	return (
 		<div className="grid-page editor">
 			<h1>Settings</h1>
@@ -176,6 +177,27 @@ function SettingsForm({
 					</button>
 				</div>
 			</form>
+			<section className="panel">
+				<h2>Cache</h2>
+				<p className="muted">
+					A fresh answer stays cached until its time to live runs out. Emptying the cache makes the next query
+					for a name reach the upstreams again; filtering and local records are not affected.
+				</p>
+				<button
+					type="button"
+					className="button small"
+					disabled={flush.isPending}
+					onClick={() => flush.mutate()}
+				>
+					{flush.isPending ? 'Emptying…' : 'Empty the cache'}
+				</button>
+				{flush.isSuccess ? (
+					<div className="notice" role="status">
+						The cache is empty.
+					</div>
+				) : null}
+				<ErrorNotice error={flush.error} />
+			</section>
 			<section className="panel">
 				<h2>Version</h2>
 				<p className="muted">

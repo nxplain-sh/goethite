@@ -249,6 +249,12 @@ impl goethite_api::Control for Node {
         self.control.refresh_lists();
     }
 
+    fn flush_cache(&self) {
+        if let Some(cache) = self.resolver.cache() {
+            cache.clear();
+        }
+    }
+
     fn pause(&self, until: Option<SystemTime>) {
         self.control.state().pause(until);
     }

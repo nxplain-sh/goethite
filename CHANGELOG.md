@@ -9,6 +9,9 @@ configuration format.
 
 ### Added
 
+- **Empty the cache**, from the web UI's Settings page or with `POST /api/v1/cache/flush`:
+  names resolve again on their next query, without a restart. Filtering and local records are
+  untouched.
 - **Blocked answers carry Extended DNS Error 15, "Blocked"** ([RFC
   8914](https://www.rfc-editor.org/rfc/rfc8914)) when the client asked with EDNS, so `dig` and
   browsers can tell a filtered name from a broken one. The info code of an upstream's own EDE is

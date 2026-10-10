@@ -39,6 +39,7 @@ use crate::{cluster, handlers, users};
         handlers::update_list,
         handlers::delete_list,
         handlers::refresh_lists,
+        handlers::flush_cache,
         handlers::recommended_lists,
         handlers::recommended_sizes,
         handlers::get_directory,

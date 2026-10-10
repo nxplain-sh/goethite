@@ -171,6 +171,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/cache/flush": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Empties the answer cache now. Fresh names are resolved again on their next
+         *     query.
+         */
+        post: operations["flush_cache"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/clients": {
         parameters: {
             query?: never;
@@ -958,7 +978,7 @@ export interface components {
         };
         /** @description Who made a change: `token` (an API client with the admin token), `user` (a signed-in user, named in the actor's `name`), `unauthenticated` (an API client on loopback while no admin token is configured), `cli` (the goethite command line), `system` (goethite itself) or `replication` (a whole configuration taken from another cluster member). More may be added: show unknown values as they are. */
         ActorKind: string;
-        /** @description What an audit entry records: `create`, `update` or `delete` (a resource or the settings), `import` (the config file's `[filter]` table), `pause` or `resume` (filtering), `refresh` (a list download), `replicate` (the cluster's whole configuration, taken from another member), `promote` (this node took the cluster over) or `demote` (this node left its cluster to join another). More may be added: show unknown values as they are. */
+        /** @description What an audit entry records: `create`, `update` or `delete` (a resource or the settings), `import` (the config file's `[filter]` table), `pause` or `resume` (filtering), `refresh` (a list download), `flush` (the answer cache), `replicate` (the cluster's whole configuration, taken from another member), `promote` (this node took the cluster over) or `demote` (this node left its cluster to join another). More may be added: show unknown values as they are. */
         AuditAction: string;
         /** @description One entry of the audit log. */
         AuditEntry: {
@@ -2604,6 +2624,24 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
+            };
+        };
+    };
+    flush_cache: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The cache is empty */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
