@@ -186,7 +186,8 @@ for scripts written against it: the leader is the `primary`.
 
 Members check on each other every 5 seconds. `problems` lists, in words, anything that needs a
 person: no leader, a member that is unreachable, runs another version or is in another cluster,
-or two voters. The web UI and the TUI show the cluster on their dashboards.
+or two voters. The TUI shows the cluster on its dashboard; the web UI on its dashboard and on a
+[Cluster page](../web-ui/#the-cluster-page) of its own, which also offers the steps below.
 
 ## Statistics
 
@@ -205,7 +206,8 @@ want the configuration frozen, take the cluster over on a member that is left:
 curl -X POST http://127.0.0.1:8053/api/v1/cluster/promote
 ```
 
-It leaves its cluster and starts a new one, as its only voter, with its own configuration.
+In the web UI, this node's Cluster page offers it as **Take the cluster over** while there is no
+leader. It leaves its cluster and starts a new one, as its only voter, with its own configuration.
 goethite refuses while a leader of the cluster answers, since there is nothing to take over (pass
 `{"force": true}` to do it anyway). The new cluster has a new ID; its leader adds the members in
 its config file as they join.
@@ -218,7 +220,8 @@ curl -X POST http://dns1:8053/api/v1/cluster/demote
 ```
 
 It leaves its old cluster, and the new cluster's leader adds it, replacing its configuration.
-A demote is refused unless the leader of another cluster answers (`force` overrides).
+A demote is refused unless the leader of another cluster answers (`force` overrides). In the web
+UI, the member's Cluster page offers it as **Join dns2's cluster**, naming the other leader.
 
 ## Removing a member
 
@@ -231,8 +234,8 @@ then:
 curl -X DELETE http://127.0.0.1:8053/api/v1/cluster/members/dns3
 ```
 
-Any member forwards it to the leader. If that leaves two voters, the leader goes back to voting
-alone. Certificates cannot be revoked: to lock a removed member out for good, create a new CA and
+Any member forwards it to the leader. In the web UI, a member that is down has **Remove** on its
+card. If that leaves two voters, the leader goes back to voting alone. Certificates cannot be revoked: to lock a removed member out for good, create a new CA and
 issue new certificates to the remaining members.
 
 ## A floating IP

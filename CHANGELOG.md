@@ -7,6 +7,15 @@ configuration format.
 
 ## [Unreleased]
 
+### Added
+
+- **A Cluster page in the web UI**, on nodes in a cluster: the cluster's health in a word, the
+  voters it can lose, a card per member (up or down, leader, voter, witness, version, how many
+  changes behind the leader), how this node follows the leader, and the recovery steps where they
+  apply: take the cluster over, join another cluster, remove a member that is down, each after a
+  second click. The dashboard's Cluster panel and the header's cluster badges lead to it. See
+  [Web UI](https://nxplain-sh.github.io/goethite/web-ui/#the-cluster-page).
+
 ### Changed
 
 - goethite is now licensed under the GNU Affero General Public License, version 3 only

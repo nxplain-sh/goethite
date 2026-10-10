@@ -5,6 +5,7 @@ import { Suspense, lazy, useMemo, useState } from 'react'
 import type { ClusterStatus, Status } from '../api/client'
 import { type LogSearch, clientsQuery, listsQuery, statsQuery, statusQuery } from '../api/queries'
 import { saveRule } from '../api/resources'
+import { HEALTH, health } from '../cluster/health'
 import { ErrorBoundary } from '../components/ErrorBoundary'
 import { type Bucket, buckets } from '../dashboard/buckets'
 import { ErrorNotice, Panel, Stat } from '../components/ui'
@@ -432,10 +433,17 @@ function Filter({ status, names }: { status: Status; names: Map<string, string> 
 }
 
 function ClusterPanel({ cluster }: { cluster: ClusterStatus }) {
+	const { label, tone } = HEALTH[health(cluster)]
 	return (
 		<Panel title="Cluster">
 			<table className="table">
 				<tbody>
+					<tr>
+						<td>Health</td>
+						<td>
+							<span className={`badge ${tone}`}>{label}</span>
+						</td>
+					</tr>
 					<tr>
 						<td>Leader</td>
 						<td className="name">
@@ -481,6 +489,9 @@ function ClusterPanel({ cluster }: { cluster: ClusterStatus }) {
 					) : null}
 				</tbody>
 			</table>
+			<Link to="/cluster" className="button small panel-link">
+				Open the cluster
+			</Link>
 		</Panel>
 	)
 }
