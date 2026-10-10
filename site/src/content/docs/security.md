@@ -246,6 +246,9 @@ goethite opens connections only to:
 - **`api.filterlists.com`**, over HTTPS, only when someone opens Find lists in the web UI, at
   most once a day ([FilterLists directory](../filtering/#finding-more-lists); `[filter]
   directory = false` turns it off);
+- **`api.github.com`**, over HTTPS, only when someone presses **Check for updates** in the web
+  UI (or `POST /api/v1/update/check`), to read the newest release's tag; the node sends nothing
+  about itself;
 - the other **members of its cluster**, if it is in one;
 - the **OpenTelemetry collector** in `[telemetry] endpoint`, if one is set, every `interval`
   seconds and once when goethite stops. It receives the [metrics](../observability/) (counts

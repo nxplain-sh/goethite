@@ -22,6 +22,7 @@ mod services;
 mod sizes;
 mod sockets;
 mod telemetry;
+mod update;
 mod vrrp;
 mod witness;
 

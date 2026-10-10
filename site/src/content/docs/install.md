@@ -258,5 +258,9 @@ also re-reads the config file, so this applies config changes too, except new li
 so queries wait in the kernel for the second or so it takes rather than being refused. The same
 happens if goethite crashes and systemd restarts it.
 
+Not sure whether a newer release exists? The web UI's Settings page has **Check for updates**: it
+asks GitHub for the newest release and says whether this node runs it. It installs nothing; the
+upgrade stays yours to start, as above.
+
 Read the [changelog](../changelog/) first: before 1.0, a minor version may change the
 configuration format, and `goethite check-config` tells you what to fix.

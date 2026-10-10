@@ -21,7 +21,7 @@ use goethite_api::{
     Api, ApiConfig, ApiError, ApiListeners, BoxFuture, BoxResult, Change, ClusterRole,
     ClusterStatus, Control, DOCS_SCALAR, FilterStatus, Forwarded, ForwardedAnswer,
     MAX_CONNECTIONS_PER_PEER, MemberState, MemberStats, PeerStatus, QueryLogStatus, Serving,
-    Status, WebAssets, Writes, generate_token, serve_router,
+    Status, UpdateCheck, WebAssets, Writes, generate_token, serve_router,
 };
 use goethite_proto::{Name, RecordType};
 use goethite_store::Protocol;
@@ -110,6 +110,18 @@ impl Control for FakeControl {
 
     fn metrics(&self) -> String {
         "goethite_up 1\n".into()
+    }
+
+    fn check_update(&self) -> BoxResult<'_, UpdateCheck> {
+        Box::pin(async {
+            Ok(UpdateCheck {
+                current: "0.6.0".into(),
+                latest: "0.7.0".into(),
+                url: "https://github.com/nxplain-sh/goethite/releases/tag/v0.7.0".into(),
+                published_at: None,
+                newer: true,
+            })
+        })
     }
 
     fn cluster(&self) -> Option<ClusterStatus> {
@@ -388,6 +400,22 @@ async fn local_records_round_trip() {
     );
     let audit = server.get("/api/v1/audit?limit=1").await;
     assert_eq!(audit.body[0]["kind"], "record");
+}
+
+#[tokio::test]
+async fn update_check_reports_the_newest_release() {
+    let server = start(true);
+    let reply = server
+        .send(Method::POST, "/api/v1/update/check", None, &[])
+        .await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text);
+    assert_eq!(reply.body["current"], "0.6.0");
+    assert_eq!(reply.body["latest"], "0.7.0");
+    assert_eq!(reply.body["newer"], true);
+    assert_eq!(
+        reply.body["url"],
+        "https://github.com/nxplain-sh/goethite/releases/tag/v0.7.0"
+    );
 }
 
 #[tokio::test]

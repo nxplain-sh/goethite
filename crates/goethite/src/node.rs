@@ -9,7 +9,7 @@ use goethite_api::recommended::RecommendedSizes;
 use goethite_api::{
     ApiError, BoxFuture, BoxResult, CacheStatus, Change, ClusterRole, ClusterStatus,
     EncryptedStatus, FilterStatus, Forwarded, ForwardedAnswer, ListStatus, MemberStats,
-    QueryLogStatus, RecursionStatus, Status, UpstreamStatus, Writes,
+    QueryLogStatus, RecursionStatus, Status, UpdateCheck, UpstreamStatus, Writes,
 };
 use goethite_resolver::{Resolver, Transport};
 use goethite_store::{Actor, QueryLog};
@@ -305,6 +305,14 @@ impl goethite_api::Control for Node {
                 Some(cluster) => cluster.set_role(role, force, actor).await,
                 None => Err(ApiError::not_found("this node is not in a cluster")),
             }
+        })
+    }
+
+    fn check_update(&self) -> BoxResult<'_, UpdateCheck> {
+        Box::pin(async move {
+            crate::update::check(&self.resolver).await.map_err(|err| {
+                ApiError::unavailable(format!("checking for updates failed: {err:#}"))
+            })
         })
     }
 

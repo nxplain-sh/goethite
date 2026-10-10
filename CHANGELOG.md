@@ -24,6 +24,11 @@ configuration format.
   tarball for the machine, checks the download against the release's `SHA256SUMS` and installs
   goethite without starting it. The landing page now shows it beside the container and Helm
   options.
+- **Check for updates** in the web UI's Settings page, on demand: the node asks GitHub's release
+  API (through its own upstreams) for the newest release and says whether it runs it. Nothing is
+  installed and nothing is sent on its own; upgrading stays an operator step
+  ([Upgrade](https://nxplain-sh.github.io/goethite/install/#upgrade)), and with
+  `POST /api/v1/update/check` the same check is available to scripts.
 
 ## [0.6.0] - 2026-10-10
 

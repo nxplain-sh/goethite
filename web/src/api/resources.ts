@@ -109,6 +109,11 @@ export function refreshLists() {
 	return call(api.POST('/api/v1/lists/refresh'))
 }
 
+/** Asks the node to check GitHub for a newer release. */
+export function checkUpdate() {
+	return call(api.POST('/api/v1/update/check'))
+}
+
 export function saveRule(existing: Existing | undefined, spec: RuleSpec) {
 	return existing === undefined
 		? call(api.POST('/api/v1/rules', { body: spec }))

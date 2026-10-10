@@ -2,7 +2,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { type FormEvent, useState } from 'react'
 
 import { ApiError, type BlockResponseKind, type Settings as Stored } from '../api/client'
-import { saveSettings, settingsQuery } from '../api/resources'
+import { statusQuery } from '../api/queries'
+import { checkUpdate, saveSettings, settingsQuery } from '../api/resources'
 import { Loading } from '../components/editor'
 import { CheckField, SelectField, TextAreaField, TextField } from '../components/form'
 import { ErrorNotice } from '../components/ui'
@@ -92,6 +93,8 @@ function SettingsForm({
 		event.preventDefault()
 		save.mutate()
 	}
+	const status = useQuery(statusQuery)
+	const check = useMutation({ mutationFn: checkUpdate })
 	return (
 		<div className="grid-page editor">
 			<h1>Settings</h1>
@@ -173,6 +176,42 @@ function SettingsForm({
 					</button>
 				</div>
 			</form>
+			<section className="panel">
+				<h2>Version</h2>
+				<p className="muted">
+					This node runs goethite <span className="mono">{status.data?.version ?? '…'}</span>.
+				</p>
+				<button
+					type="button"
+					className="button small"
+					disabled={check.isPending}
+					onClick={() => check.mutate()}
+				>
+					{check.isPending ? 'Checking…' : 'Check for updates'}
+				</button>
+				{check.data ? (
+					<div className="notice" role="status">
+						{check.data.newer ? (
+							<>
+								goethite <span className="mono">{check.data.latest}</span> is available:{' '}
+								<a href={check.data.url} target="_blank" rel="noreferrer">
+									release notes
+								</a>
+								. Upgrade the package or binary as usual; the running node hands over without dropping
+								queries.
+							</>
+						) : (
+							<>
+								The newest release is goethite <span className="mono">{check.data.latest}</span>
+								{check.data.latest === check.data.current
+									? ', which this node runs.'
+									: `, and this node runs ${check.data.current}.`}
+							</>
+						)}
+					</div>
+				) : null}
+				<ErrorNotice error={check.error} />
+			</section>
 		</div>
 	)
 }
