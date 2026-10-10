@@ -104,7 +104,7 @@ time zone, so daylight saving time is handled.
 
 With safe search on, a group's clients are sent to the filtered version of the big search engines,
 whatever their browser settings say. goethite answers their search hosts with a CNAME to the
-engine's safe host:
+engine's safe host, except Yandex, whose safe endpoint is a fixed address answered directly:
 
 | Engine | Hosts | Sent to |
 | --- | --- | --- |
@@ -112,5 +112,8 @@ engine's safe host:
 | YouTube | `www.youtube.com`, `m.youtube.com`, `youtubei.googleapis.com`, `youtube.googleapis.com`, `www.youtube-nocookie.com` | `restrict.youtube.com` (strict) |
 | Bing | `www.bing.com`, `bing.com` | `strict.bing.com` |
 | DuckDuckGo | `duckduckgo.com`, `www.duckduckgo.com`, `start.duckduckgo.com` | `safe.duckduckgo.com` |
+| Ecosia | `www.ecosia.org` | `strict-safe-search.ecosia.org` |
+| Pixabay | `pixabay.com` | `safesearch.pixabay.com` |
+| Yandex | `ya.ru`, `yandex.<tld>` and their `www.` forms | `213.180.193.56` (an `A` answer) |
 
 The query log shows these queries as `safe_search`.
