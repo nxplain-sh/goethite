@@ -18,10 +18,14 @@ pub enum BlockResponse {
     Refused,
 }
 
+/// The Extended DNS Error info code "Blocked" (RFC 8914).
+const EDE_BLOCKED: u16 = 15;
+
 /// The answer to a blocked `query`, by `kind`; null-IP records have time to
-/// live `ttl`.
+/// live `ttl`, and a query with EDNS gets the Extended DNS Error code
+/// "Blocked" so the client can tell filtering from a broken name.
 pub(crate) fn blocked_response(query: &Query, kind: BlockResponse, ttl: u32) -> Response {
-    match kind {
+    let mut response = match kind {
         BlockResponse::NxDomain => Response::for_query(query, ResponseCode::NX_DOMAIN),
         BlockResponse::Refused => Response::for_query(query, ResponseCode::REFUSED),
         BlockResponse::NullIp => {
@@ -42,7 +46,11 @@ pub(crate) fn blocked_response(query: &Query, kind: BlockResponse, ttl: u32) -> 
             }
             response
         }
+    };
+    if let Some(edns) = response.edns.as_mut() {
+        edns.extended_error = Some(EDE_BLOCKED);
     }
+    response
 }
 
 #[cfg(test)]
@@ -66,6 +74,7 @@ mod tests {
                 udp_payload_size: 1232,
                 dnssec_ok: false,
                 padding: false,
+                extended_error: None,
             }),
         }
     }
@@ -90,5 +99,26 @@ mod tests {
         assert_eq!(nx.answers, vec![]);
         let refused = blocked_response(&query(RecordType::A), BlockResponse::Refused, 10);
         assert_eq!(refused.rcode, ResponseCode::REFUSED);
+    }
+
+    #[test]
+    fn blocked_answers_say_they_were_filtered() {
+        for kind in [
+            BlockResponse::NullIp,
+            BlockResponse::NxDomain,
+            BlockResponse::Refused,
+        ] {
+            let response = blocked_response(&query(RecordType::A), kind, 10);
+            assert_eq!(
+                response.edns.unwrap().extended_error,
+                Some(15),
+                "EDE 15 (Blocked) for {kind:?}"
+            );
+        }
+        // A client without EDNS has no OPT record to carry it.
+        let mut bare = query(RecordType::A);
+        bare.edns = None;
+        let bare = blocked_response(&bare, BlockResponse::NullIp, 10);
+        assert!(bare.edns.is_none());
     }
 }

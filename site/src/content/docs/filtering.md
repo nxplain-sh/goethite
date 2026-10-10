@@ -75,7 +75,9 @@ reported as an error when the config is loaded.
 
 `block_response = "null_ip"` answers `A` queries with `0.0.0.0`, `AAAA` with `::`, and other types
 with an empty answer, so applications fail fast instead of trying another resolver. `nxdomain` says
-the name does not exist; `refused` refuses the query.
+the name does not exist; `refused` refuses the query. Every blocked answer a client asked for with
+EDNS carries the Extended DNS Error code 15, "Blocked" (RFC 8914), so tools such as `dig` and
+browsers can tell filtering from a broken name.
 
 Blocking applies before the cache, so a name that becomes blocked is blocked at once even if its
 answer is cached. Local names such as `goethite.test` are answered before filtering.

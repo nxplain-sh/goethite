@@ -446,6 +446,7 @@ fn upstream_query(query: &Query, randomize_case: bool) -> Query {
             udp_payload_size: MAX_UDP_PAYLOAD,
             dnssec_ok: query.edns.is_some_and(|edns| edns.dnssec_ok),
             padding: false,
+            extended_error: None,
         }),
     }
 }

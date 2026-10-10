@@ -9,6 +9,10 @@ configuration format.
 
 ### Added
 
+- **Blocked answers carry Extended DNS Error 15, "Blocked"** ([RFC
+  8914](https://www.rfc-editor.org/rfc/rfc8914)) when the client asked with EDNS, so `dig` and
+  browsers can tell a filtered name from a broken one. The info code of an upstream's own EDE is
+  relayed unchanged.
 - **Safe search for Ecosia, Pixabay and Yandex**, beside Google, YouTube, Bing and DuckDuckGo:
   Ecosia and Pixabay answer with a CNAME to their safe host, and Yandex, which has no such host,
   answers `A` queries with its fixed safe address `213.180.193.56`.

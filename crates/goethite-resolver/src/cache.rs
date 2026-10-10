@@ -532,6 +532,7 @@ mod tests {
                 udp_payload_size: 1232,
                 dnssec_ok: false,
                 padding: false,
+                extended_error: None,
             }),
         }
     }
@@ -586,6 +587,7 @@ mod tests {
             udp_payload_size: 1232,
             dnssec_ok: true,
             padding: false,
+            extended_error: None,
         });
         let mut with_cd = q.clone();
         with_cd.checking_disabled = true;
@@ -848,6 +850,7 @@ mod tests {
             udp_payload_size: 1232,
             dnssec_ok: true,
             padding: false,
+            extended_error: None,
         });
         let mut response = answer(&q, vec![www, sig.clone(), stray]);
         response.authentic_data = true;
