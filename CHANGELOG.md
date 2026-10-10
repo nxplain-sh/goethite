@@ -117,6 +117,10 @@ configuration format.
 
 ### Fixed
 
+- The API, cluster and witness listeners bind with `IPV6_V6ONLY` like the DNS ones, so the
+  documented dual-stack pair `listen = ["0.0.0.0:8053", "[::]:8053"]` starts instead of failing
+  with "address in use"; a `[::]` listener alone is IPv6-only, and IPv4 peers no longer arrive as
+  `::ffff:a.b.c.d`.
 - Deleting a filter list in the web UI no longer fails with a conflict when a group started using
   it after the page loaded, such as the default group just after the list was created: the UI
   checks which groups use the list at the moment it deletes it.
