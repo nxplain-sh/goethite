@@ -15,16 +15,18 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use axum::extract::{Request, State};
+use axum::http::Method;
 use axum::http::header::{AUTHORIZATION, HOST, ORIGIN};
 use axum::http::uri::Authority;
 use axum::middleware::Next;
 use axum::response::Response;
-use goethite_store::{Actor, ActorKind};
+use goethite_store::{Actor, ActorKind, Role, User};
 use ring::digest::{SHA256, digest};
 
 use crate::Api;
 use crate::cluster::TrustedActor;
 use crate::error::ApiError;
+use crate::sessions;
 
 /// Tokens start with this, so they are easy to recognize (and to find if
 /// one leaks into a repository).
@@ -107,8 +109,17 @@ pub fn generate_token() -> (String, TokenHash) {
 #[derive(Clone, Copy, Debug)]
 pub struct PeerAddr(pub SocketAddr);
 
-/// Checks the admin token (or, without one, that the client is on
-/// loopback) and adds the [`Actor`] to the request.
+/// What a signed-in session established: the caller's role, for
+/// [`authorize`].
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SignedIn {
+    /// What the user may do.
+    pub(crate) role: Role,
+}
+
+/// Checks the admin token, then the session cookie, or, while the node has
+/// neither a token nor users, that the client is on loopback; and adds the
+/// [`Actor`] to the request.
 pub(crate) async fn authenticate(
     State(api): State<Arc<Api>>,
     mut request: Request,
@@ -126,35 +137,80 @@ pub(crate) async fn authenticate(
         .map(|peer| peer.0)
         .ok_or_else(|| ApiError::forbidden("unknown client address"))?;
     let address = Some(peer.ip().to_string());
-    let actor = match &api.config.token {
-        Some(hash) => {
-            let presented = request
-                .headers()
-                .get(AUTHORIZATION)
-                .and_then(|value| value.to_str().ok())
-                .and_then(|value| value.strip_prefix("Bearer "))
-                .map(str::trim);
-            match presented {
-                Some(token) if hash.matches(token) => Actor {
-                    kind: ActorKind::Token,
-                    address,
-                    node: None,
-                },
-                _ => return Err(ApiError::unauthorized()),
-            }
+    // The admin token, when one is configured.
+    if let Some(hash) = &api.config.token {
+        let presented = request
+            .headers()
+            .get(AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.strip_prefix("Bearer "))
+            .map(str::trim);
+        if let Some(token) = presented
+            && hash.matches(token)
+        {
+            request.extensions_mut().insert(Actor {
+                kind: ActorKind::Token,
+                name: None,
+                address,
+                node: None,
+            });
+            return Ok(next.run(request).await);
         }
-        None if peer.ip().is_loopback() => Actor {
+    }
+    // A session: the user must still exist, be enabled, and be at the
+    // revision the session was made at. Any change to the user's record
+    // makes the session stale, on every node.
+    let now = jiff::Timestamp::now().as_second();
+    if let Some(token) = sessions::cookie_value(request.headers())
+        && let Some(session) = api.sessions.get(&token, now)
+        && let Some(user) = api.store.get::<User>(&session.user)
+        && !user.spec.disabled
+        && user.revision == session.revision
+    {
+        request
+            .extensions_mut()
+            .insert(Actor::user(user.spec.name.clone(), address.clone()));
+        request.extensions_mut().insert(SignedIn {
+            role: user.spec.role,
+        });
+        return Ok(next.run(request).await);
+    }
+    // No token, no users: loopback clients are trusted, as before.
+    if api.config.token.is_none() && !api.store.users_exist() && peer.ip().is_loopback() {
+        request.extensions_mut().insert(Actor {
             kind: ActorKind::Unauthenticated,
+            name: None,
             address,
             node: None,
-        },
-        None => {
+        });
+        return Ok(next.run(request).await);
+    }
+    Err(ApiError::unauthorized())
+}
+
+/// Refuses what the caller's role does not allow. Runs after
+/// [`authenticate`]; a forwarded change was checked where it came from.
+pub(crate) async fn authorize(request: Request, next: Next) -> Result<Response, ApiError> {
+    if request.extensions().get::<TrustedActor>().is_some() {
+        return Ok(next.run(request).await);
+    }
+    let kind = request.extensions().get::<Actor>().map(|actor| actor.kind);
+    if kind == Some(ActorKind::User) {
+        let role = request
+            .extensions()
+            .get::<SignedIn>()
+            .map_or(Role::Viewer, |signed| signed.role);
+        // A viewer may read anything and use the endpoints that act on its
+        // own account; changing anything else needs an admin.
+        let allowed = role == Role::Admin
+            || matches!(*request.method(), Method::GET | Method::HEAD)
+            || request.uri().path().starts_with("/api/v1/auth/");
+        if !allowed {
             return Err(ApiError::forbidden(
-                "no admin token is configured, so the API only answers loopback clients",
+                "a viewer may only read; sign in as an admin to change something",
             ));
         }
-    };
-    request.extensions_mut().insert(actor);
+    }
     Ok(next.run(request).await)
 }
 

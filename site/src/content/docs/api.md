@@ -44,6 +44,37 @@ curl -H "Authorization: Bearer $GOETHITE_TOKEN" https://dns.example.lan:8053/api
 goethite refuses to listen beyond loopback without a token. Without TLS, the token crosses the
 network in clear text, and goethite logs a warning. Keep the API off the internet either way.
 
+### Users and sign-in
+
+The token is for programs. For people, goethite keeps users in its store, with an Argon2id
+password hash and, optionally, a TOTP second factor. Create the first one on the node (goethite
+must not be running, since the store file is locked):
+
+```sh
+goethite user add admin                # prints a generated password once
+goethite user passwd admin ...         # set another one, or issue a reset link
+goethite user reset admin              # one-time link for the web UI, valid an hour
+```
+
+Users sign in with `POST /api/v1/auth/login` (`name`, `password`, and `code` when a second factor
+is on) and get an `HttpOnly` session cookie back; the salt is never echoed anywhere, and password
+hashes, TOTP secrets and recovery codes never leave the node through the API. Roles are `admin`
+(everything) and `viewer` (reads and its own account). Admin token and sessions work side by side:
+scripts keep the token, browsers the cookie.
+
+```sh
+curl -c jar -X POST http://127.0.0.1:8053/api/v1/auth/login \
+  -d '{"name": "admin", "password": "…"}'
+curl -b jar http://127.0.0.1:8053/api/v1/status
+```
+
+Changing a user's password, role, second factor or disabled state ends every session of that user
+on every node: each session names the revision it was made at. A user who lost their password
+gets a reset link (`POST /api/v1/users/{id}/reset`, admin only), or one from `goethite user
+reset`; it works once, for an hour. A user who lost their authenticator has it cleared by an
+admin (`POST /api/v1/users/{id}/otp/disable`). Sign-in attempts are rate-limited per address and
+per user name.
+
 ### Browsers
 
 So that web pages cannot use your browser against the API, goethite refuses two kinds of request:
@@ -91,12 +122,15 @@ Specs reject unknown fields. Errors are JSON with a stable code:
 | Status | Code | When |
 | --- | --- | --- |
 | 400 | `bad_request` | The request is malformed (bad JSON, bad query string, bad `If-Match`). |
-| 401 | `unauthorized` | The token is missing or wrong. |
+| 401 | `unauthorized` | No session and the token is missing or wrong, a wrong password or code, or an expired reset link. |
+| 401 | `otp_required` | The sign-in needs a code from the authenticator app. |
+| 403 | `forbidden` | A `viewer` tried to change something, or the account is disabled. |
 | 404 | `not_found` | No such resource or endpoint. |
 | 409 | `conflict` | It refers to something missing, or something still refers to it. |
 | 412 | `revision_mismatch` | It changed since the revision in `If-Match`. |
 | 413 | | The body is larger than 1 MiB. |
 | 422 | `invalid` | A value is not valid, or a field is unknown. |
+| 429 | `too_many_requests` | Too many failed sign-ins; wait five minutes. |
 
 ## Pausing filtering
 
@@ -138,8 +172,9 @@ asked most.
 ## Audit log
 
 Every change, and every pause, resume and list refresh, is in the audit log with the time, who
-made it (`token`, `unauthenticated`, `cli` or `system`), their address, and the resource before and
-after:
+made it (`token`, `user`, `unauthenticated`, `cli` or `system`), their address, and the resource
+before and after. User changes are logged with the name, role and disabled state; password
+hashes, TOTP secrets and recovery codes are never written to the log:
 
 ```sh
 api 'http://127.0.0.1:8053/api/v1/audit?limit=20'

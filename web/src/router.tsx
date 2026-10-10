@@ -15,6 +15,7 @@ import { Shell } from './components/Shell'
 import { Dashboard, RANGES, type RangeId } from './pages/Dashboard'
 import { Login } from './pages/Login'
 import { QueryLog } from './pages/QueryLog'
+import { Reset } from './pages/Reset'
 
 // Validators return every key they know, `undefined` when the value is not
 // valid: the router merges their result over the raw query parameters, so a
@@ -67,6 +68,20 @@ const loginRoute = createRoute({
 	}),
 	component: function LoginPage() {
 		return <Login redirect={loginRoute.useSearch().redirect} />
+	},
+})
+
+const resetRoute = createRoute({
+	getParentRoute: () => rootRoute,
+	path: '/reset',
+	validateSearch: (search: Record<string, unknown>): { token?: string | undefined } => {
+		const token = search['token']
+		return {
+			token: typeof token === 'string' && /^gtr_[0-9a-f]{64}$/.test(token) ? token : undefined,
+		}
+	},
+	component: function ResetPage() {
+		return <Reset token={resetRoute.useSearch().token} />
 	},
 })
 
@@ -241,8 +256,21 @@ const leakTestRoute = createRoute({
 	component: lazyRouteComponent(() => import('./pages/LeakTest'), 'LeakTest'),
 })
 
+const accountRoute = createRoute({
+	getParentRoute: () => appRoute,
+	path: '/account',
+	component: lazyRouteComponent(() => import('./pages/Account'), 'Account'),
+})
+
+const usersRoute = createRoute({
+	getParentRoute: () => appRoute,
+	path: '/users',
+	component: lazyRouteComponent(() => import('./pages/Users'), 'Users'),
+})
+
 const routeTree = rootRoute.addChildren([
 	loginRoute,
+	resetRoute,
 	appRoute.addChildren([
 		dashboardRoute,
 		queryLogRoute,
@@ -263,6 +291,8 @@ const routeTree = rootRoute.addChildren([
 		settingsRoute,
 		auditRoute,
 		leakTestRoute,
+		accountRoute,
+		usersRoute,
 	]),
 ])
 

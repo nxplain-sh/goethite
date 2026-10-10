@@ -3,16 +3,18 @@
 use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme};
 use utoipa::{Modify, OpenApi};
 
-use crate::{cluster, handlers};
+use crate::{cluster, handlers, users};
 
 #[derive(OpenApi)]
 #[openapi(
     info(
         title = "goethite API",
         description = "Configure and observe a goethite DNS filtering resolver. \
-            Every request except `/api/v1/health` needs the admin token as \
-            `Authorization: Bearer <token>` once one is configured; until then the API \
-            only answers on loopback. Changes are validated, audit-logged and applied at \
+            Every request except `/api/v1/health`, `/api/v1/auth/login` and \
+            `/api/v1/auth/reset` needs the admin token as \
+            `Authorization: Bearer <token>`, or a session cookie from a sign-in; while \
+            the node has neither a token nor users, the API only answers on loopback. \
+            Changes are validated, audit-logged and applied at \
             once. Resources have a revision: send it back in `If-Match` to make an update \
             fail if someone else changed the resource in the meantime.",
         license(name = "AGPL-3.0-only", identifier = "AGPL-3.0-only"),
@@ -70,6 +72,22 @@ use crate::{cluster, handlers};
         handlers::get_querylog,
         handlers::get_stats,
         handlers::get_audit,
+        users::login,
+        users::reset_with_token,
+        users::logout,
+        users::session_info,
+        users::change_password,
+        users::otp_setup,
+        users::otp_enable,
+        users::otp_disable,
+        users::list_users,
+        users::get_user,
+        users::create_user,
+        users::update_user,
+        users::delete_user,
+        users::set_user_password,
+        users::issue_reset,
+        users::clear_user_otp,
         cluster::get_cluster,
         cluster::promote,
         cluster::demote,
@@ -87,6 +105,8 @@ use crate::{cluster, handlers};
         (name = "schedules", description = "Weekly time windows for scheduled lists"),
         (name = "querylog", description = "The query log and statistics"),
         (name = "audit", description = "Every configuration change"),
+        (name = "auth", description = "Signing in, sessions and second factors"),
+        (name = "users", description = "The users with access to the API"),
         (name = "cluster", description = "This node's cluster: its leader and members, taking over and joining"),
     ),
 )]

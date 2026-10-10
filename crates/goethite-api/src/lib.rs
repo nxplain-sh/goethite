@@ -24,11 +24,16 @@ mod docs;
 mod error;
 mod handlers;
 pub mod leak;
+mod login_attempts;
 mod openapi;
+mod passwords;
 pub mod recommended;
 mod serve;
 pub mod services;
+mod sessions;
+mod totp;
 mod update;
+mod users;
 mod web;
 
 use std::future::Future;
@@ -58,9 +63,14 @@ pub use cluster::{
 pub use docs::{EmbeddedDocs, SCALAR as DOCS_SCALAR};
 pub use error::{ApiError, ErrorBody, ErrorDetail};
 pub use openapi::{openapi, openapi_json};
+pub use passwords::{PasswordError, check_new, hash_password, new_password, verify_password};
 pub use serve::{
     ApiListeners, HANDSHAKE_TIMEOUT, MAX_CONNECTIONS, MAX_CONNECTIONS_PER_PEER, PeerCertificate,
     Serving, serve, serve_router,
+};
+pub use totp::{
+    code as totp_code, decode_secret as decode_totp_secret, encode_secret as encode_totp_secret,
+    hash_recovery_code,
 };
 pub use update::UpdateCheck;
 pub use web::{EmbeddedWeb, WebAssets};
@@ -419,6 +429,29 @@ pub struct Api {
     pub control: Arc<dyn Control>,
     /// Settings.
     pub config: ApiConfig,
+    /// The sessions this node holds.
+    pub(crate) sessions: sessions::Sessions,
+    /// Failed sign-ins, per address and per name.
+    pub(crate) attempts: login_attempts::Attempts,
+}
+
+impl Api {
+    /// Everything the handlers share.
+    pub fn new(
+        store: Arc<Store>,
+        log: Arc<QueryLog>,
+        control: Arc<dyn Control>,
+        config: ApiConfig,
+    ) -> Self {
+        Self {
+            store,
+            log,
+            control,
+            config,
+            sessions: sessions::Sessions::default(),
+            attempts: login_attempts::Attempts::default(),
+        }
+    }
 }
 
 // Nothing printed: the config carries the TLS server config, private key
@@ -434,8 +467,10 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The routes, with authentication, limits and security headers.
 pub fn router(api: &Arc<Api>) -> Router {
-    // Authentication runs first, then forwarding changes to the leader.
+    // Authentication runs first, then the role check, then forwarding
+    // changes to the leader.
     let protected = handlers::routes()
+        .merge(users::routes())
         .route("/api/v1/cluster", axum::routing::get(cluster::get_cluster))
         .route(
             "/api/v1/cluster/promote",
@@ -453,12 +488,14 @@ pub fn router(api: &Arc<Api>) -> Router {
             Arc::clone(api),
             cluster::forward_writes,
         ))
+        .route_layer(middleware::from_fn(auth::authorize))
         .route_layer(middleware::from_fn_with_state(
             Arc::clone(api),
             auth::authenticate,
         ));
     Router::new()
         .route("/api/v1/health", axum::routing::get(handlers::health))
+        .merge(users::public_routes())
         // Off unless configured, and loopback only: see `docs`.
         .route("/api/docs", axum::routing::get(docs::page))
         .route("/api/docs/scalar.js", axum::routing::get(docs::scalar))

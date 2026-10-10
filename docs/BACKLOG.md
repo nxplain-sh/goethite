@@ -598,6 +598,23 @@ what "match AdGuard Home on everyday filtering" ([`AGENTS.md`](../AGENTS.md)) st
 
 ## Unscheduled / tooling
 
+- **[later] Sign-in events in the audit log.** Sign-ins, sign-outs and failed sign-ins are
+  traced, not audited (ADR 0037). `AuditAction` could grow `login`, `logout` and a failure
+  action; `store.record` is the tool, but sign-ins are frequent and per-node, so decide whether
+  the audit log is the right place first.
+- **[later] A self-hosted OIDC provider as a sign-in source.** Authelia, authentik or Keycloak
+  on the same network would let a lab keep one directory; goethite becomes a relying party
+  (ADR 0037 deferred it). The built-in users stay as the bootstrap fallback.
+- **[later] Email delivery for resets and codes.** Needs SMTP configuration and a mail
+  dependency (ADR 0037 kept the admin-issued link instead). The `/auth` endpoints would not
+  change shape.
+- **[later] Session controls.** A list of a user's sessions with per-session revoke, sliding
+  expiry on use, and a "sign out everywhere" button: today a user change ends all sessions and
+  otherwise they live twelve hours.
+- **[later] Regenerating recovery codes** from the account page once some are used up, with the
+  password as the confirmation.
+- **[later] WebAuthn as a second factor.** Passkeys would beat TOTP for users; a new dependency
+  and browser flows.
 - **[later] APT and DNF repositories** for `apt upgrade` and `dnf upgrade`: they need a
   long-lived signing key and hosting (ADR 0027).
 - **[later] A health check for containers.** The image has no shell or HTTP client, so neither it

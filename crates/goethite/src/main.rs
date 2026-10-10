@@ -23,6 +23,7 @@ mod sizes;
 mod sockets;
 mod telemetry;
 mod update;
+mod user;
 mod vrrp;
 mod witness;
 
@@ -126,6 +127,16 @@ enum Command {
     Tui {
         #[command(flatten)]
         api: ApiArgs,
+    },
+    /// Manage the users with access to the API: add, list, set passwords,
+    /// issue reset links, remove, disable. goethite must not be running; in
+    /// a cluster, change users through the API of any member instead.
+    User {
+        #[command(subcommand)]
+        command: user::UserCommand,
+        /// Path to the TOML configuration file. Accepts any position.
+        #[arg(long, short, value_name = "PATH", global = true)]
+        config: Option<PathBuf>,
     },
     /// Bring a Pi-hole's or an AdGuard Home's configuration over, through
     /// their API and goethite's. Shows what would change; `--apply` makes
@@ -231,6 +242,12 @@ fn main() -> ExitCode {
             }
         },
         Command::Tui { api } => tui(&api),
+        Command::User { command, config } => match config {
+            Some(config) => user::run(&config, command),
+            None => Err(anyhow::anyhow!(
+                "--config is needed: the path to the TOML configuration file"
+            )),
+        },
         Command::Migrate { from } => match from {
             MigrateFrom::Pihole(args) => migrate(migrate::From::Pihole, args),
             MigrateFrom::AdguardHome(args) => migrate(migrate::From::AdguardHome, args),
@@ -752,17 +769,17 @@ fn api(
     } else {
         None
     };
-    Arc::new(Api {
-        store: Arc::clone(control.store()),
-        log: Arc::clone(log),
-        control: node,
-        config: ApiConfig {
+    Arc::new(Api::new(
+        Arc::clone(control.store()),
+        Arc::clone(log),
+        node,
+        ApiConfig {
             token,
             tls,
             web,
             docs,
         },
-    })
+    ))
 }
 
 fn tui(api: &ApiArgs) -> Result<()> {
@@ -854,7 +871,7 @@ fn token() -> Result<()> {
 }
 
 /// Writes `text` to standard output: command output, not a log line.
-fn print(text: &str) -> Result<()> {
+pub(crate) fn print(text: &str) -> Result<()> {
     use std::io::Write as _;
     let mut stdout = std::io::stdout().lock();
     stdout.write_all(text.as_bytes())?;

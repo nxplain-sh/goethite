@@ -265,7 +265,7 @@ fn is_config_write(method: &Method, path: &str) -> bool {
     let resource = rest.split('/').next().unwrap_or_default();
     matches!(
         resource,
-        "lists" | "rules" | "records" | "groups" | "clients" | "schedules" | "settings"
+        "lists" | "rules" | "records" | "groups" | "clients" | "schedules" | "settings" | "users"
     ) && rest != "lists/refresh"
 }
 

@@ -23,8 +23,8 @@ pub struct ErrorBody {
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ErrorDetail {
     /// A stable code: `not_found`, `invalid`, `conflict`,
-    /// `revision_mismatch`, `unauthorized`, `forbidden`, `bad_request`,
-    /// `unavailable` or `internal`.
+    /// `revision_mismatch`, `unauthorized`, `otp_required`, `forbidden`,
+    /// `bad_request`, `too_many_requests`, `unavailable` or `internal`.
     pub code: String,
     /// For people.
     pub message: String,
@@ -52,13 +52,37 @@ impl ApiError {
         Self::new(StatusCode::BAD_REQUEST, "bad_request", message)
     }
 
-    /// 401: no valid admin token.
+    /// 422: the request is understood but what it says is not valid.
+    pub fn invalid(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::UNPROCESSABLE_ENTITY, "invalid", message)
+    }
+
+    /// 401: no valid admin token and no signed-in session.
     pub fn unauthorized() -> Self {
         Self::new(
             StatusCode::UNAUTHORIZED,
             "unauthorized",
-            "send the admin token as `Authorization: Bearer <token>`",
+            "sign in, or send the admin token as `Authorization: Bearer <token>`",
         )
+    }
+
+    /// 401: the sign-in needs a code from the authenticator app.
+    pub fn otp_required() -> Self {
+        Self::new(
+            StatusCode::UNAUTHORIZED,
+            "otp_required",
+            "send a code from the authenticator app, or a recovery code",
+        )
+    }
+
+    /// 401, with a message of its own.
+    pub fn unauthorized_with(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::UNAUTHORIZED, "unauthorized", message)
+    }
+
+    /// 429: too many failed attempts.
+    pub fn too_many_requests(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::TOO_MANY_REQUESTS, "too_many_requests", message)
     }
 
     /// 403: not allowed from here.

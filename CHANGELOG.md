@@ -29,6 +29,20 @@ configuration format.
   installed and nothing is sent on its own; upgrading stays an operator step
   ([Upgrade](https://nxplain-sh.github.io/goethite/install/#upgrade)), and with
   `POST /api/v1/update/check` the same check is available to scripts.
+- **Users, roles and sessions for the API and the web UI** (ADR 0039). The admin token stays for
+  scripts; people now sign in with a user name and password, and optionally a TOTP second factor
+  with one-time recovery codes.
+  - `goethite user add|list|passwd|reset|remove|disable|enable` bootstraps the first admin on
+    the node (goethite must be stopped; in a cluster, change users through the API).
+  - Roles: `admin` (everything) and `viewer` (reads, and its own account).
+  - Sessions are `HttpOnly; SameSite=Strict` cookies, twelve hours, and end on every node when
+    a user's password, role, second factor or disabled state changes.
+  - Password reset is an admin-issued one-time link (`/reset?token=…`, valid an hour); no email
+    is sent, so the feature works offline. An admin can also clear a lost second factor.
+  - New endpoints under `/api/v1/users` and `/api/v1/auth`, with the OpenAPI document and the
+    API reference regenerated. New web UI pages: sign-in with code, Account, Users, Reset.
+  - Argon2id password hashes, TOTP secrets and recovery hashes live in the store (replicated,
+    schema version 3) and are never written to the audit log or any response.
 
 ## [0.6.0] - 2026-10-10
 
