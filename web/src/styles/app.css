@@ -1184,7 +1184,18 @@ a.button {
 	letter-spacing: 0.06em;
 }
 
-/* The leader stands out; a member that is down sinks back. Its badges say it in words too. */
+/* The leader stands out in ochre, a follower in ink, a witness in grey (it
+   only votes); a member that is down sinks back. Its badges say it in words too. */
+.member.follower:not(.leader) header {
+	background: var(--ink);
+	color: var(--bg);
+}
+
+.member.witness:not(.leader) header {
+	background: color-mix(in srgb, var(--ink) 25%, var(--panel));
+	color: var(--ink);
+}
+
 .member.leader header {
 	background: var(--accent);
 	color: var(--on-accent);

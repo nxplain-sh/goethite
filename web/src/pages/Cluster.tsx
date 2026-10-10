@@ -160,7 +160,15 @@ function MemberCard({
 	thisVersion: string
 }) {
 	const leads = member.node === cluster.leader
-	const classes = ['member', leads ? 'leader' : '', member.reachable ? '' : 'down'].filter(Boolean).join(' ')
+	const classes = [
+		'member',
+		leads ? 'leader' : '',
+		member.state === 'follower' ? 'follower' : '',
+		member.witness ? 'witness' : '',
+		member.reachable ? '' : 'down',
+	]
+		.filter(Boolean)
+		.join(' ')
 	// A learner's state says what its membership says.
 	const showState = member.state != null && !(member.state === 'learner' && member.membership === 'learner')
 	return (
@@ -176,9 +184,7 @@ function MemberCard({
 					<span className="badge blocked">DOWN</span>
 				)}
 				{showState && member.state != null ? (
-					<span className={member.state === 'leader' ? 'badge accent' : 'badge'}>
-						{STATE_LABEL[member.state]}
-					</span>
+					<span className="badge">{STATE_LABEL[member.state]}</span>
 				) : null}
 				<span className="badge">
 					{member.membership === 'voter'
@@ -187,7 +193,7 @@ function MemberCard({
 							? 'LEARNER'
 							: 'NOT ADDED YET'}
 				</span>
-				{member.witness ? <span className="badge inverted">WITNESS</span> : null}
+				{member.witness ? <span className="badge">WITNESS</span> : null}
 			</div>
 			<dl className="facts">
 				<dt>Address</dt>
