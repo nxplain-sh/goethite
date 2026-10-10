@@ -15,6 +15,14 @@ configuration format.
   apply: take the cluster over, join another cluster, remove a member that is down, each after a
   second click. The dashboard's Cluster panel and the header's cluster badges lead to it. See
   [Web UI](https://nxplain-sh.github.io/goethite/web-ui/#the-cluster-page).
+- **Compose files** for Docker Compose and Podman Compose, on the minor version's tag, with a
+  read-only root file system and no way to gain privileges.
+  `deploy/container/compose.yaml` runs one node as an unprivileged user from the start, with no
+  capabilities ([Install](https://nxplain-sh.github.io/goethite/install/#in-a-container)).
+  `deploy/container/cluster/` runs a cluster, one machine per member: goethite and the floating
+  IP's `goethite vrrp` on each DNS node, the witness unprivileged on a third, with example config
+  files for each ([High availability](https://nxplain-sh.github.io/goethite/ha/#in-containers)).
+  See [ADR 0036](docs/adr/0036-compose-files.md).
 
 ### Changed
 
@@ -27,6 +35,10 @@ configuration format.
   reference. The web UI and the site build with [Vite+](https://viteplus.dev), which adds a
   formatter, a linter and type-aware lint checks (`npm run check`) to both
   ([ADR 0035](docs/adr/0035-site-on-tanstack-start-and-vite-plus.md)).
+- The container image is built on Debian 13 (`gcr.io/distroless/cc-debian13`): the Debian 12
+  images it was built on were deprecated on 1 September 2026 and no longer get security fixes. It
+  also carries the standard OCI labels (version, commit, documentation), on the multi-architecture
+  image's index too, where ghcr.io looks for its description.
 
 ### Removed
 

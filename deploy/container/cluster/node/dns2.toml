@@ -1,0 +1,73 @@
+# goethite configuration for dns2, the second DNS node of a cluster of two
+# nodes and a witness, in a container (compose.yaml beside this file). Copy it
+# as goethite.toml, then change the addresses, the interface and the
+# upstreams to yours; dns1.toml is the other node's.
+#
+#   dns1       192.0.2.11
+#   dns2       192.0.2.12   this node
+#   witness    192.0.2.13
+#   floating   192.0.2.53   the address you hand out as the DNS server
+#
+# Every setting is explained in the configuration reference:
+# https://nxplain-sh.github.io/goethite/configuration/
+
+[server]
+# The floating IP, which goethite listens on even while dns1 holds it, and
+# loopback for goethite vrrp's health checks.
+listen = ["192.0.2.53:53", "127.0.0.1:53"]
+# Once the sockets are bound, goethite switches to this unprivileged user
+# (65532) and keeps no capabilities.
+user = "nonroot"
+
+# Quad9 over DNS over TLS. Replace these with the resolvers you trust.
+[[upstream]]
+address = "9.9.9.9"
+protocol = "tls"
+tls_name = "dns.quad9.net"
+
+[[upstream]]
+address = "149.112.112.112"
+protocol = "tls"
+tls_name = "dns.quad9.net"
+
+[filter]
+# Downloaded lists, kept in the volume so goethite starts with them even when
+# offline.
+cache_dir = "/var/lib/goethite/lists"
+
+[store]
+# The cluster's configuration and log, the audit log, the query log and
+# statistics.
+path = "/var/lib/goethite/goethite.redb"
+
+[cluster]
+node = "dns2"
+# No bootstrap: dns1 starts the cluster and adds dns2, which then takes the
+# cluster's configuration in place of its own.
+# This host's own address: the others reach dns2 here.
+listen = "192.0.2.12:8054"
+ca = "/etc/goethite/cluster/ca.crt"
+cert = "/etc/goethite/cluster/dns2.crt"
+key = "/etc/goethite/cluster/dns2.key"
+
+[[cluster.member]]
+node = "dns1"
+address = "192.0.2.11:8054"
+
+[[cluster.member]]
+node = "witness"
+address = "192.0.2.13:8054"
+
+[vrrp]
+# The host's interface on the network the floating IP belongs to.
+interface = "eth0"
+address = "192.0.2.53"
+peer = "192.0.2.11"
+# The same on both nodes, and used by no other VRRP pair on the network.
+router_id = 53
+# Lower than dns1's, so dns2 holds the address while dns1 cannot.
+priority = 100
+
+# The REST API, the web UI and the metrics answer on this host's loopback
+# (127.0.0.1:8053) until an admin token is set; the install guide explains
+# how to open them further.

@@ -1,0 +1,45 @@
+# The witness of a goethite cluster, with Docker Compose or Podman Compose: a
+# third member that votes, so the two DNS nodes (../node/compose.yaml) elect
+# a new leader by themselves when either is lost. It serves no DNS and no
+# API, so it runs on anything small. Beside this file:
+#
+#   goethite.toml   witness.toml from this directory, with your addresses
+#   cluster/        ca.crt, witness.crt and witness.key, which must belong to
+#                   root, group 65532, mode 0640
+#
+#   docker compose up -d
+#
+# The HA guide explains the certificates and the cluster:
+# https://nxplain-sh.github.io/goethite/ha/#in-containers
+#
+# It needs no privileges and no port below 1024, so it runs as the image's
+# unprivileged user (65532) from the start, with no capabilities, no way to
+# gain any, a read-only root file system and a network namespace of its own.
+
+name: goethite
+
+services:
+  witness:
+    # The newest release of this minor version. `cargo xtask versions`
+    # checks that it is the repository's. Upgrade it with the nodes.
+    image: ghcr.io/nxplain-sh/goethite:0.5
+    command: ["witness", "--config", "/etc/goethite/goethite.toml"]
+    restart: unless-stopped
+    ports:
+      # The cluster port, which the nodes reach on this host's address. Allow
+      # it from them only.
+      - "8054:8054/tcp"
+    volumes:
+      # The cluster's configuration and log.
+      - data:/var/lib/goethite
+      - ./goethite.toml:/etc/goethite/goethite.toml:ro,z
+      - ./cluster:/etc/goethite/cluster:ro,z
+    user: "65532:65532"
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    # The witness writes only to /var/lib/goethite.
+    read_only: true
+
+volumes:
+  data:

@@ -30,7 +30,8 @@ rebinding, rate limits clients, pads encrypted messages, drops its privileges af
 ([`deploy/systemd/`](deploy/systemd/)). See the [changelog](CHANGELOG.md).
 
 Releases are built reproducibly, with signed build provenance and SBOMs, as tarballs, `.deb` and
-`.rpm` packages for amd64 and arm64, and a container image (`ghcr.io/nxplain-sh/goethite`): see
+`.rpm` packages for amd64 and arm64, and a container image (`ghcr.io/nxplain-sh/goethite`, with
+[Compose files](deploy/container/) for one node and for a cluster): see
 [Install](https://nxplain-sh.github.io/goethite/install/) and
 [Verifying releases](https://nxplain-sh.github.io/goethite/verify/).
 

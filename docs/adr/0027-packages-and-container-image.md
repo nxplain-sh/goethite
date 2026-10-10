@@ -1,6 +1,6 @@
 # ADR 0027: .deb and .rpm packages and a container image, from the release build
 
-- **Status:** Accepted
+- **Status:** Accepted, extended by [ADR 0036](0036-compose-files.md)
 - **Date:** 2026-10-09
 
 ## Context

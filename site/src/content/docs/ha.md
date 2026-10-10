@@ -333,6 +333,58 @@ host on that segment can still forge an announcement and take the address, just 
 any address there with forged ARP. Run the floating IP on a network you trust, and give it a
 `router_id` no other VRRP pair on the network uses.
 
+## In containers
+
+[`deploy/container/cluster/`](https://github.com/nxplain-sh/goethite/tree/main/deploy/container/cluster)
+in the repository has Compose files, for Docker Compose or Podman Compose, for each kind of member:
+`node/` runs goethite and `goethite vrrp` beside it on each of the two DNS nodes, `witness/` runs
+the witness. Each member still needs a machine of its own: a cluster on one machine goes down with
+it.
+
+First, create the certificates on any machine with Docker or Podman:
+
+```sh
+mkdir cluster
+image=ghcr.io/nxplain-sh/goethite:0.5
+docker run --rm -v "$PWD/cluster:/cluster:z" "$image" cluster init --dir /cluster
+for member in dns1 dns2 witness; do
+  docker run --rm -v "$PWD/cluster:/cluster:z" "$image" cluster cert "$member" --dir /cluster
+done
+```
+
+Then, on each member, make a directory holding:
+
+- that member's `compose.yaml`;
+- its config file as `goethite.toml`: `node/dns1.toml`, `node/dns2.toml` or
+  `witness/witness.toml` from the repository, with your addresses, network interface and
+  upstreams in place of the examples' (the tables are the ones described above);
+- a `cluster/` directory with `ca.crt` and the member's own certificate and key. goethite reads
+  the key as root on the nodes, but without the capability to read other users' files, and as
+  user 65532 on the witness, so give the files to root and the group 65532:
+
+  ```sh
+  sudo chown -R root:65532 cluster
+  sudo chmod 0750 cluster && sudo chmod 0640 cluster/*.key
+  ```
+
+and start it, in any order: `docker compose up -d`. dns1 logs `started the cluster`, and
+`curl http://127.0.0.1:8053/api/v1/cluster` on either node shows the members.
+
+On the nodes, both containers use the host's network: the floating IP goes on the host's
+interface, VRRP and ARP reach the other node directly, and the members reach each other on their
+hosts' own addresses. Docker gives a user other than root no capabilities, so both start as root
+with only what they need: goethite binds port 53, switches to user 65532 and gives up its
+capabilities before it reads a packet; `goethite vrrp` keeps only `CAP_NET_ADMIN` once its
+sockets are open, and warns that it runs as root. The API answers on the host's loopback, as
+without containers. The witness runs as user 65532 from the start, with no capabilities, in a
+network namespace of its own with the cluster port published.
+
+To upgrade a member, change the tag (or `docker compose pull` for a patch release) and run
+`docker compose up -d`, one member at a time. On a node, Compose stops `goethite vrrp` first, which
+hands the floating IP to the other node at once, then recreates both: the node answers nothing for
+a second or two, unlike the in-place upgrade of the packages, while the other node answers on the
+floating IP.
+
 ## Upgrading
 
 Upgrade one member at a time, as in [Upgrade](../install/#upgrade): the handover drops no query,
