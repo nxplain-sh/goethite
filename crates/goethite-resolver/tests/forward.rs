@@ -796,6 +796,66 @@ async fn cname_uncloaking() {
     assert_eq!(paused.outcome, Outcome::Cached);
 }
 
+/// Answers every query with a CNAME chain of `links` records from the
+/// question name to `target`, and an A record at the end.
+fn cname_chain(links: usize, target: &'static str) -> Script {
+    script(move |q| {
+        let mut reply = answer(q, Ipv4Addr::new(192, 0, 2, 90));
+        let mut owner = q.queries[0].name().clone();
+        for link in 0..links {
+            let next = if link.saturating_add(1) == links {
+                rr::Name::from_ascii(target).unwrap()
+            } else {
+                rr::Name::from_ascii(format!("c{link}.chain.example.")).unwrap()
+            };
+            reply.answers.push(rr::Record::from_rdata(
+                owner,
+                300,
+                RData::CNAME(rdata::CNAME(next.clone())),
+            ));
+            owner = next;
+        }
+        reply.answers.push(rr::Record::from_rdata(
+            owner,
+            300,
+            RData::A(rdata::A(Ipv4Addr::new(192, 0, 2, 90))),
+        ));
+        vec![reply]
+    })
+}
+
+/// A resolver blocking `tracker.example`, with an upstream that answers a
+/// chain of `links` from the question name to it.
+async fn chain_resolver(links: usize) -> Resolver {
+    let upstream = fake(cname_chain(links, "collect.tracker.example."), silent()).await;
+    let state = Arc::new(PolicyState::new(simple(filter("||tracker.example^\n"))));
+    Resolver::new(Vec::new())
+        .with_policy(Arc::clone(&state))
+        .with_forwarder(forwarder(vec![UpstreamConfig::udp(upstream.addr)]))
+}
+
+#[tokio::test]
+async fn a_long_cname_chain_cannot_hide_a_blocked_target() {
+    // At the limit the chain is still uncloaked...
+    let blocked = chain_resolver(16)
+        .await
+        .resolve(&query("metrics.shop.example."), CLIENT)
+        .await;
+    assert_eq!(blocked.outcome, Outcome::Blocked);
+    assert_eq!(
+        blocked.filter.unwrap().cname.unwrap().to_string(),
+        "collect.tracker.example."
+    );
+
+    // ... past it nothing passes unchecked.
+    let escaped = chain_resolver(17)
+        .await
+        .resolve(&query("metrics.shop.example."), CLIENT)
+        .await;
+    assert_eq!(escaped.outcome, Outcome::Failed);
+    assert_eq!(escaped.response.rcode, ResponseCode::SERV_FAIL);
+}
+
 #[tokio::test]
 async fn safe_search_sends_search_hosts_to_their_safe_endpoint() {
     let upstream = fake(always(Ipv4Addr::new(216, 239, 38, 120)), silent()).await;

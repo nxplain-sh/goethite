@@ -452,11 +452,24 @@ impl Recursor {
         let mut segments = Vec::new();
         let mut seen = HashSet::new();
         let mut at = name.clone();
+        let mut links = 0_usize;
         for _ in 0..=MAX_CNAME_CHAIN {
             if !seen.insert(at.clone()) {
                 return Err(RecurseError::Chain);
             }
             let found = self.lookup(&at, qtype, budget, depth).await?;
+            // One segment's zone may hold a whole chain of its own: count
+            // every link, so the total stays within the limit.
+            links = links.saturating_add(
+                found
+                    .records
+                    .iter()
+                    .filter(|record| record.record_type() == RecordType::CNAME)
+                    .count(),
+            );
+            if links > MAX_CNAME_CHAIN {
+                return Err(RecurseError::Chain);
+            }
             let next = found.next.clone();
             segments.push(found);
             match next {

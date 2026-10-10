@@ -529,7 +529,7 @@ impl Resolver {
                 match guard::guarded(|| policy.services().check(&question.name, &asker.services)) {
                     Some(Some((service, matched))) => {
                         debug!(name = %question.name, qtype = %question.qtype, "blocked service");
-                        return blocked_service(query, policy, service, matched);
+                        return blocked_service(query, policy, service, matched, None);
                     }
                     Some(None) => {}
                     None => {
@@ -569,8 +569,32 @@ impl Resolver {
         }
         let (response, outcome) = self.cached_or_forwarded(query).await;
         if let (true, None, Some(policy)) = (asker.filtering, &exception, &asker.policy) {
-            let targets = response.answers.iter().filter_map(Record::cname_target);
-            for target in targets.take(MAX_CNAME_CHAIN) {
+            // Walk the whole chain from the question name: a chain longer
+            // than the limit fails closed, rather than passing unchecked.
+            let mut at = question.name.clone();
+            for step in 0..=MAX_CNAME_CHAIN {
+                let Some(target) = response.answers.iter().find_map(|record| {
+                    (record.record_type() == RecordType::CNAME && record.name() == &at)
+                        .then(|| record.cname_target())
+                        .flatten()
+                }) else {
+                    break;
+                };
+                if step >= MAX_CNAME_CHAIN {
+                    debug!(name = %question.name, "CNAME chain too long to uncloak");
+                    return (
+                        Response::for_query(query, ResponseCode::SERV_FAIL),
+                        Outcome::Failed,
+                        None,
+                    );
+                }
+                if !asker.services.is_empty()
+                    && let Some(Some((service, matched))) =
+                        guard::guarded(|| policy.services().check(&target, &asker.services))
+                {
+                    debug!(name = %question.name, cname = %target, "blocked service through a CNAME");
+                    return blocked_service(query, policy, service, matched, Some(target));
+                }
                 match Self::check(policy, &target, asker.sources) {
                     Some(Verdict::Blocked(matched)) => {
                         debug!(name = %question.name, cname = %target, "blocked through a CNAME");
@@ -583,6 +607,7 @@ impl Resolver {
                         }
                     }
                 }
+                at = target;
             }
         }
         (response, outcome, exception)
@@ -757,13 +782,14 @@ fn blocked_service(
     policy: &Policy,
     service: usize,
     matched: Match,
+    cname: Option<Name>,
 ) -> (Response, Outcome, Option<FilterHit>) {
     let response = blocking::blocked_response(query, policy.block_response(), policy.blocked_ttl());
     let hit = FilterHit {
         action: Action::Block,
         matched,
         source: policy.services().source_id(service).cloned(),
-        cname: None,
+        cname,
     };
     (response, Outcome::Blocked, Some(hit))
 }

@@ -728,6 +728,25 @@ async fn glue_addresses_are_capped() {
 }
 
 #[tokio::test]
+async fn a_cname_chain_longer_than_the_limit_fails() {
+    // A chain of 18 links, spread over three responses of eight.
+    let mut records = vec![Record::cname(name("q.example."), 300, name("m0.example."))];
+    for link in 0..17u8 {
+        let next = if link == 16 {
+            name("end.example.")
+        } else {
+            name(&format!("m{}.example.", link.saturating_add(1)))
+        };
+        records.push(Record::cname(name(&format!("m{link}.example.")), 300, next));
+    }
+    let mut fake = Fake::default();
+    fake.serve("10.0.0.1", ".", records);
+    let (recursor, _) = recursor(fake, config());
+    let (response, _) = recursor.resolve(&query("q.example.", RecordType::A)).await;
+    assert_eq!(response.rcode, ResponseCode::SERV_FAIL);
+}
+
+#[tokio::test]
 async fn resolves_from_the_root_down_showing_each_server_little() {
     let (recursor, fake) = recursor(internet(), config());
     let (response, server) = recursor
