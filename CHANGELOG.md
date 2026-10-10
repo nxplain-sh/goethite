@@ -83,7 +83,7 @@ configuration format.
 
 ### Changed
 
-- **Metrics are kept by the OpenTelemetry SDK** ([ADR 0034](docs/adr/0034-opentelemetry.md)),
+- **Metrics are kept by the OpenTelemetry SDK** ([ADR 0040](docs/adr/0040-opentelemetry.md)),
   the first step towards OpenTelemetry for metrics, logs and traces. `/metrics` serves the same
   families, labels, help and types as before, through the SDK's Prometheus reader, so scrapes and
   dashboards keep working. Small differences:
