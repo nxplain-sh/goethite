@@ -1,6 +1,6 @@
 ---
 title: Metrics and telemetry
-description: Scrape goethite's metrics with Prometheus, or send them to an OpenTelemetry collector over OTLP.
+description: Scrape goethite's metrics with Prometheus, or send them and the log to an OpenTelemetry collector over OTLP.
 ---
 
 goethite keeps its metrics with [OpenTelemetry](https://opentelemetry.io/). It offers them two
@@ -11,9 +11,12 @@ ways, and both can be on at once:
 - **Push:** goethite sends them to an OpenTelemetry collector over OTLP/HTTP. This is off until
   `[telemetry] endpoint` is set.
 
-Both carry the same metrics. Pushed, they keep OpenTelemetry's names, such as `goethite.queries`
-and `goethite.query.duration`; at `/metrics` they have their Prometheus names, such as
-`goethite_queries_total` and `goethite_query_duration_seconds`.
+With an endpoint set, goethite also sends its [log records](#log-records) to the collector, while
+still writing them to standard error.
+
+Both ways carry the same metrics. Pushed, they keep OpenTelemetry's names, such as
+`goethite.queries` and `goethite.query.duration`; at `/metrics` they have their Prometheus names,
+such as `goethite_queries_total` and `goethite_query_duration_seconds`.
 
 ## What the metrics hold
 
@@ -30,6 +33,25 @@ and `goethite.query.duration`; at `/metrics` they have their Prometheus names, s
 They hold counts and states only, never a name that was looked up or a client's address. Those
 stay in the [query log](../configuration/#querylog).
 
+## Log records
+
+**What is sent.** Every log line at `INFO` and above, the same lines journald gets. Each record
+carries its severity, its target (such as `goethite::filters`), its message and its fields.
+`RUST_LOG` changes what standard error shows, not what is sent. Lines about the export itself
+stay out, so a collector that is down cannot fill its own queue.
+
+**What the lines hold.** They are about goethite: starting, lists, upstreams, the cluster,
+problems. A few warnings name what they are about:
+
+- **A name that was looked up:** when no upstream could answer it, and when filtering it failed
+  (a bug).
+- **A client's address or ID:** when an answer to it could not be encoded, or its configured
+  address is invalid.
+
+If those must not leave the node, keep `logs = false`.
+
+**Turning it off.** `logs = false` stops sending them.
+
 ## Prometheus
 
 See [REST API](../api/#metrics) for the scrape configuration. `/metrics` needs the admin token
@@ -44,8 +66,12 @@ headers_file = "/etc/goethite/otlp-headers"
 interval = 60
 ```
 
-**Sending.** goethite posts the metrics to `<endpoint>/v1/metrics` every `interval` seconds, and
-once more when it stops.
+**Sending.**
+
+- **Metrics:** posted to `<endpoint>/v1/metrics` every `interval` seconds, and once more when
+  goethite stops.
+- **Log records:** posted to `<endpoint>/v1/logs` in batches, within a second or so of being
+  written.
 
 **What identifies the node.** Each export carries `service.name` = `goethite` and
 `service.version`. On a [cluster](../ha/) member it also carries `service.instance.id` = the node's
@@ -76,6 +102,9 @@ service:
     metrics:
       receivers: [otlp]
       exporters: [debug]
+    logs:
+      receivers: [otlp]
+      exporters: [debug]
 ```
 
 **The collector's name.** goethite resolves it through its own upstreams and
@@ -85,8 +114,10 @@ or a local record answer. A container or Kubernetes service name answers only th
 
 **When the collector is down.**
 
-- DNS is never affected. Exports run on a thread of their own and give up after 10 seconds,
-  retries included. The next export sends the counts so far.
+- DNS is never affected. Exports run on threads of their own and give up after 10 seconds,
+  retries included.
+- The next metrics export sends the counts so far. Log records wait in a bounded queue (2,048) and
+  are dropped when it is full; they are still in the journal.
 - goethite logs one warning when exports start failing, and one line when they work again.
 - `goethite_telemetry_export_failures_total` counts the failed requests, retries included.
 

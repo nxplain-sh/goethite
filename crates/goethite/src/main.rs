@@ -48,7 +48,10 @@ use jiff::Timestamp;
 use tokio::sync::watch;
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::Layer as _;
 use tracing_subscriber::filter::LevelFilter;
+use tracing_subscriber::layer::SubscriberExt as _;
+use tracing_subscriber::util::SubscriberInitExt as _;
 
 use crate::config::Config;
 use crate::control::Control;
@@ -270,9 +273,7 @@ fn init_logging() {
             filter = filter.add_directive(quiet);
         }
     }
-    // Only fails if a global subscriber is already set, which never happens here.
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(filter)
+    let stderr = tracing_subscriber::fmt::layer()
         .with_writer(std::io::stderr)
         .with_ansi(std::io::stderr().is_terminal())
         // Otherwise a log line that cannot be written (nothing reads standard
@@ -280,6 +281,11 @@ fn init_logging() {
         // process dies, or the task that logged does, such as the one that
         // stops goethite on SIGTERM. A lost log line must cost nothing more.
         .log_internal_errors(false)
+        .with_filter(filter);
+    // Only fails if a global subscriber is already set, which never happens here.
+    let _ = tracing_subscriber::registry()
+        .with(stderr)
+        .with(telemetry::logs::LogExport.with_filter(telemetry::logs::filter()))
         .try_init();
 }
 

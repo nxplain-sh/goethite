@@ -425,6 +425,8 @@ pub(crate) struct TelemetrySection {
     pub ca_file: Option<PathBuf>,
     /// Whether metrics are sent.
     pub metrics: bool,
+    /// Whether log records (`INFO` and above) are sent.
+    pub logs: bool,
     /// Seconds between metric exports.
     pub interval: u64,
 }
@@ -436,6 +438,7 @@ impl Default for TelemetrySection {
             headers_file: None,
             ca_file: None,
             metrics: true,
+            logs: true,
             interval: 60,
         }
     }
@@ -1946,6 +1949,7 @@ mod tests {
     fn telemetry_settings() {
         let default = Config::parse("").unwrap().telemetry;
         assert_eq!(default.endpoint().unwrap(), None);
+        assert!(default.metrics && default.logs);
         assert_eq!(default.signal_url("metrics"), None);
         assert!(default.validate().is_ok());
 

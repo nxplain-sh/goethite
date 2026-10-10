@@ -18,7 +18,9 @@ use goethite_resolver::{Resolver, TlsRoots, tls_client_config};
 use http_body_util::{BodyExt, Full, Limited};
 use hyper::header::{HeaderName, HeaderValue};
 use opentelemetry_http::{Bytes, HttpClient, HttpError, Request, Response};
-use opentelemetry_otlp::{MetricExporter, WithExportConfig, WithHttpConfig};
+use opentelemetry_otlp::{LogExporter, MetricExporter, WithExportConfig, WithHttpConfig};
+use opentelemetry_sdk::Resource;
+use opentelemetry_sdk::logs::SdkLoggerProvider;
 use opentelemetry_sdk::metrics::PeriodicReader;
 use rustls::pki_types::CertificateDer;
 use rustls::pki_types::pem::PemObject;
@@ -80,13 +82,6 @@ impl Exports {
             }
         }
     }
-}
-
-/// How the requests fare, by signal.
-#[derive(Debug, Default)]
-pub(crate) struct ExportFailures {
-    /// Metric exports.
-    pub metrics: Arc<Exports>,
 }
 
 /// Posts OTLP requests for one signal through goethite's own HTTP client.
@@ -152,51 +147,95 @@ impl HttpClient for OtlpClient {
     }
 }
 
-/// A reader that sends the metrics to the collector every
-/// `telemetry.interval`, if an endpoint is configured and metrics are on.
+/// What goes to the collector, as `[telemetry]` sets it up.
+#[derive(Debug, Default)]
+pub(crate) struct Export {
+    /// The reader that sends the metrics every `telemetry.interval`.
+    pub metrics: Option<PeriodicReader<MetricExporter>>,
+    /// The provider that sends log records, in batches.
+    pub logs: Option<SdkLoggerProvider>,
+    /// How the requests fare, by signal.
+    pub requests: Vec<(&'static str, Arc<Exports>)>,
+}
+
+/// Sets up sending each signal `config` turns on, if it names an endpoint.
+/// Call it on the runtime: the requests run on it. The exporters' threads
+/// start here.
 ///
 /// # Errors
 ///
-/// If the headers or the CA are unusable, or the exporter cannot be built.
-pub(crate) fn metrics_reader(
+/// If the headers or the CA are unusable, or an exporter cannot be built.
+pub(crate) fn export(
     config: &TelemetrySection,
     secrets: &Secrets,
     resolver: &Arc<Resolver>,
-    failures: &ExportFailures,
-) -> Result<Option<PeriodicReader<MetricExporter>>> {
-    let Some(url) = config.signal_url("metrics").filter(|_| config.metrics) else {
-        return Ok(None);
+    resource: &Resource,
+) -> Result<Export> {
+    let mut export = Export::default();
+    let Some(endpoint) = config.endpoint()? else {
+        return Ok(export);
     };
-    let client = OtlpClient {
-        signal: "metrics",
-        resolver: Arc::clone(resolver),
-        tls: TlsConnector::from(tls_client_config(
-            &roots(secrets.telemetry_ca.as_deref())?,
-            &[b"h2", b"http/1.1"],
-        )?),
-        runtime: Handle::current(),
-        exports: Arc::clone(&failures.metrics),
+    let tls = TlsConnector::from(tls_client_config(
+        &roots(secrets.telemetry_ca.as_deref())?,
+        &[b"h2", b"http/1.1"],
+    )?);
+    let headers = headers(secrets.telemetry_headers.as_deref().unwrap_or(""))?;
+    let mut client = |signal: &'static str| {
+        let exports = Arc::new(Exports::default());
+        export.requests.push((signal, Arc::clone(&exports)));
+        OtlpClient {
+            signal,
+            resolver: Arc::clone(resolver),
+            tls: tls.clone(),
+            runtime: Handle::current(),
+            exports,
+        }
     };
-    let exporter = MetricExporter::builder()
-        .with_http()
-        .with_http_client(client)
-        .with_endpoint(url.clone())
-        .with_headers(headers(secrets.telemetry_headers.as_deref().unwrap_or(""))?)
-        .with_timeout(EXPORT_TIMEOUT)
-        .build()
+    let metrics = config
+        .signal_url("metrics")
+        .filter(|_| config.metrics)
+        .map(|url| {
+            MetricExporter::builder()
+                .with_http()
+                .with_http_client(client("metrics"))
+                .with_endpoint(url)
+                .with_headers(headers.clone())
+                .with_timeout(EXPORT_TIMEOUT)
+                .build()
+        })
+        .transpose()
         .context("cannot set up the metrics export")?;
-    if let Ok(Some(endpoint)) = config.endpoint()
-        && endpoint.scheme_str() == Some("http")
-        && !endpoint.host().is_some_and(is_loopback)
-    {
+    let logs = config
+        .signal_url("logs")
+        .filter(|_| config.logs)
+        .map(|url| {
+            LogExporter::builder()
+                .with_http()
+                .with_http_client(client("logs"))
+                .with_endpoint(url)
+                .with_headers(headers.clone())
+                .with_timeout(EXPORT_TIMEOUT)
+                .build()
+        })
+        .transpose()
+        .context("cannot set up the log export")?;
+    if endpoint.scheme_str() == Some("http") && !endpoint.host().is_some_and(is_loopback) {
         warn!("telemetry goes to the collector over plain HTTP: it and its headers can be read");
     }
-    info!(%url, interval = config.interval, "sending metrics over OTLP");
-    Ok(Some(
+    let signals: Vec<&str> = export.requests.iter().map(|(signal, _)| *signal).collect();
+    info!(%endpoint, ?signals, interval = config.interval, "sending telemetry over OTLP");
+    export.metrics = metrics.map(|exporter| {
         PeriodicReader::builder(exporter)
             .with_interval(Duration::from_secs(config.interval))
-            .build(),
-    ))
+            .build()
+    });
+    export.logs = logs.map(|exporter| {
+        SdkLoggerProvider::builder()
+            .with_resource(resource.clone())
+            .with_batch_exporter(exporter)
+            .build()
+    });
+    Ok(export)
 }
 
 fn is_loopback(host: &str) -> bool {

@@ -1323,10 +1323,11 @@ mod serving {
         (addr, received)
     }
 
-    /// With `[telemetry] endpoint`, the metrics go to the collector over
-    /// OTLP/HTTP with the configured headers, and a last time on shutdown.
+    /// With `[telemetry] endpoint`, the metrics and the log records go to
+    /// the collector over OTLP/HTTP with the configured headers, and a last
+    /// time on shutdown.
     #[test]
-    fn sends_metrics_over_otlp() {
+    fn sends_telemetry_over_otlp() {
         let (collector, requests) = collector();
         let headers = config_file(
             "otlp_headers",
@@ -1342,23 +1343,31 @@ mod serving {
             ),
         );
         let udp = field(&server.wait_for_log(DNS_LISTENING), "udp");
-        server.find_log("sending metrics over OTLP");
+        server.find_log("sending telemetry over OTLP");
         ask(udp, "example.com.");
         server.signal("TERM");
         assert!(server.wait_for_exit().success());
 
-        let request = requests.recv_timeout(WAIT).unwrap();
-        assert!(
-            request.head.starts_with("POST /v1/metrics HTTP/1.1"),
-            "{}",
-            request.head
-        );
-        let head = request.head.to_ascii_lowercase();
-        assert!(
-            head.contains("content-type: application/x-protobuf"),
-            "{head}"
-        );
-        assert!(head.contains("authorization: bearer test-key"), "{head}");
+        let mut by_path = std::collections::HashMap::new();
+        while let Ok(request) = requests.recv_timeout(Duration::from_secs(2)) {
+            let path = request.head.split_whitespace().nth(1).unwrap().to_owned();
+            let head = request.head.to_ascii_lowercase();
+            assert!(head.starts_with("post "), "{head}");
+            assert!(
+                head.contains("content-type: application/x-protobuf"),
+                "{head}"
+            );
+            assert!(head.contains("authorization: bearer test-key"), "{head}");
+            by_path
+                .entry(path)
+                .or_insert_with(Vec::new)
+                .extend(request.body);
+        }
+        let contains = |path: &str, text: &str| {
+            by_path
+                .get(path)
+                .is_some_and(|body| body.windows(text.len()).any(|w| w == text.as_bytes()))
+        };
         for name in [
             "goethite.queries",
             "goethite.query.duration",
@@ -1368,13 +1377,18 @@ mod serving {
             "service.name",
         ] {
             assert!(
-                request
-                    .body
-                    .windows(name.len())
-                    .any(|window| window == name.as_bytes()),
-                "missing {name}"
+                contains("/v1/metrics", name),
+                "missing {name} in the metrics"
             );
         }
+        // goethite's own lines, not the export's.
+        for line in ["received SIGTERM", "service.name"] {
+            assert!(contains("/v1/logs", line), "missing {line:?} in the logs");
+        }
+        assert!(
+            !contains("/v1/logs", "sending telemetry"),
+            "the export logged itself"
+        );
     }
 
     #[test]

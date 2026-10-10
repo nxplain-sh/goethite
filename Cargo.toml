@@ -64,12 +64,14 @@ landlock = "0.4.7"
 openraft = { version = "=0.9.25", default-features = false, features = ["serde", "storage-v2"] }
 # OpenTelemetry for metrics, logs and traces (ADR 0034). Bound instruments keep
 # a query's metrics to one atomic update per instrument: no lock, no hashing.
-opentelemetry = { version = "0.33.1", default-features = false, features = ["metrics", "experimental_metrics_bound_instruments"] }
-opentelemetry_sdk = { version = "0.33.1", default-features = false, features = ["metrics", "experimental_metrics_bound_instruments"] }
+opentelemetry = { version = "0.33.1", default-features = false, features = ["metrics", "logs", "experimental_metrics_bound_instruments"] }
+opentelemetry_sdk = { version = "0.33.1", default-features = false, features = ["metrics", "logs", "experimental_metrics_bound_instruments"] }
+# Log records from `tracing` events, for the collector.
+opentelemetry-appender-tracing = { version = "0.33.1", default-features = false }
 # OTLP over HTTP. No HTTP client feature: goethite sends the requests through
 # its own resolver, hyper and rustls with ring (no reqwest, no aws-lc-rs).
 opentelemetry-http = { version = "0.33.1", default-features = false }
-opentelemetry-otlp = { version = "0.33.1", default-features = false, features = ["http-proto", "metrics"] }
+opentelemetry-otlp = { version = "0.33.1", default-features = false, features = ["http-proto", "metrics", "logs"] }
 # `/metrics` in the Prometheus text format, read from the same SDK.
 opentelemetry-prometheus = { version = "0.33.1", default-features = false }
 prometheus = { version = "0.14.0", default-features = false }
