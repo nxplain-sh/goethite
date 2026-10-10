@@ -34,7 +34,7 @@ use utoipa::ToSchema;
 
 use crate::model::{
     Client, ConfigSnapshot, DEFAULT_GROUP, Group, GroupList, List, ListSpec, ManagedBy, Record,
-    Resource, Rule, RuleSpec, Schedule, Settings, SettingsSpec, ValidationError,
+    Resource, Rule, RuleSpec, Schedule, Settings, SettingsSpec, User, ValidationError,
     default_group_resource,
 };
 
@@ -45,9 +45,9 @@ pub const MAX_AUDIT_ENTRIES: u64 = 100_000;
 
 /// The store's schema version, kept in the `meta` table. A cluster member
 /// takes a whole configuration (a seed or a snapshot) only with the same
-/// one. Version 2 added local DNS records; opening an older store creates
-/// their table, which is the whole migration.
-const SCHEMA_VERSION: &str = "2";
+/// one. Version 2 added local DNS records; version 3 users. Opening an
+/// older store creates the missing tables, which is the whole migration.
+const SCHEMA_VERSION: &str = "3";
 
 const SETTINGS: TableDefinition<'static, &'static str, &'static [u8]> =
     TableDefinition::new("settings");
@@ -141,6 +141,8 @@ macro_rules! extensible_enum {
 pub enum ActorKind {
     /// An API client with the admin token.
     Token,
+    /// A signed-in user, named in the actor's `name`.
+    User,
     /// An API client on loopback while no admin token is configured.
     Unauthenticated,
     /// The `goethite` command line, such as `goethite import`.
@@ -157,6 +159,9 @@ pub enum ActorKind {
 pub struct Actor {
     /// What kind of actor.
     pub kind: ActorKind,
+    /// The user's sign-in name, when a user made the change.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     /// The client's IP address, for API requests.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub address: Option<String>,
@@ -171,6 +176,7 @@ impl Actor {
     pub fn system() -> Self {
         Self {
             kind: ActorKind::System,
+            name: None,
             address: None,
             node: None,
         }
@@ -180,7 +186,18 @@ impl Actor {
     pub fn cli() -> Self {
         Self {
             kind: ActorKind::Cli,
+            name: None,
             address: None,
+            node: None,
+        }
+    }
+
+    /// The signed-in user `name`, from `address`.
+    pub fn user(name: impl Into<String>, address: Option<String>) -> Self {
+        Self {
+            kind: ActorKind::User,
+            name: Some(name.into()),
+            address,
             node: None,
         }
     }
@@ -189,6 +206,7 @@ impl Actor {
     pub fn replication(node: impl Into<String>) -> Self {
         Self {
             kind: ActorKind::Replication,
+            name: None,
             address: None,
             node: Some(node.into()),
         }
@@ -197,12 +215,12 @@ impl Actor {
 
 extensible_enum!(
     ActorKind,
-    "Who made a change: `token` (an API client with the admin token), `unauthenticated` (an API \
-     client on loopback while no admin token is configured), `cli` (the goethite command line), \
-     `system` (goethite itself) or `replication` (a whole configuration taken from another \
-     cluster member). More may \
-     be added: show unknown values as they are.",
-    [Token, Unauthenticated, Cli, System, Replication]
+    "Who made a change: `token` (an API client with the admin token), `user` (a signed-in user, \
+     named in the actor's `name`), `unauthenticated` (an API client on loopback while no admin \
+     token is configured), `cli` (the goethite command line), `system` (goethite itself) or \
+     `replication` (a whole configuration taken from another cluster member). More may be added: \
+     show unknown values as they are.",
+    [Token, User, Unauthenticated, Cli, System, Replication]
 );
 
 /// What an audit entry records.
@@ -428,12 +446,19 @@ impl Batch {
 
     fn record<K: Kind>(&mut self, action: AuditAction, before: Option<&K>, after: Option<&K>) {
         let id = after.or(before).map(|r| r.id().to_owned());
+        let shown = |resource: &K| {
+            let mut value = serde_json::to_value(resource).ok()?;
+            if K::NAME == User::NAME {
+                redact_user(&mut value);
+            }
+            Some(value)
+        };
         self.audit.push(Pending {
             action,
             kind: Some(K::NAME.to_owned()),
             resource: id,
-            before: before.and_then(|r| serde_json::to_value(r).ok()),
-            after: after.and_then(|r| serde_json::to_value(r).ok()),
+            before: before.and_then(shown),
+            after: after.and_then(shown),
             detail: None,
         });
     }
@@ -708,6 +733,7 @@ impl Store {
                 Client::table(),
                 Schedule::table(),
                 Record::table(),
+                User::table(),
             ] {
                 tx.open_table(table)?;
             }
@@ -782,6 +808,21 @@ impl Store {
             .iter()
             .find(|r| r.id() == id)
             .cloned()
+    }
+
+    /// The user with the sign-in name `name` (ignoring case), if there is
+    /// one.
+    pub fn user_by_name(&self, name: &str) -> Option<User> {
+        self.config()
+            .users
+            .iter()
+            .find(|user| user.spec.name.eq_ignore_ascii_case(name))
+            .cloned()
+    }
+
+    /// Whether any user exists.
+    pub fn users_exist(&self) -> bool {
+        !self.config().users.is_empty()
     }
 
     /// Creates a resource.
@@ -1130,6 +1171,7 @@ impl Store {
         replace_kind::<Client>(old, new, &mut batch, &mut summary);
         replace_kind::<Schedule>(old, new, &mut batch, &mut summary);
         replace_kind::<Record>(old, new, &mut batch, &mut summary);
+        replace_kind::<User>(old, new, &mut batch, &mut summary);
         if old.settings != new.settings {
             batch.settings(&new.settings);
             summary.settings_changed = true;
@@ -1408,6 +1450,7 @@ fn apply_row(config: &mut ConfigSnapshot, row: &Row) -> Result<(), StoreError> {
             Resource::Client(r) => upsert(config, r),
             Resource::Record(r) => upsert(config, r),
             Resource::Schedule(r) => upsert(config, r),
+            Resource::User(r) => upsert(config, r),
         },
         Row::Delete { kind, id } => match kind.as_str() {
             List::NAME => remove::<List>(config, id),
@@ -1416,6 +1459,7 @@ fn apply_row(config: &mut ConfigSnapshot, row: &Row) -> Result<(), StoreError> {
             Client::NAME => remove::<Client>(config, id),
             Record::NAME => remove::<Record>(config, id),
             Schedule::NAME => remove::<Schedule>(config, id),
+            User::NAME => remove::<User>(config, id),
             other => return Err(unknown_kind(other)),
         },
         Row::Settings { settings } => config.settings = settings.clone(),
@@ -1443,6 +1487,7 @@ fn write_row(tx: &redb::WriteTransaction, row: &Row) -> Result<(), StoreError> {
             Resource::Client(r) => put(tx, r),
             Resource::Record(r) => put(tx, r),
             Resource::Schedule(r) => put(tx, r),
+            Resource::User(r) => put(tx, r),
         },
         Row::Delete { kind, id } => match kind.as_str() {
             List::NAME => remove::<List>(tx, id),
@@ -1451,6 +1496,7 @@ fn write_row(tx: &redb::WriteTransaction, row: &Row) -> Result<(), StoreError> {
             Client::NAME => remove::<Client>(tx, id),
             Record::NAME => remove::<Record>(tx, id),
             Schedule::NAME => remove::<Schedule>(tx, id),
+            User::NAME => remove::<User>(tx, id),
             other => Err(unknown_kind(other)),
         },
         Row::Settings { settings } => {
@@ -1464,6 +1510,25 @@ fn write_row(tx: &redb::WriteTransaction, row: &Row) -> Result<(), StoreError> {
 
 fn unknown_kind(kind: &str) -> StoreError {
     StoreError::Incompatible(format!("a change to an unknown kind of resource, {kind:?}"))
+}
+
+/// Leaves the secrets out of a user's audit entry: password hash, TOTP
+/// secret, recovery hashes and the pending reset's hash.
+fn redact_user(value: &mut serde_json::Value) {
+    let Some(spec) = value
+        .get_mut("spec")
+        .and_then(serde_json::Value::as_object_mut)
+    else {
+        return;
+    };
+    for secret in ["password_hash", "recovery", "reset"] {
+        spec.remove(secret);
+    }
+    if let Some(totp) = spec.get_mut("totp")
+        && let Some(totp) = totp.as_object_mut()
+    {
+        totp.remove("secret");
+    }
 }
 
 /// Writes `audit` as numbered entries, dropping the oldest beyond
@@ -1718,6 +1783,7 @@ fn load(db: &Database) -> Result<ConfigSnapshot, StoreError> {
         clients: Vec::new(),
         schedules: Vec::new(),
         records: Vec::new(),
+        users: Vec::new(),
     };
     load_kind::<List>(&tx, &mut config)?;
     load_kind::<Rule>(&tx, &mut config)?;
@@ -1725,6 +1791,7 @@ fn load(db: &Database) -> Result<ConfigSnapshot, StoreError> {
     load_kind::<Client>(&tx, &mut config)?;
     load_kind::<Schedule>(&tx, &mut config)?;
     load_kind::<Record>(&tx, &mut config)?;
+    load_kind::<User>(&tx, &mut config)?;
     // The default group first.
     config.groups.sort_by_key(|group| group.id != DEFAULT_GROUP);
     Ok(config)
@@ -1758,7 +1825,8 @@ fn decode<T: DeserializeOwned>(what: &str, bytes: &[u8]) -> Result<T, StoreError
 mod tests {
     use super::*;
     use crate::model::{
-        AccessSpec, ClientSpec, GroupSpec, RecordKind, RecordSpec, ScheduleSpec, Weekday, Window,
+        AccessSpec, ClientSpec, GroupSpec, RecordKind, RecordSpec, Role, ScheduleSpec, TotpSpec,
+        UserSpec, Weekday, Window,
     };
 
     struct TempStore {
@@ -1802,6 +1870,7 @@ mod tests {
     fn api() -> Actor {
         Actor {
             kind: ActorKind::Token,
+            name: None,
             address: Some("192.0.2.1".into()),
             node: None,
         }
@@ -2417,8 +2486,105 @@ mod tests {
         tx.delete_table(Record::table()).unwrap();
         tx.commit().unwrap();
         store.reopen();
-        assert_eq!(store.meta("schema").unwrap().as_deref(), Some("2"));
+        assert_eq!(store.meta("schema").unwrap().as_deref(), Some("3"));
         assert_eq!(store.config().records.len(), 0);
+        assert_eq!(store.config().users.len(), 0);
+    }
+
+    #[test]
+    fn users_persist_and_their_secrets_stay_out_of_the_audit() {
+        let mut store = TempStore::new("users");
+        let hash = "$argon2id$v=19$m=19456,t=2,p=1$c2FsdHNhbHQ$aGFzaGhhc2g".to_owned();
+        let spec = UserSpec {
+            name: "admin".into(),
+            role: Role::Admin,
+            disabled: false,
+            password_hash: hash.clone(),
+            totp: Some(TotpSpec {
+                secret: "A".repeat(32),
+                enabled: true,
+            }),
+            recovery: vec!["b".repeat(64)],
+            reset: None,
+        };
+        let created = store.create::<User>(spec, &api()).unwrap();
+        assert!(created.id.starts_with("us_"), "{}", created.id);
+
+        let entry = store
+            .audit(None, 10)
+            .unwrap()
+            .into_iter()
+            .find(|entry| entry.kind.as_deref() == Some("user"))
+            .expect("a user audit entry");
+        let after = entry.after.unwrap();
+        assert_eq!(after["spec"]["name"], "admin");
+        assert!(after["spec"].get("password_hash").is_none(), "{after}");
+        assert!(after["spec"]["totp"].get("secret").is_none(), "{after}");
+        assert!(after["spec"].get("recovery").is_none(), "{after}");
+
+        store.reopen();
+        let held = store.get::<User>(&created.id).unwrap();
+        assert_eq!(held.spec.password_hash, hash);
+        assert_eq!(held.spec.recovery, vec!["b".repeat(64)]);
+    }
+
+    #[test]
+    fn user_rules_are_enforced() {
+        let store = TempStore::new("user-rules");
+        let user = |name: &str, role: Role, disabled: bool| UserSpec {
+            name: name.into(),
+            role,
+            disabled,
+            password_hash: "$argon2id$v=19$m=19456,t=2,p=1$c2FsdHNhbHQ$aGFzaGhhc2g".into(),
+            totp: None,
+            recovery: Vec::new(),
+            reset: None,
+        };
+        let admin = store
+            .create::<User>(user("Admin", Role::Admin, false), &api())
+            .unwrap();
+        // No second user with the same name, whatever the case.
+        let clash = store.create::<User>(user("admin", Role::Viewer, false), &api());
+        assert!(matches!(clash, Err(StoreError::Invalid(_))), "{clash:?}");
+        // A viewer is fine next to an admin.
+        let viewer = store
+            .create::<User>(user("kid", Role::Viewer, false), &api())
+            .unwrap();
+        // The last enabled admin can be neither disabled, demoted nor
+        // deleted while only viewers remain.
+        let disabled =
+            store.update::<User>(&admin.id, user("Admin", Role::Admin, true), None, &api());
+        assert!(
+            matches!(disabled, Err(StoreError::Conflict(_))),
+            "{disabled:?}"
+        );
+        let demoted =
+            store.update::<User>(&admin.id, user("Admin", Role::Viewer, false), None, &api());
+        assert!(
+            matches!(demoted, Err(StoreError::Conflict(_))),
+            "{demoted:?}"
+        );
+        let deleted = store.delete::<User>(&admin.id, None, &api());
+        assert!(
+            matches!(deleted, Err(StoreError::Conflict(_))),
+            "{deleted:?}"
+        );
+        // A second admin unlocks it.
+        store
+            .create::<User>(user("second", Role::Admin, false), &api())
+            .unwrap();
+        store.delete::<User>(&admin.id, None, &api()).unwrap();
+        let off = store
+            .update::<User>(&viewer.id, user("kid", Role::Viewer, true), None, &api())
+            .unwrap();
+        assert!(off.spec.disabled);
+        // Anything that is not an Argon2id hash is refused.
+        let mut bad = user("eve", Role::Viewer, false);
+        bad.password_hash = "plain".into();
+        assert!(matches!(
+            store.create::<User>(bad, &api()),
+            Err(StoreError::Invalid(_))
+        ));
     }
 
     #[test]

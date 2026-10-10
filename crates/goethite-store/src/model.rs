@@ -44,6 +44,8 @@ pub const MAX_RECORDS: usize = MAX_LOCAL_RECORDS;
 pub const MAX_RECORD_TTL: u32 = 86_400;
 /// The most blocked services one group names, schedules included.
 pub const MAX_BLOCKED_SERVICES: usize = MAX_SERVICES;
+/// The most users with access to the API.
+pub const MAX_USERS: usize = 1000;
 /// The most time windows in one schedule.
 pub const MAX_WINDOWS: usize = 32;
 /// The longest name, in characters.
@@ -671,6 +673,139 @@ resource!(
     Schedule, ScheduleSpec, "schedule", "sc", schedules
 );
 
+/// The most recovery codes a user may hold.
+pub const MAX_RECOVERY_CODES: usize = 10;
+
+/// What a user may do through the API.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Role {
+    /// Everything.
+    #[default]
+    Admin,
+    /// Read-only: `GET`s, the pages that use them, and their own account.
+    Viewer,
+}
+
+/// A user's time-based one-time password: the second factor.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TotpSpec {
+    /// The shared secret: base32 (RFC 4648, no padding), 20 bytes.
+    pub secret: String,
+    /// Whether the user confirmed a code; until then it is not asked for.
+    #[serde(default)]
+    pub enabled: bool,
+}
+
+/// A password reset waiting to be used or to expire.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ResetSpec {
+    /// The SHA-256 of the one-time token, 64 hexadecimal digits.
+    pub hash: String,
+    /// When the token stops working.
+    pub expires_at: Timestamp,
+}
+
+/// Everything stored about a user. Password hashes, TOTP secrets and
+/// recovery hashes never leave the node through the API.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UserSpec {
+    /// The sign-in name: letters, digits, `-`, `_`, `.` or `@`; unique,
+    /// ignoring case.
+    pub name: String,
+    /// What the user may do.
+    #[serde(default)]
+    pub role: Role,
+    /// A disabled user cannot sign in, and their sessions stop working.
+    #[serde(default)]
+    pub disabled: bool,
+    /// The Argon2id hash of the password, in PHC form.
+    pub password_hash: String,
+    /// The second factor, being set up or enabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub totp: Option<TotpSpec>,
+    /// The SHA-256 hashes of the recovery codes not used yet.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recovery: Vec<String>,
+    /// The password reset issued for this user, if one is waiting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reset: Option<ResetSpec>,
+}
+
+impl UserSpec {
+    /// Checks the name and the shapes of the hashes and secrets; whether a
+    /// hash matches a password is for whoever verifies one.
+    fn validate(&self, field: &str) -> Result<(), ValidationError> {
+        let name = format!("{field}.name");
+        check_name(&name, &self.name)?;
+        if !self
+            .name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'@'))
+        {
+            return Err(invalid(name, "use letters, digits, '-', '_', '.' or '@'"));
+        }
+        if !self.password_hash.starts_with("$argon2id$") || self.password_hash.len() > 512 {
+            return Err(invalid(
+                format!("{field}.password_hash"),
+                "must be an Argon2id hash in PHC form",
+            ));
+        }
+        if let Some(totp) = &self.totp
+            && !is_base32_secret(&totp.secret)
+        {
+            return Err(invalid(
+                format!("{field}.totp.secret"),
+                "must be 32 base32 characters (20 bytes)",
+            ));
+        }
+        if self.recovery.len() > MAX_RECOVERY_CODES {
+            return Err(invalid(
+                format!("{field}.recovery"),
+                format!("at most {MAX_RECOVERY_CODES} recovery codes"),
+            ));
+        }
+        for code in &self.recovery {
+            if !is_sha256_hex(code) {
+                return Err(invalid(
+                    format!("{field}.recovery"),
+                    "every recovery code is stored as 64 hexadecimal digits",
+                ));
+            }
+        }
+        if let Some(reset) = &self.reset
+            && !is_sha256_hex(&reset.hash)
+        {
+            return Err(invalid(
+                format!("{field}.reset.hash"),
+                "must be 64 hexadecimal digits",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Whether `secret` is 32 base32 characters: 20 bytes, as TOTP wants.
+fn is_base32_secret(secret: &str) -> bool {
+    secret.len() == 32
+        && secret
+            .bytes()
+            .all(|b| b.is_ascii_uppercase() || (b'2'..=b'7').contains(&b))
+}
+
+/// Whether `text` is the hexadecimal SHA-256 of something.
+fn is_sha256_hex(text: &str) -> bool {
+    text.len() == 64 && text.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+resource!(
+    /// A stored API user.
+    User, UserSpec, "user", "us", users
+);
+
 /// A stored resource of any kind, tagged with it: a row of a configuration
 /// change, as the cluster's log carries it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -688,6 +823,8 @@ pub enum Resource {
     Record(Record),
     /// A schedule.
     Schedule(Schedule),
+    /// A user with access to the API.
+    User(User),
 }
 
 /// The whole configuration, as of one moment.
@@ -708,6 +845,9 @@ pub struct ConfigSnapshot {
     /// The local DNS records, oldest first.
     #[serde(default)]
     pub records: Vec<Record>,
+    /// The users, oldest first.
+    #[serde(default)]
+    pub users: Vec<User>,
 }
 
 /// A configuration that breaks a rule.
@@ -905,6 +1045,7 @@ impl ConfigSnapshot {
             clients: Vec::new(),
             schedules: Vec::new(),
             records: Vec::new(),
+            users: Vec::new(),
         }
     }
 
@@ -935,7 +1076,8 @@ impl ConfigSnapshot {
                 .validate(&format!("schedules[{}]", schedule.id))?;
         }
         self.validate_groups()?;
-        self.validate_clients()
+        self.validate_clients()?;
+        self.validate_users()
     }
 
     fn validate_counts(&self) -> Result<(), ValidationError> {
@@ -974,6 +1116,36 @@ impl ConfigSnapshot {
                 "records",
                 format!("at most {MAX_RECORDS} records are supported"),
             ));
+        }
+        if self.users.len() > MAX_USERS {
+            return Err(invalid(
+                "users",
+                format!("at most {MAX_USERS} users are supported"),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Users: valid on their own, no name twice (ignoring case), and, once
+    /// there are any, at least one enabled admin left.
+    fn validate_users(&self) -> Result<(), ValidationError> {
+        if self.users.is_empty() {
+            return Ok(());
+        }
+        let mut names = HashSet::new();
+        let mut admins = 0_usize;
+        for user in &self.users {
+            let field = format!("users[{}]", user.id);
+            user.spec.validate(&field)?;
+            if !names.insert(user.spec.name.to_ascii_lowercase()) {
+                return Err(invalid(field, "another user has the same name"));
+            }
+            if user.spec.role == Role::Admin && !user.spec.disabled {
+                admins = admins.saturating_add(1);
+            }
+        }
+        if admins == 0 {
+            return Err(conflict("users", "at least one enabled admin is needed"));
         }
         Ok(())
     }

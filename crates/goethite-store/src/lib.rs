@@ -16,8 +16,8 @@ mod store;
 pub use model::{
     AccessSpec, BlockResponseKind, BlockedService, Client, ClientSpec, ConfigSnapshot,
     DEFAULT_GROUP, Group, GroupList, GroupSpec, List, ListSpec, ManagedBy, Record, RecordKind,
-    RecordSpec, Resource, Rule, RuleSpec, Schedule, ScheduleSpec, Settings, SettingsSpec,
-    ValidationError, Weekday, Window,
+    RecordSpec, ResetSpec, Resource, Role, Rule, RuleSpec, Schedule, ScheduleSpec, Settings,
+    SettingsSpec, TotpSpec, User, UserSpec, ValidationError, Weekday, Window,
 };
 pub use querylog::{
     LogEvent, LogUpstream, NameBuf, Protocol, QueryEntry, QueryLog, QueryLogConfig, QueryOutcome,
