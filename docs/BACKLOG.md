@@ -284,7 +284,7 @@ Phase 1's scope shipped in v0.1.0. These items came up along the way; they are c
   out-of-order pipelining and a per-connection query limit.
 - **[P1] Hosts entries with real addresses as rewrites.** `192.168.1.5 printer.lan` lines are
   skipped as unsupported; they belong with configurable local records.
-- **[P2] More filter syntax:** `$important`, `$badfilter`, `$client`, `$dnstype`, `$denyallow`
+- **[P2] More filter syntax:** `$client`, `$dnstype`, `$denyallow`
   (with client groups), and internationalized names in lists (convert to punycode).
 - **[later] Regular-expression rules.** They cannot live in the FST; they would need a separate,
   bounded matcher (e.g. a size-limited `regex-automata` DFA) run only after the FST.
@@ -433,7 +433,6 @@ Gaps the competitor review (AdGuard Home v0.107.79, Pi-hole v6.4.3, Numa v0.24.1
 no section above covers; the review's other gaps are already items here. Its filtering gaps are
 what "match AdGuard Home on everyday filtering" ([`AGENTS.md`](../AGENTS.md)) still asks for.
 
-- **[later] A custom IP as the blocked answer,** beside the null IP, NXDOMAIN and REFUSED modes.
 - **[later] Answer filtering by IP:** `|10.*`-style and hosts-style rules matching A and AAAA
   answers, in the response pass CNAME uncloaking already runs.
 - **[later] A rule tester:** which rule blocks a name, for which client, as an API endpoint and a
