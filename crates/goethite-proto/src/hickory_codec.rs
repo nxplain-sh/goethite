@@ -189,8 +189,13 @@ struct OptionError(&'static str);
 
 /// EDNS Client Subnet (RFC 7871).
 const OPTION_CLIENT_SUBNET: u16 = 8;
+
 /// DNS cookie (RFC 7873).
 const OPTION_COOKIE: u16 = 10;
+
+/// The Extended DNS Error option (RFC 8914); goethite sends the info code,
+/// never extra text.
+const OPTION_EXTENDED_ERROR: u16 = 15;
 
 /// Checks the option list in OPT record data: every option must fit, and the
 /// options with length rules goethite knows must follow them.
@@ -325,6 +330,14 @@ fn edns_from_hickory(edns: &op::Edns) -> Edns {
         udp_payload_size: edns.max_payload(),
         dnssec_ok: edns.flags().dnssec_ok,
         padding: edns.options().get(EdnsCode::Padding).is_some(),
+        extended_error: edns
+            .options()
+            .get(OPTION_EXTENDED_ERROR.into())
+            .and_then(|option| match option {
+                EdnsOption::Unknown(_, data) => data.first_chunk::<2>().copied(),
+                _ => None,
+            })
+            .map(u16::from_be_bytes),
     }
 }
 
@@ -332,6 +345,12 @@ fn edns_to_hickory(edns: Edns) -> op::Edns {
     let mut out = op::Edns::new();
     out.set_max_payload(edns.udp_payload_size)
         .set_dnssec_ok(edns.dnssec_ok);
+    if let Some(code) = edns.extended_error {
+        out.options_mut().insert(EdnsOption::Unknown(
+            OPTION_EXTENDED_ERROR,
+            code.to_be_bytes().to_vec(),
+        ));
+    }
     out
 }
 
@@ -407,6 +426,7 @@ mod tests {
                 udp_payload_size: 1232,
                 dnssec_ok: true,
                 padding: false,
+                extended_error: None,
             }),
         }
     }
@@ -616,6 +636,30 @@ mod tests {
                 .edns
                 .unwrap()
                 .padding
+        );
+    }
+
+    #[test]
+    fn extended_errors_survive_a_round_trip() {
+        let query = sample_query();
+        let mut response = Response::for_query(&query, ResponseCode::NO_ERROR);
+        response.edns = response.edns.map(|edns| Edns {
+            extended_error: Some(15),
+            ..edns
+        });
+        let mut out = Vec::new();
+        HickoryCodec
+            .encode_response(&response, 65_535, &mut out)
+            .unwrap();
+        let decoded = HickoryCodec.decode_response(&out).unwrap();
+        assert_eq!(decoded.edns.unwrap().extended_error, Some(15));
+        // A query without EDNS leaves the response nowhere to carry one.
+        let mut bare = sample_query();
+        bare.edns = None;
+        assert!(
+            Response::for_query(&bare, ResponseCode::NO_ERROR)
+                .edns
+                .is_none()
         );
     }
 

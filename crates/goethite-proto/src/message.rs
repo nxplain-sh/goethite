@@ -61,6 +61,10 @@ pub struct Edns {
     /// Padding hides a message's length from someone watching an encrypted
     /// connection; it is pointless, and never used, in plain DNS.
     pub padding: bool,
+    /// The info code of an Extended DNS Error (RFC 8914) the message
+    /// carries, without its extra text. Blocked answers use `15`
+    /// ("Blocked"); an upstream's code is relayed as it came.
+    pub extended_error: Option<u16>,
 }
 
 impl Edns {
@@ -70,6 +74,7 @@ impl Edns {
             udp_payload_size: MAX_UDP_PAYLOAD,
             dnssec_ok: false,
             padding: false,
+            extended_error: None,
         }
     }
 }
@@ -488,6 +493,7 @@ mod tests {
                 udp_payload_size: size,
                 dnssec_ok: false,
                 padding: false,
+                extended_error: None,
             })
         };
         assert_eq!(query(edns(100)).max_udp_response_len(), 512);
@@ -501,6 +507,7 @@ mod tests {
             udp_payload_size: 4096,
             dnssec_ok: true,
             padding: true,
+            extended_error: None,
         }));
         let r = Response::for_query(&q, ResponseCode::REFUSED);
         assert_eq!(r.id, 7);
@@ -513,6 +520,7 @@ mod tests {
                 udp_payload_size: MAX_UDP_PAYLOAD,
                 dnssec_ok: true,
                 padding: false,
+                extended_error: None,
             })
         );
         assert_eq!(r.rcode, ResponseCode::REFUSED);
