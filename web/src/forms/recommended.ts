@@ -39,7 +39,10 @@ function entries(group: Group): GroupList[] {
 function sameEntries(a: PlannedEntry[], b: GroupList[]): boolean {
 	return (
 		a.length === b.length &&
-		a.every((entry, at) => 'list' in entry && entry.list === b[at]?.list && entry.schedule === (b[at]?.schedule ?? null))
+		a.every(
+			(entry, at) =>
+				'list' in entry && entry.list === b[at]?.list && entry.schedule === (b[at]?.schedule ?? null),
+		)
 	)
 }
 
@@ -79,7 +82,9 @@ export function planPreset(
 	}
 	for (const item of wanted) {
 		const list = nodeList(lists, item)
-		const always = list !== undefined && kept.some((entry) => 'list' in entry && entry.list === list.id && entry.schedule === null)
+		const always =
+			list !== undefined &&
+			kept.some((entry) => 'list' in entry && entry.list === list.id && entry.schedule === null)
 		if (always) continue
 		kept.push(list === undefined ? { created: item, schedule: null } : { list: list.id, schedule: null })
 		joins.push(item.name)
@@ -155,13 +160,21 @@ export function planSwitch(
 			next.push({ list: e.list, schedule })
 		}
 		planned.push({ group, lists: next })
-		const leaves = replaced.filter((list) => current.some((e) => e.list === list.id)).map((list) => list.spec.name)
+		const leaves = replaced
+			.filter((list) => current.some((e) => e.list === list.id))
+			.map((list) => list.spec.name)
 		summary.push({ group, joins: [item.name], leaves })
 	}
 	if (planned.length === 0 && fallback !== undefined) {
 		const inFallback = existing !== undefined && entries(fallback).some((e) => e.list === existing.id)
 		if (!inFallback) {
-			planned.push({ group: fallback, lists: [...entries(fallback).map((e) => ({ list: e.list, schedule: e.schedule ?? null })), entry(null)] })
+			planned.push({
+				group: fallback,
+				lists: [
+					...entries(fallback).map((e) => ({ list: e.list, schedule: e.schedule ?? null })),
+					entry(null),
+				],
+			})
 			summary.push({ group: fallback, joins: [item.name], leaves: [] })
 		}
 	}

@@ -102,9 +102,7 @@ export function saveList(existing: Existing | undefined, spec: ListSpec) {
 }
 
 export function deleteList({ id, revision }: Existing) {
-	return call(
-		api.DELETE('/api/v1/lists/{id}', { params: { path: { id }, header: ifMatch(revision) } }),
-	)
+	return call(api.DELETE('/api/v1/lists/{id}', { params: { path: { id }, header: ifMatch(revision) } }))
 }
 
 export function refreshLists() {
@@ -123,9 +121,7 @@ export function saveRule(existing: Existing | undefined, spec: RuleSpec) {
 }
 
 export function deleteRule({ id, revision }: Existing) {
-	return call(
-		api.DELETE('/api/v1/rules/{id}', { params: { path: { id }, header: ifMatch(revision) } }),
-	)
+	return call(api.DELETE('/api/v1/rules/{id}', { params: { path: { id }, header: ifMatch(revision) } }))
 }
 
 export function saveRecord(existing: Existing | undefined, spec: RecordSpec) {
@@ -140,9 +136,7 @@ export function saveRecord(existing: Existing | undefined, spec: RecordSpec) {
 }
 
 export function deleteRecord({ id, revision }: Existing) {
-	return call(
-		api.DELETE('/api/v1/records/{id}', { params: { path: { id }, header: ifMatch(revision) } }),
-	)
+	return call(api.DELETE('/api/v1/records/{id}', { params: { path: { id }, header: ifMatch(revision) } }))
 }
 
 export function saveGroup(existing: Existing | undefined, spec: GroupSpec) {
@@ -157,9 +151,7 @@ export function saveGroup(existing: Existing | undefined, spec: GroupSpec) {
 }
 
 export function deleteGroup({ id, revision }: Existing) {
-	return call(
-		api.DELETE('/api/v1/groups/{id}', { params: { path: { id }, header: ifMatch(revision) } }),
-	)
+	return call(api.DELETE('/api/v1/groups/{id}', { params: { path: { id }, header: ifMatch(revision) } }))
 }
 
 export function saveClient(existing: Existing | undefined, spec: ClientSpec) {
@@ -174,9 +166,7 @@ export function saveClient(existing: Existing | undefined, spec: ClientSpec) {
 }
 
 export function deleteClient({ id, revision }: Existing) {
-	return call(
-		api.DELETE('/api/v1/clients/{id}', { params: { path: { id }, header: ifMatch(revision) } }),
-	)
+	return call(api.DELETE('/api/v1/clients/{id}', { params: { path: { id }, header: ifMatch(revision) } }))
 }
 
 export function saveSchedule(existing: Existing | undefined, spec: ScheduleSpec) {

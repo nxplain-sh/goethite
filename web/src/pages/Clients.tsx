@@ -4,13 +4,7 @@ import { useState } from 'react'
 
 import type { Client, Status } from '../api/client'
 import { statusQuery } from '../api/queries'
-import {
-	allClientsQuery,
-	clientQuery,
-	deleteClient,
-	groupsQuery,
-	saveClient,
-} from '../api/resources'
+import { allClientsQuery, clientQuery, deleteClient, groupsQuery, saveClient } from '../api/resources'
 import { Editor, Loading, ManagedBadge } from '../components/editor'
 import { SelectField, TextAreaField, TextField } from '../components/form'
 import { ErrorNotice } from '../components/ui'
@@ -115,7 +109,11 @@ export function ClientEditor({ id }: { id: string }) {
 		return <Loading error={query.error} what="client" />
 	}
 	return (
-		<ClientFields key={query.data?.revision ?? 'new'} stored={query.data} reload={() => void query.refetch()} />
+		<ClientFields
+			key={query.data?.revision ?? 'new'}
+			stored={query.data}
+			reload={() => void query.refetch()}
+		/>
 	)
 }
 
@@ -167,7 +165,9 @@ function ClientFields({ stored, reload }: { stored: Client | undefined; reload: 
 						: `Names the device over DNS over TLS, HTTPS or QUIC, on any network: one per line, ${count(ids.length)} of up to 16.`
 				}
 			/>
-			{ids.length > 0 && invalidIds.length === 0 ? <ClientIdUse id={ids[0] ?? ''} encrypted={encrypted} /> : null}
+			{ids.length > 0 && invalidIds.length === 0 ? (
+				<ClientIdUse id={ids[0] ?? ''} encrypted={encrypted} />
+			) : null}
 			<SelectField
 				label="Group"
 				value={form.group}
@@ -236,16 +236,16 @@ function ClientIdUse({ id, encrypted }: { id: string; encrypted: Status['encrypt
 			</dl>
 			{https === undefined || encrypted.odoh !== true ? null : (
 				<p className="hint">
-					Through an Oblivious DoH proxy, goethite sees the proxy's address, not the device's: with
-					the ID in the target path it still knows the device, without it the device is anonymous
-					and filtered as the proxy is.
+					Through an Oblivious DoH proxy, goethite sees the proxy's address, not the device's: with the ID in
+					the target path it still knows the device, without it the device is anonymous and filtered as the
+					proxy is.
 				</p>
 			)}
 			{encrypted.server_name == null ? (
 				<p className="hint">
 					With <span className="mono">server_name</span> set in <span className="mono">[server.tls]</span>,
-					DNS over TLS and QUIC can carry the ID too, as{' '}
-					<span className="mono">{`${id}.<server name>`}</span>.
+					DNS over TLS and QUIC can carry the ID too, as <span className="mono">{`${id}.<server name>`}</span>
+					.
 				</p>
 			) : null}
 		</div>

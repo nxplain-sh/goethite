@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 
 import type { Group, List, Preset, RecommendedList } from '../api/client'
 import { baseListsInUse, excludedInUse, planPreset, planSwitch } from './recommended'
@@ -50,7 +50,13 @@ function group(id: string, lists: { list: string; schedule?: string | null }[]):
 const url = (id: string) => `https://lists.example/${id}.txt`
 
 describe('presets', () => {
-	const strict: Preset = { id: 'strict', name: 'Strict', description: '', lists: ['oisd', 'tif', 'fake'], default: false }
+	const strict: Preset = {
+		id: 'strict',
+		name: 'Strict',
+		description: '',
+		lists: ['oisd', 'tif', 'fake'],
+		default: false,
+	}
 
 	it('swaps recommended lists, keeps the rest, turns off what no group uses', () => {
 		const lists = [
@@ -59,7 +65,11 @@ describe('presets', () => {
 			list('li_fake', url('fake'), false),
 			list('li_own', 'https://mine.example/list.txt'),
 		]
-		const kids = group('gr_kids', [{ list: 'li_normal' }, { list: 'li_mini' }, { list: 'li_own', schedule: 'sc_1' }])
+		const kids = group('gr_kids', [
+			{ list: 'li_normal' },
+			{ list: 'li_mini' },
+			{ list: 'li_own', schedule: 'sc_1' },
+		])
 		const other = group('default', [{ list: 'li_mini' }])
 		const plan = planPreset(catalog, strict, lists, kids, [kids, other])
 		expect(plan.create.map((i) => i.id)).toEqual(['oisd', 'tif'])

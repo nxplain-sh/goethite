@@ -31,7 +31,10 @@ export function Dashboard({ range: rangeId }: { range: RangeId | undefined }) {
 	const totals = stats.data?.totals
 	const from = stats.data?.from
 	// The query log over the same range, narrowed by `filter`.
-	const log = (filter: LogSearch): LogSearch => ({ ...(from === undefined ? {} : { since: from }), ...filter })
+	const log = (filter: LogSearch): LogSearch => ({
+		...(from === undefined ? {} : { since: from }),
+		...filter,
+	})
 	const cluster = (stats.data?.nodes?.length ?? 0) > 1 ? ', cluster' : ''
 	// Kept between renders: the chart redraws when its data changes.
 	const report = stats.data
@@ -157,7 +160,15 @@ function host(name: string): string {
 const QueriesChart = lazy(() => import('../components/QueriesChart'))
 
 /** The chart, with a summary for screen readers and a hint for everyone. */
-function TimeChart({ data, range, onOpen }: { data: Bucket[]; range: string; onOpen: (bucket: Bucket) => void }) {
+function TimeChart({
+	data,
+	range,
+	onOpen,
+}: {
+	data: Bucket[]
+	range: string
+	onOpen: (bucket: Bucket) => void
+}) {
 	const busiest = data.reduce<Bucket | undefined>(
 		(best, bucket) => (best === undefined || bucket.queries > best.queries ? bucket : best),
 		undefined,
@@ -446,9 +457,7 @@ function ClusterPanel({ cluster }: { cluster: ClusterStatus }) {
 					</tr>
 					<tr>
 						<td>Leader</td>
-						<td className="name">
-							{cluster.leader ?? <span className="badge blocked">NONE</span>}
-						</td>
+						<td className="name">{cluster.leader ?? <span className="badge blocked">NONE</span>}</td>
 					</tr>
 					<tr>
 						<td>Changes</td>

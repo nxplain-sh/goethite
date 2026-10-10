@@ -90,7 +90,7 @@ cd web && npm ci --ignore-scripts && npm run build
 | `crates/goethite-migrate`   | Plans a migration from Pi-hole or AdGuard Home (`goethite migrate`)     |
 | `crates/goethite`           | The binary: CLI, wiring, signal handling                                |
 | `xtask/`                    | Repository automation: `cargo xtask ci` runs the checks CI runs         |
-| `web/`                      | Web UI (Vite, React, TanStack), embedded into the binary                |
+| `web/`                      | Web UI (Vite+, React, TanStack Router), embedded into the binary        |
 | `site/`                     | Project website and docs (Astro Starlight), deployed to GitHub Pages    |
 | `fuzz/`                     | cargo-fuzz targets                                                      |
 | `tests/chaos/`              | Chaos tests: two nodes, a witness and a client in network namespaces    |

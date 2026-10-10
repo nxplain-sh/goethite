@@ -8,8 +8,12 @@ trim_trailing_whitespace = true
 indent_style = space
 indent_size = 4
 
-[*.{yml,yaml,json,md,mdx,mjs,ts,tsx,css,astro}]
+[*.{yml,yaml,json,md,mjs,ts,tsx,css}]
 indent_size = 2
+
+# The web UI's and the site's code is indented with tabs (Oxfmt, `vp fmt`).
+[{web,site}/**.{ts,tsx,mjs,css}]
+indent_style = tab
 
 [*.md]
 trim_trailing_whitespace = false

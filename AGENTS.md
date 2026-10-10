@@ -40,7 +40,7 @@ crates/
   goethite-migrate/   reads Pi-hole / AdGuard Home API answers and plans the same in goethite
   goethite/           the binary: CLI (clap), wiring, systemd integration
 xtask/                repository automation: `cargo xtask ci` runs what CI runs
-web/                  Vite + React + TanStack Router SPA (embedded into the binary)
+web/                  React + TanStack Router SPA built with Vite+ (embedded into the binary)
 site/                 project website + docs (Astro Starlight), deployed to GitHub Pages
 fuzz/                 cargo-fuzz targets (own nightly workspace)
 bench/                dnsperf script + recorded results; criterion benches live in crates/*/benches/
@@ -57,7 +57,7 @@ The layout follows the [standard Rust project layout](https://github.com/miguelm
 
 - Rust stable, edition 2024, MSRV pinned in `rust-toolchain.toml` and `Cargo.toml`
 - tokio (multi-thread), hickory-proto, axum, utoipa, rustls, arc-swap, fst, redb, serde + toml, tracing, clap, ratatui, thiserror (libraries) / anyhow (binary only)
-- Web: Vite, React, TypeScript (strict), TanStack Router (SPA, NOT TanStack Start), TanStack Query, TanStack Table + Virtual; typed API client generated from the OpenAPI spec; served from the binary via rust-embed with an SPA fallback route
+- Web: Vite+ (`vp`: Vite, Vitest, Oxlint, Oxfmt), React, TypeScript (strict), TanStack Router (SPA, NOT TanStack Start: the strict CSP forbids its inline scripts), TanStack Query, TanStack Table + Virtual; typed API client generated from the OpenAPI spec; served from the binary via rust-embed with an SPA fallback route
 
 ## Security rules (non-negotiable)
 

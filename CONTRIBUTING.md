@@ -233,13 +233,15 @@ The full list is in [`AGENTS.md`](AGENTS.md). The short version:
 
 ## Web UI
 
-The web UI lives in `web/` (Vite, React, TypeScript strict, TanStack Router/Query/Table/Virtual);
-see [`web/README.md`](web/README.md). `npm run build` type-checks, builds to `web/dist` and checks
-the size budget. Release builds of goethite embed `web/dist`; debug builds read it from disk.
+The web UI lives in `web/` (React, TypeScript strict, TanStack Router/Query/Table/Virtual), built
+with [Vite+](https://viteplus.dev) (`vp`); see [`web/README.md`](web/README.md). `npm run build`
+builds to `web/dist` and checks the size budget. Release builds of goethite embed `web/dist`; debug
+builds read it from disk.
 
 ```sh
 cd web
 npm ci --ignore-scripts
+npm run check      # vp check: Oxfmt, Oxlint and the type-check; `npm run fmt` fixes the format
 npm run build      # or `npm run dev` against a node on 127.0.0.1:8053
 npm test           # Vitest: the forms' logic
 npx playwright install chromium

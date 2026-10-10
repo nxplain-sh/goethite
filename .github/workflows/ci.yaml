@@ -241,7 +241,10 @@ jobs:
             echo "::error::web/src/api/schema.d.ts is out of date: run 'npm run api' in web/ and commit it"
             exit 1
           fi
-      - name: Type-check, build and check the size budget
+      - name: Format, lint and type-check (vp check)
+        working-directory: web
+        run: npm run check
+      - name: Build and check the size budget
         working-directory: web
         run: npm run build
       - name: Unit tests

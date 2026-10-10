@@ -7,13 +7,7 @@ import { deleteRecord, recordQuery, recordsQuery, saveRecord } from '../api/reso
 import { DeleteButton, Editor, Loading, ManagedBadge } from '../components/editor'
 import { CheckField, SelectField, TextField } from '../components/form'
 import { ErrorNotice } from '../components/ui'
-import {
-	isRecordTtl,
-	recordForm,
-	type RecordForm,
-	recordSpec,
-	recordValueHint,
-} from '../forms/forms'
+import { isRecordTtl, recordForm, type RecordForm, recordSpec, recordValueHint } from '../forms/forms'
 import { count } from '../format'
 
 const KINDS: readonly { value: RecordKind; label: string }[] = [
@@ -38,8 +32,8 @@ export function Records() {
 		<div className="grid-page">
 			<h1>Local records</h1>
 			<p className="muted">
-				Names goethite answers itself, for every client and before any filter: devices on your network,
-				such as <span className="mono">nas.lan</span>, or every name below one, such as{' '}
+				Names goethite answers itself, for every client and before any filter: devices on your network, such
+				as <span className="mono">nas.lan</span>, or every name below one, such as{' '}
 				<span className="mono">*.home.example</span>. A name with records answers only from them.
 			</p>
 			<AddRecord />

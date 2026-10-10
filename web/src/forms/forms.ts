@@ -370,7 +370,5 @@ export function describeDays(days: readonly Weekday[]): string {
 
 /** Windows for people: "Mon–Fri 08:00–15:00; Sat 10:00–12:00". */
 export function describeWindows(windows: readonly Window[]): string {
-	return windows
-		.map((window) => `${describeDays(window.days)} ${window.start}–${window.end}`)
-		.join('; ')
+	return windows.map((window) => `${describeDays(window.days)} ${window.start}–${window.end}`).join('; ')
 }

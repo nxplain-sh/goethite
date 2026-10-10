@@ -28,8 +28,7 @@ const queryClient = new QueryClient({
 	mutationCache: new MutationCache({ onError }),
 	defaultOptions: {
 		queries: {
-			retry: (failures, error) =>
-				!(error instanceof ApiError && error.status < 500) && failures < 2,
+			retry: (failures, error) => !(error instanceof ApiError && error.status < 500) && failures < 2,
 			staleTime: 1_000,
 		},
 	},

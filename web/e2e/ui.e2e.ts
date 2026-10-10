@@ -159,9 +159,7 @@ test('puts a client in a group that uses a list during a schedule', async ({ pag
 	await page.getByLabel('From').fill('08:00')
 	await page.getByLabel('Until').fill('15:00')
 	await page.getByRole('button', { name: 'Create' }).click()
-	await expect(page.getByRole('row').filter({ hasText: 'E2E school' })).toContainText(
-		'Mon–Fri 08:00–15:00',
-	)
+	await expect(page.getByRole('row').filter({ hasText: 'E2E school' })).toContainText('Mon–Fri 08:00–15:00')
 
 	await page.getByRole('link', { name: 'Groups', exact: true }).click()
 	await page.getByRole('link', { name: 'New group' }).click()
@@ -263,9 +261,7 @@ test('serves the API reference under the strict policy', async ({ page }) => {
 	await page.getByRole('link', { name: 'lists', exact: true }).click()
 	await expect(page.getByRole('heading', { name: 'Creates a filter list.' })).toBeVisible()
 	await page.getByRole('button', { name: /Open Search/ }).click()
-	await expect(
-		page.getByRole('dialog').getByRole('option', { name: /Creates a filter list/ }),
-	).toBeVisible()
+	await expect(page.getByRole('dialog').getByRole('option', { name: /Creates a filter list/ })).toBeVisible()
 	expect(problems.filter((problem) => /Content Security Policy|Refused/i.test(problem))).toEqual([])
 	expect(problems).toEqual([])
 })
@@ -472,7 +468,9 @@ async function defaultGroupLists(request: APIRequestContext): Promise<Map<string
 	const group = await apiCall(request, 'GET', '/api/v1/groups/default')
 	const used = new Set(group.spec.lists.map((entry: { list: string }) => entry.list))
 	return new Map(
-		lists.filter((list) => used.has(list.id)).map((list) => [list.spec.url ?? '', list.spec.enabled !== false]),
+		lists
+			.filter((list) => used.has(list.id))
+			.map((list) => [list.spec.url ?? '', list.spec.enabled !== false]),
 	)
 }
 
@@ -481,13 +479,24 @@ const HAGEZI = 'https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adb
 test('recommended lists by category: add, overlap, legacy', async ({ page, request }) => {
 	await page.getByRole('link', { name: 'Lists', exact: true }).click()
 	const recommended = page.getByRole('region', { name: 'Recommended lists' })
-	for (const heading of ['Presets', 'Base list', 'Security', 'Optional', 'Bypass prevention', 'Device trackers', 'Family', 'Hardening']) {
+	for (const heading of [
+		'Presets',
+		'Base list',
+		'Security',
+		'Optional',
+		'Bypass prevention',
+		'Device trackers',
+		'Family',
+		'Hardening',
+	]) {
 		await expect(recommended.getByRole('heading', { name: heading, exact: true })).toBeVisible()
 	}
 	const normal = recommended.getByRole('row').filter({ hasText: 'HaGeZi Multi Normal' })
 	await expect(normal).toContainText('★ RECOMMENDED')
 	await expect(normal).toContainText('DEFAULT')
-	await expect(recommended.getByRole('row').filter({ hasText: 'HaGeZi Multi Ultimate' })).toContainText('STRICT')
+	await expect(recommended.getByRole('row').filter({ hasText: 'HaGeZi Multi Ultimate' })).toContainText(
+		'STRICT',
+	)
 
 	// Legacy lists are tucked away.
 	await expect(recommended.getByRole('row').filter({ hasText: 'AdAway' })).toBeHidden()
@@ -521,10 +530,17 @@ test('presets: preview, apply, swap; switching instead of stacking', async ({ pa
 	await preview.getByRole('button', { name: 'Use Balanced' }).click()
 	await expect(preview).toBeHidden()
 	let used = await defaultGroupLists(request)
-	expect([...used.keys()].sort()).toEqual([`${HAGEZI}fake.txt`, `${HAGEZI}multi.txt`, `${HAGEZI}tif.mini.txt`])
+	expect([...used.keys()].sort()).toEqual([
+		`${HAGEZI}fake.txt`,
+		`${HAGEZI}multi.txt`,
+		`${HAGEZI}tif.mini.txt`,
+	])
 
 	// Another preset: what it does not have leaves, and is turned off.
-	await recommended.getByRole('article', { name: "Preset Don't break anything" }).getByRole('button', { name: 'Use for a group' }).click()
+	await recommended
+		.getByRole('article', { name: "Preset Don't break anything" })
+		.getByRole('button', { name: 'Use for a group' })
+		.click()
 	const minimal = recommended.getByRole('group', { name: "Use Don't break anything" })
 	await expect(minimal).toContainText('no longer uses HaGeZi Multi Normal, HaGeZi Fake')
 	await expect(minimal).toContainText('Turned off, no group uses them: HaGeZi Multi Normal, HaGeZi Fake')
@@ -534,7 +550,10 @@ test('presets: preview, apply, swap; switching instead of stacking', async ({ pa
 	expect([...used.keys()].sort()).toEqual([`${HAGEZI}light.txt`, `${HAGEZI}tif.mini.txt`])
 
 	// TIF replaces TIF Mini: switch, never stack.
-	const tif = recommended.getByRole('row').filter({ hasText: 'HaGeZi Threat Intelligence Feeds' }).filter({ hasText: 'MAX SECURITY' })
+	const tif = recommended
+		.getByRole('row')
+		.filter({ hasText: 'HaGeZi Threat Intelligence Feeds' })
+		.filter({ hasText: 'MAX SECURITY' })
 	await tif.getByRole('button', { name: /^Switch from HaGeZi Threat Intelligence Feeds Mini/ }).click()
 	const swap = recommended.getByRole('group', { name: 'Switch to HaGeZi Threat Intelligence Feeds' })
 	await expect(swap).toContainText('Turned off, no group uses them: HaGeZi Threat Intelligence Feeds Mini')
@@ -542,7 +561,11 @@ test('presets: preview, apply, swap; switching instead of stacking', async ({ pa
 	await expect(swap).toBeHidden()
 	used = await defaultGroupLists(request)
 	expect([...used.keys()].sort()).toEqual([`${HAGEZI}light.txt`, `${HAGEZI}tif.txt`])
-	const lists: { spec: { url?: string; enabled?: boolean } }[] = await apiCall(request, 'GET', '/api/v1/lists')
+	const lists: { spec: { url?: string; enabled?: boolean } }[] = await apiCall(
+		request,
+		'GET',
+		'/api/v1/lists',
+	)
 	expect(lists.find((list) => list.spec.url === `${HAGEZI}tif.mini.txt`)?.spec.enabled).toBe(false)
 	await removeAllLists(request)
 })
@@ -559,8 +582,21 @@ test('finds a list in the FilterLists directory, and adds it after checking', as
 			json: {
 				fetched_at: '2026-10-08T12:00:00Z',
 				lists: [
-					{ id: 77, name: 'E2E Trackers', description: 'Tracking domains.', tags: ['privacy'], syntaxes: ['Domains'], license: 'MIT' },
-					{ id: 78, name: 'E2E Ads', description: 'Ad servers.', tags: ['ads'], syntaxes: ['Hosts (localhost IPv4)'] },
+					{
+						id: 77,
+						name: 'E2E Trackers',
+						description: 'Tracking domains.',
+						tags: ['privacy'],
+						syntaxes: ['Domains'],
+						license: 'MIT',
+					},
+					{
+						id: 78,
+						name: 'E2E Ads',
+						description: 'Ad servers.',
+						tags: ['ads'],
+						syntaxes: ['Hosts (localhost IPv4)'],
+					},
 					{ id: 79, name: 'E2E Two parts', description: 'Big.', tags: ['ads'], syntaxes: ['Domains'] },
 				],
 			},
@@ -615,7 +651,7 @@ test('the leak test sees which lookups reach goethite', async ({ page }) => {
 	// the device's resolver: it sends the lookups it chooses to goethite, then
 	// fails the image as an unknown name would.
 	const leakNames = /^https?:\/\/[^/]+\.leak\.goethite\.test\//
-	let reaching = (_: number) => true
+	let reaching: (probe: number) => boolean = () => true
 	let seen = 0
 	await page.route(leakNames, async (route) => {
 		const host = new URL(route.request().url()).hostname
@@ -674,14 +710,18 @@ test('every page links to the docs and the API reference', async ({ page }) => {
 	// Under the sign-in form. Signed out, the node's status is unknown: the
 	// site's reference.
 	await expect(
-		page.getByRole('navigation', { name: 'Documentation' }).getByRole('link', { name: 'API docs', exact: true }),
+		page
+			.getByRole('navigation', { name: 'Documentation' })
+			.getByRole('link', { name: 'API docs', exact: true }),
 	).toHaveAttribute('href', 'https://nxplain-sh.github.io/goethite/api-reference/')
 })
 
 test('a node outside a cluster has no cluster page', async ({ page }) => {
 	// Once the node's status is in, the pages it has are known.
 	await expect(page.getByRole('banner').getByText('FILTERING ON')).toBeVisible()
-	await expect(page.getByRole('navigation', { name: 'Pages' }).getByRole('link', { name: 'Cluster' })).toHaveCount(0)
+	await expect(
+		page.getByRole('navigation', { name: 'Pages' }).getByRole('link', { name: 'Cluster' }),
+	).toHaveCount(0)
 	await page.goto('/cluster')
 	await expect(page.getByText('This node is not in a cluster')).toBeVisible()
 })
@@ -718,13 +758,15 @@ test('the cluster page: a member waiting for its cluster starts one', async ({ p
 	await expect(self).toContainText('LEADER')
 	await expect(self).toContainText('VOTER')
 	await expect(recovery).toContainText('Nothing to recover: dns2 leads')
-	await expect(page.getByRole('navigation', { name: 'Pages' }).getByRole('link', { name: 'Cluster' })).toHaveAttribute(
-		'aria-current',
-		'page',
-	)
+	await expect(
+		page.getByRole('navigation', { name: 'Pages' }).getByRole('link', { name: 'Cluster' }),
+	).toHaveAttribute('aria-current', 'page')
 	// The header says what this node does, and leads here.
 	await page.goto(`http://127.0.0.1:${MEMBER_API_PORT}/`)
-	await page.getByRole('banner').getByRole('link', { name: /dns2 · LEADER/ }).click()
+	await page
+		.getByRole('banner')
+		.getByRole('link', { name: /dns2 · LEADER/ })
+		.click()
 	await expect(page).toHaveURL(/\/cluster$/)
 	// The dashboard's panel says the same, and leads here too.
 	await page.goto(`http://127.0.0.1:${MEMBER_API_PORT}/`)

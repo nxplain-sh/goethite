@@ -2,14 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { useState } from 'react'
 
-import {
-	api,
-	call,
-	type Group,
-	ifMatch,
-	type List,
-	type ListStatus,
-} from '../api/client'
+import { api, call, type Group, ifMatch, type List, type ListStatus } from '../api/client'
 import { listsQuery, statusQuery } from '../api/queries'
 import {
 	deleteList,
@@ -181,10 +174,7 @@ function ListFields({
 			: async () => {
 					// The groups as they are now: the ones shown can be older than a
 					// change, such as this list joining the default group.
-					const current = usersOf(
-						await queryClient.fetchQuery({ ...groupsQuery, staleTime: 0 }),
-						stored.id,
-					)
+					const current = usersOf(await queryClient.fetchQuery({ ...groupsQuery, staleTime: 0 }), stored.id)
 					for (const group of current) {
 						await withoutList(group, stored.id)
 					}
@@ -287,9 +277,7 @@ async function withoutList(group: Group, list: string) {
 
 /** Adds a new list to the default group, so it filters at once. */
 async function addToDefaultGroup(list: string) {
-	const group = await call(
-		api.GET('/api/v1/groups/{id}', { params: { path: { id: DEFAULT_GROUP } } }),
-	)
+	const group = await call(api.GET('/api/v1/groups/{id}', { params: { path: { id: DEFAULT_GROUP } } }))
 	await call(
 		api.PUT('/api/v1/groups/{id}', {
 			params: { path: { id: DEFAULT_GROUP }, header: ifMatch(group.revision) },
