@@ -16,67 +16,6 @@ severe come first.
 
 ### Filtering and resolution
 
-- **[high] Cosmetic rules block their own site.** `parse_line` in
-  `crates/goethite-filter/src/rule.rs` reads `example.com##.banner` as a domain line: `is_adblock`
-  sees no `|`, `^` or `$`, and splitting off the `#` comment leaves `example.com`, an exact block.
-  EasyList, AdGuard Base or uBlock lists (or an AdGuard Home migration that has them) then block
-  every site they hide elements on, and download validation counts these lines as rules. Skip
-  `##`, `#@#`, `#?#`, `#$#`, `#%#`, `$$` and `$@$` lines as unsupported; treat `#` as a comment only
-  at the start of a line or after whitespace, and strip it before `is_adblock` (so
-  `0.0.0.0 ads.example # $` is not dropped as a modifier); add these lines to the `parse-list` fuzz
-  seeds.
-- **[high] The cache is bounded by entries, not bytes.** `crates/goethite-resolver/src/cache.rs`
-  caps the entries and 32 records per entry, but a record over TCP, DoT or DoH can be close to
-  64 KiB, and hickory gives each TXT string its own allocation. Queries for names under an
-  attacker's wildcard zone can make the default 10,000 entries hold hundreds of MB to GB, and every
-  hit clones the entry. Keep a byte budget per shard, counted in wire length, and refuse large
-  entries.
-- **[high] Recursion queries loopback and itself.** `ask_with_response` in
-  `crates/goethite-resolver/src/recurse.rs` refuses no destination: glue or looked-up addresses
-  that are loopback, unspecified, multicast or the node's own are queried, and loopback clients are
-  admitted and exempt from rate limiting. Glue of `127.0.0.1` makes each query start a new
-  resolution with a fresh budget, which fills the 1,024 in-flight permits. Refuse these
-  destinations, as Unbound's `do-not-query-localhost` does.
-- **[high] DS against DNSKEY hashing is unbounded (KeyTrap class).** `keys_from_ds` in
-  `recurse/dnssec.rs` hashes every usable DNSKEY against every usable DS: hickory's `DS::covers`
-  computes the digest without comparing key tag or algorithm first, neither set is capped, and
-  `take(MAX_KEYS_PER_TAG)` comes after the filter. A signed zone with thousands of DS and DNSKEY
-  records costs millions of SHA-256 runs on a tokio worker. Match tag and algorithm first, cap the
-  records considered, charge digests to `Checks`, and compute each key tag once (`verify_rrset`
-  recomputes it for every signature).
-- **[high] Recursion's TCP fallback can hold every permit.** After TC, `query_unspanned` waits
-  over TCP for the rest of the query's budget (about 6 s) while holding one of 1,024 global
-  permits, with no limit per server, zone or client. A server that answers UDP with TC and never
-  answers over TCP lets one client at 200 queries a second stall recursion for everyone. Add
-  per-server and per-zone fetch limits (BIND's `fetches-per-server`, `fetches-per-zone`) and a TCP
-  timeout from the server's RTT.
-- **[medium] Infrastructure entries have no size bound.** The recursion's tables cap their entry
-  count, but `Trust::Secure` keeps every usable key (not only the anchored ones) and name server
-  entries keep every A and AAAA record they get. Thousands of junk keys per zone across 20,000
-  trust entries reach GB. Keep the anchored keys plus a few, and 8 to 16 addresses per name server.
-- **[medium] Grouping records into RRsets is quadratic.** `rrsets` in `recurse/dnssec.rs`
-  compares names pairwise, and `answer` in `classify.rs` keeps every type for ANY: about 5,000
-  types over TCP cost millions of compares, twice for DO clients, and the answer is too large to
-  cache, so it repeats. Group with a map or a sort, cap the records kept per response, and answer
-  ANY minimally (RFC 8482).
-- **[medium] CNAME uncloaking stops after 16 targets and skips blocked services.**
-  `answer_remote` in `crates/goethite-resolver/src/lib.rs` checks `take(MAX_CNAME_CHAIN)` targets,
-  so a chain of 17 to a blocked tracker passes, every time, since it is too long to cache.
-  Recursion applies its 16-CNAME limit per segment, so chains can be longer still. Blocked services
-  are never checked against CNAME targets. Walk the whole chain from the question name, block or
-  SERVFAIL past the limit, enforce one total limit in `chase`, and check services in the same
-  loop.
-- **[medium] NSEC wildcard proofs skip the closest encloser.** `nsec_wildcard` in
-  `recurse/dnssec.rs` only checks that an NSEC covers the name; RFC 4035 5.3.4 also needs the
-  wildcard's parent to be the closest encloser. An on-path attacker can answer `a.b.example`, where
-  `b.example` exists, with the signed `*.example` data and the NSEC owned by `b.example`, and
-  goethite returns it as secure with AD. Require the next closer name to be covered, as the NSEC3
-  path does. Related: `nsec_nxdomain` accepts an NSEC whose next name is below the name (an empty
-  non-terminal), so a NODATA answer flipped to NXDOMAIN validates.
-- **[medium] NXDOMAIN with a CNAME is bogus.** `classify.rs` returns on an NXDOMAIN rcode before
-  it reads the CNAME chain (RFC 6604), then checks the denial for the name asked, which exists: a
-  `www` CNAME to a missing name in the same signed zone becomes SERVFAIL. Follow the chain first
-  and check the denial for its last name.
 - **[medium] The NSEC3 hash budget is per set, not per query.** `MAX_HASHES` (64) applies to each
   `Nsec3Set`, and `ds_denial` and `nsec3_nodata` build new ones at every step of the trust walk, so
   unsigned names deep under a zone with 150 iterations cost thousands of hashes per query
@@ -137,16 +76,6 @@ severe come first.
 
 ### DNS listeners
 
-- **[high] The DoH idle loop spins.** In `crates/goethite-server/src/https.rs`, once `quiet_until`
-  has passed while a request is still open, `sleep_until` returns at once and `is_idle` is false,
-  so the loop repeats until the request ends. A client that waits 29 s and then trickles a POST
-  body pins a core for 30 s per connection. While a request is open, sleep a full idle period, or
-  wake on a `Notify` from `Busy::drop`.
-- **[high] DoH and DoQ bodies are buffered per frame.** `Limited` plus `collect` (DoH) and
-  `read_to_end` (DoQ) keep one buffer per HTTP/2 DATA or QUIC STREAM frame, and quinn returns flow
-  control credit as it reads. One-byte frames on 64 streams can hold over 100 MB per connection for
-  the 30 s body timeout. Copy frames into one buffer of at most 64 KiB, and lower hyper's 1 MiB
-  HTTP/2 windows.
 - **[medium] One client can take every UDP slot.** `serve_udp` takes one of 2,048 in-flight slots
   before decoding and the cache, with no cap per client (TCP has one). Queries for a slow zone hold
   a slot for 4 to 6 s, so a client within its rate limit, or an exempt network, fills them, and
@@ -168,24 +97,6 @@ severe come first.
 
 ### Control plane, API and store
 
-- **[high] A control-plane error stops DNS from starting.** `crates/goethite/src/main.rs` awaits
-  `ControlPlane::start(...)?` before spawning the DNS server. A node certificate that is not valid
-  yet (a board without a hardware clock, booting before NTP, which then cannot resolve its servers),
-  a Raft entry that fails to decode, or a query log that fails to open exits before any query is
-  answered, and systemd restarts into the same error. Start the DNS server first, or handle the
-  failure as `Upgrade::restart` does: log it and answer without the control plane. Warn about
-  certificate dates instead of refusing to start.
-- **[high] Unauthenticated connections can hold every API slot.** In
-  `crates/goethite-api/src/serve.rs`, hyper-util waits for a connection's first bytes (to tell
-  HTTP/1 from HTTP/2) with no timeout, HTTP/2 has no keep-alive or idle limit, and there is no cap
-  per client: 64 silent connections keep the API and web UI down. The cluster listener has the same
-  gap (32 slots, taken before a TLS handshake that may last 10 s), where it stops Raft. Put a
-  deadline on each connection until its first request, set HTTP/2 keep-alive and idle limits, cap
-  connections per peer, and drop non-members on the cluster port before TLS.
-- **[high] A list added on a single node waits for the next refresh.** `Node::apply` in
-  `crates/goethite/src/node.rs` rebuilds the filter but never calls `refresh_lists` (the cluster
-  path does), and neither the web UI nor `goethite migrate --apply` asks for a refresh. A new list
-  filters nothing for up to `list_update_hours`, 24 by default. Refresh when the lists change.
 - **[medium] The documented dual-stack API address stops startup on Linux.** The API, cluster and
   witness listeners bind without `IPV6_V6ONLY` (`bind_tcp` in `sockets.rs`, `ApiListeners::bind`),
   so `listen = ["0.0.0.0:8053", "[::]:8053"]` from the API docs fails with "address in use" and the
@@ -212,7 +123,7 @@ severe come first.
   the lists once at the end, and reconcile existing groups.
 - **[medium] The OpenTelemetry latency histogram takes a lock per query.** `BoundHistogram::record`
   locks a `std::sync::Mutex` in `opentelemetry_sdk` 0.33: one lock shared by all DNS workers, two
-  with an OTLP reader. ADR 0034 says one atomic update and no lock, and
+  with an OTLP reader. ADR 0040 says one atomic update and no lock, and
   `benches/query-metrics.rs` runs on one thread with one reader. Keep latency buckets in relaxed
   atomics behind an observable instrument, or bench with several threads and both readers first.
 - **[medium] The audit log is capped by count, not size.** Every entry stores the whole before and
@@ -339,8 +250,6 @@ severe come first.
   (crossterm, ratatui, a second hashbrown, derive_more 2, darling, strum); a default-on `tui`
   feature that the package and image builds turn off would drop them. The other duplicate crates
   (rand 0.8 and 0.9, thiserror 1, derive_more 1) come from openraft 0.9 and the OpenTelemetry SDK.
-- **[low] Two ADRs are numbered 0034:** `0034-drop-the-terraform-provider.md` and
-  `0034-opentelemetry.md`.
 
 ### Hot path
 
@@ -578,13 +487,12 @@ what "match AdGuard Home on everyday filtering" ([`AGENTS.md`](../AGENTS.md)) st
 - **[later] Leaving chosen names or clients out of the query log** (AdGuard Home's ignored-host
   list and per-client flag).
 - **[later] Flushing the cache from the API,** and from the web UI.
-- **[later] Several admin users and TOTP,** beside the scoped API tokens of Phase 2.
 - **[later] DHCP: a scope decision for 1.0** (AdGuard Home and Pi-hole both ship a server;
   goethite does not).
 - **[later] Home Assistant: keep the integration outside the project,** as AdGuard Home and
   Pi-hole do; a community integration would use the REST API.
 
-## OpenTelemetry (ADR 0034)
+## OpenTelemetry (ADR 0040)
 
 - **[later] Trace context across processes:** W3C `traceparent` on the cluster's connections, so
   a change forwarded to the leader is one trace across both members, and from API clients (the
