@@ -1,9 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, Outlet, useNavigate } from '@tanstack/react-router'
 
-import { clearToken, currentToken } from '../auth'
+import { signOut } from '../auth'
 import { api, call } from '../api/client'
-import { statusQuery } from '../api/queries'
+import { sessionQuery, statusQuery } from '../api/queries'
 import { DocsLinks } from './DocsLinks'
 import { ClusterBadges, ErrorNotice, ProtectionBadge } from './ui'
 
@@ -13,6 +13,7 @@ const PAUSE_SECONDS = 600
 /** The frame around every signed-in page. */
 export function Shell() {
 	const status = useQuery(statusQuery)
+	const session = useQuery(sessionQuery)
 	const queryClient = useQueryClient()
 	const navigate = useNavigate()
 	const refresh = () => queryClient.invalidateQueries({ queryKey: ['status'] })
@@ -60,19 +61,18 @@ export function Shell() {
 					Settings
 				</Link>
 				<DocsLinks />
-				{currentToken() === null ? null : (
-					<button
-						type="button"
-						className="button small"
-						onClick={() => {
-							clearToken()
+				<button
+					type="button"
+					className="button small"
+					onClick={() => {
+						void signOut().then(() => {
 							queryClient.clear()
 							void navigate({ to: '/login' })
-						}}
-					>
-						Sign out
-					</button>
-				)}
+						})
+					}}
+				>
+					Sign out
+				</button>
 			</header>
 			<nav className="nav" aria-label="Pages">
 				<Link to="/" activeOptions={{ exact: true, includeSearch: false }}>
@@ -89,6 +89,8 @@ export function Shell() {
 				<Link to="/clients">Clients</Link>
 				<Link to="/schedules">Schedules</Link>
 				<Link to="/audit">Audit log</Link>
+				{session.data?.role === 'admin' ? <Link to="/users">Users</Link> : null}
+				<Link to="/account">Account</Link>
 				<Link to="/leak-test">Leak test</Link>
 			</nav>
 			<ErrorNotice error={status.error ?? pause.error ?? resume.error} />

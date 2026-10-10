@@ -61,7 +61,7 @@ async fn blocking<T: Send + 'static>(
 }
 
 /// The revision in `If-Match`, if there is one: `"3"`, `W/"3"` or `3`.
-fn expected_revision(headers: &HeaderMap) -> Result<Option<u64>, ApiError> {
+pub(crate) fn expected_revision(headers: &HeaderMap) -> Result<Option<u64>, ApiError> {
     let Some(value) = headers.get(IF_MATCH) else {
         return Ok(None);
     };
@@ -74,7 +74,7 @@ fn expected_revision(headers: &HeaderMap) -> Result<Option<u64>, ApiError> {
         .ok_or_else(|| ApiError::bad_request("If-Match must be a revision such as \"3\""))
 }
 
-fn with_etag(revision: u64, body: impl IntoResponse) -> Response {
+pub(crate) fn with_etag(revision: u64, body: impl IntoResponse) -> Response {
     let mut response = body.into_response();
     if let Ok(value) = HeaderValue::from_str(&format!("\"{revision}\"")) {
         response.headers_mut().insert(ETAG, value);

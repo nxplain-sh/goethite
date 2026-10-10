@@ -21,7 +21,8 @@ use goethite_api::{
     Api, ApiConfig, ApiError, ApiListeners, BoxFuture, BoxResult, Change, ClusterRole,
     ClusterStatus, Control, DOCS_SCALAR, FilterStatus, Forwarded, ForwardedAnswer,
     MAX_CONNECTIONS_PER_PEER, MemberState, MemberStats, PeerStatus, QueryLogStatus, Serving,
-    Status, UpdateCheck, WebAssets, Writes, generate_token, serve_router,
+    Status, UpdateCheck, WebAssets, Writes, decode_totp_secret, generate_token, serve_router,
+    totp_code,
 };
 use goethite_proto::{Name, RecordType};
 use goethite_store::Protocol;
@@ -235,17 +236,17 @@ fn start_with_docs(
         .unwrap();
     let control = Arc::new(FakeControl::default());
     let (token, hash) = generate_token();
-    let api = Arc::new(Api {
+    let api = Arc::new(Api::new(
         store,
         log,
-        control: Arc::clone(&control) as Arc<dyn Control>,
-        config: ApiConfig {
+        Arc::clone(&control) as Arc<dyn Control>,
+        ApiConfig {
             token: with_token.then_some(hash),
             tls: None,
             web,
             docs,
         },
-    });
+    ));
     let listeners = ApiListeners::bind(&["127.0.0.1:0".parse().unwrap()]).unwrap();
     let addr = listeners.local_addrs().unwrap()[0];
     let (stop, stopped) = oneshot::channel::<()>();
@@ -1027,6 +1028,7 @@ async fn the_primary_runs_forwarded_changes_as_their_caller() {
     let server = start(true);
     let caller = Actor {
         kind: ActorKind::Token,
+        name: None,
         address: Some("192.0.2.7".into()),
         node: None,
     };
@@ -1351,4 +1353,441 @@ async fn connections_from_one_peer_are_capped() {
         "closed instead of served: {read:?}"
     );
     drop(held);
+}
+
+/// A long enough password for the API to accept.
+const PASSWORD: &str = "correct horse battery staple";
+/// A second one, for password-change tests.
+const PASSWORD2: &str = "battery staple correct horse";
+
+/// The `gth_session` value from a reply's `Set-Cookie`.
+fn session_cookie(reply: &Reply) -> String {
+    let set = reply.headers.get("set-cookie").expect("a session cookie");
+    set.to_str().unwrap().split(';').next().unwrap().to_owned()
+}
+
+/// Sends a request with a session cookie rather than the admin token.
+impl Server {
+    async fn as_user(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<Value>,
+        cookie: &str,
+    ) -> Reply {
+        self.send(method, path, body, &[("cookie", cookie)]).await
+    }
+}
+
+async fn sign_in(server: &Server, name: &str, password: &str, code: Option<&str>) -> Reply {
+    let mut body = json!({"name": name, "password": password});
+    if let Some(code) = code {
+        body["code"] = json!(code);
+    }
+    server.post("/api/v1/auth/login", body).await
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines, reason = "one sign-in story, end to end")]
+async fn users_sign_in_and_sessions() {
+    let server = start(false);
+
+    // With no users and no token, loopback is trusted: bootstrap the first
+    // admin through it.
+    assert_eq!(server.get("/api/v1/status").await.status, StatusCode::OK);
+    let created = server
+        .post(
+            "/api/v1/users",
+            json!({"name": "admin", "password": PASSWORD}),
+        )
+        .await;
+    assert_eq!(created.status, StatusCode::CREATED, "{}", created.text);
+    assert_eq!(created.body["role"], "admin");
+    assert_eq!(created.body["totp"], false);
+    assert!(
+        created.body.get("password_hash").is_none() && !created.text.contains("argon2"),
+        "never a hash in a response"
+    );
+    let admin = created.body["id"].as_str().unwrap().to_owned();
+    assert!(admin.starts_with("us_"), "{admin}");
+
+    // Now that a user exists, loopback without a session is refused.
+    let anonymous = server.get("/api/v1/status").await;
+    assert_eq!(
+        anonymous.status,
+        StatusCode::UNAUTHORIZED,
+        "{}",
+        anonymous.text
+    );
+    let unauthorised = server
+        .post(
+            "/api/v1/users",
+            json!({"name": "eve", "password": PASSWORD}),
+        )
+        .await;
+    assert_eq!(unauthorised.status, StatusCode::UNAUTHORIZED);
+
+    // Wrong password.
+    let bad = sign_in(&server, "admin", "not the password at all", None).await;
+    assert_eq!(bad.status, StatusCode::UNAUTHORIZED, "{}", bad.text);
+
+    // Right password: a session cookie, and the user behind it.
+    let login = sign_in(&server, "admin", PASSWORD, None).await;
+    assert_eq!(login.status, StatusCode::OK, "{}", login.text);
+    assert_eq!(login.body["name"], "admin");
+    assert_eq!(login.body["role"], "admin");
+    let session = session_cookie(&login);
+    assert!(session.starts_with("gth_session=gths_"), "{session}");
+    let who = server
+        .as_user(Method::GET, "/api/v1/auth/session", None, &session)
+        .await;
+    assert_eq!(who.status, StatusCode::OK, "{}", who.text);
+    assert_eq!(who.body["id"], admin);
+
+    // A viewer reads but does not write.
+    let viewer = server
+        .as_user(
+            Method::POST,
+            "/api/v1/users",
+            Some(json!({"name": "kid", "password": PASSWORD, "role": "viewer"})),
+            &session,
+        )
+        .await;
+    assert_eq!(viewer.status, StatusCode::CREATED, "{}", viewer.text);
+    assert_eq!(viewer.body["role"], "viewer");
+    let kid_login = sign_in(&server, "kid", PASSWORD, None).await;
+    assert_eq!(kid_login.status, StatusCode::OK, "{}", kid_login.text);
+    let kid = session_cookie(&kid_login);
+    let read = server
+        .as_user(Method::GET, "/api/v1/status", None, &kid)
+        .await;
+    assert_eq!(read.status, StatusCode::OK, "{}", read.text);
+    let denied = server
+        .as_user(
+            Method::POST,
+            "/api/v1/records",
+            Some(json!({"name": "nas.lan", "type": "A", "value": "192.168.1.10"})),
+            &kid,
+        )
+        .await;
+    assert_eq!(denied.status, StatusCode::FORBIDDEN, "{}", denied.text);
+    // A viewer may use the endpoints that act on its own account: the wrong
+    // current password is a 401 from the handler, not a 403 from the gate.
+    let own = server
+        .as_user(
+            Method::POST,
+            "/api/v1/auth/password",
+            Some(json!({"current_password": "wrong wrong wrong", "new_password": PASSWORD2})),
+            &session,
+        )
+        .await;
+    assert_eq!(own.status, StatusCode::UNAUTHORIZED, "{}", own.text);
+
+    // Changing the password signs other sessions out and keeps this one,
+    // with a fresh cookie.
+    let changed = server
+        .as_user(
+            Method::POST,
+            "/api/v1/auth/password",
+            Some(json!({"current_password": PASSWORD, "new_password": PASSWORD2})),
+            &session,
+        )
+        .await;
+    assert_eq!(changed.status, StatusCode::NO_CONTENT, "{}", changed.text);
+    let fresh = session_cookie(&changed);
+    assert_ne!(fresh, session);
+    let stale = server
+        .as_user(Method::GET, "/api/v1/status", None, &session)
+        .await;
+    assert_eq!(stale.status, StatusCode::UNAUTHORIZED);
+    let alive = server
+        .as_user(Method::GET, "/api/v1/status", None, &fresh)
+        .await;
+    assert_eq!(alive.status, StatusCode::OK, "{}", alive.text);
+    assert_eq!(
+        sign_in(&server, "admin", PASSWORD, None).await.status,
+        StatusCode::UNAUTHORIZED
+    );
+    let relogin = sign_in(&server, "admin", PASSWORD2, None).await;
+    assert_eq!(relogin.status, StatusCode::OK, "{}", relogin.text);
+    let admin_session = session_cookie(&relogin);
+
+    // The last enabled admin cannot be removed while only a viewer remains.
+    let refused = server
+        .as_user(
+            Method::DELETE,
+            &format!("/api/v1/users/{admin}"),
+            None,
+            &admin_session,
+        )
+        .await;
+    assert_eq!(refused.status, StatusCode::CONFLICT, "{}", refused.text);
+
+    // Signing out ends the session.
+    let logout = server
+        .as_user(Method::POST, "/api/v1/auth/logout", None, &admin_session)
+        .await;
+    assert_eq!(logout.status, StatusCode::NO_CONTENT, "{}", logout.text);
+    let after = server
+        .as_user(Method::GET, "/api/v1/status", None, &admin_session)
+        .await;
+    assert_eq!(after.status, StatusCode::UNAUTHORIZED);
+
+    // The token still works on its own server, next to users.
+    let tokened = start(true);
+    let with_token = tokened
+        .post(
+            "/api/v1/users",
+            json!({"name": "admin", "password": PASSWORD}),
+        )
+        .await;
+    assert_eq!(
+        with_token.status,
+        StatusCode::CREATED,
+        "{}",
+        with_token.text
+    );
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines, reason = "one second-factor story, end to end")]
+async fn second_factors_work() {
+    let server = start(false);
+    let created = server
+        .post(
+            "/api/v1/users",
+            json!({"name": "admin", "password": PASSWORD}),
+        )
+        .await;
+    assert_eq!(created.status, StatusCode::CREATED, "{}", created.text);
+    let login = sign_in(&server, "admin", PASSWORD, None).await;
+    let session = session_cookie(&login);
+
+    let setup = server
+        .as_user(
+            Method::POST,
+            "/api/v1/auth/otp/setup",
+            Some(json!({"password": PASSWORD})),
+            &session,
+        )
+        .await;
+    assert_eq!(setup.status, StatusCode::OK, "{}", setup.text);
+    let secret = setup.body["secret"].as_str().unwrap().to_owned();
+    assert_eq!(secret.len(), 32, "{secret}");
+    assert!(
+        setup.body["uri"]
+            .as_str()
+            .unwrap()
+            .starts_with("otpauth://totp/goethite:admin?"),
+        "{}",
+        setup.text
+    );
+    // It is not enforced until a code confirms it.
+    assert_eq!(
+        sign_in(&server, "admin", PASSWORD, None).await.status,
+        StatusCode::OK
+    );
+
+    // Storing the pending secret changed the record: the answer carries a
+    // fresh cookie, and the old session is stale.
+    let setup_session = session_cookie(&setup);
+    assert_ne!(setup_session, session);
+    assert_eq!(
+        server
+            .as_user(Method::GET, "/api/v1/status", None, &session)
+            .await
+            .status,
+        StatusCode::UNAUTHORIZED
+    );
+
+    let wrong = server
+        .as_user(
+            Method::POST,
+            "/api/v1/auth/otp/enable",
+            Some(json!({"code": "000000"})),
+            &setup_session,
+        )
+        .await;
+    assert_eq!(wrong.status, StatusCode::UNAUTHORIZED, "{}", wrong.text);
+
+    let bytes = decode_totp_secret(&secret).unwrap();
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let code = totp_code(&bytes, now);
+    let enabled = server
+        .as_user(
+            Method::POST,
+            "/api/v1/auth/otp/enable",
+            Some(json!({"code": code})),
+            &setup_session,
+        )
+        .await;
+    assert_eq!(enabled.status, StatusCode::OK, "{}", enabled.text);
+    let codes: Vec<String> = enabled.body["recovery_codes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|code| code.as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(codes.len(), 10);
+    let enabled_session = session_cookie(&enabled);
+    assert_ne!(
+        enabled_session, setup_session,
+        "a fresh session after the change"
+    );
+
+    // Sign-in now wants a code.
+    let no_code = sign_in(&server, "admin", PASSWORD, None).await;
+    assert_eq!(no_code.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(no_code.body["error"]["code"], "otp_required");
+    let wrong_code = sign_in(&server, "admin", PASSWORD, Some("000000")).await;
+    assert_eq!(
+        wrong_code.status,
+        StatusCode::UNAUTHORIZED,
+        "{}",
+        wrong_code.text
+    );
+    // The server accepts one step either side, so the code for now works.
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let accepted = sign_in(&server, "admin", PASSWORD, Some(&totp_code(&bytes, now))).await;
+    assert_eq!(accepted.status, StatusCode::OK, "{}", accepted.text);
+
+    // A recovery code works once.
+    let recovered = sign_in(&server, "admin", PASSWORD, Some(&codes[0])).await;
+    assert_eq!(recovered.status, StatusCode::OK, "{}", recovered.text);
+    let reused = sign_in(&server, "admin", PASSWORD, Some(&codes[0])).await;
+    assert_eq!(reused.status, StatusCode::UNAUTHORIZED, "{}", reused.text);
+
+    // Turns off with the password, from a session signed in just now.
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let signin = sign_in(&server, "admin", PASSWORD, Some(&totp_code(&bytes, now))).await;
+    assert_eq!(signin.status, StatusCode::OK, "{}", signin.text);
+    let cookie = session_cookie(&signin);
+    let off = server
+        .as_user(
+            Method::POST,
+            "/api/v1/auth/otp/disable",
+            Some(json!({"password": PASSWORD})),
+            &cookie,
+        )
+        .await;
+    assert_eq!(off.status, StatusCode::NO_CONTENT, "{}", off.text);
+    assert_eq!(
+        sign_in(&server, "admin", PASSWORD, None).await.status,
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn reset_links_work_once() {
+    let server = start(false);
+    let created = server
+        .post(
+            "/api/v1/users",
+            json!({"name": "admin", "password": PASSWORD}),
+        )
+        .await;
+    let id = created.body["id"].as_str().unwrap().to_owned();
+    let login = sign_in(&server, "admin", PASSWORD, None).await;
+    let session = session_cookie(&login);
+
+    let issued = server
+        .as_user(
+            Method::POST,
+            &format!("/api/v1/users/{id}/reset"),
+            None,
+            &session,
+        )
+        .await;
+    assert_eq!(issued.status, StatusCode::OK, "{}", issued.text);
+    let token = issued.body["token"].as_str().unwrap().to_owned();
+    assert!(token.starts_with("gtr_"), "{token}");
+
+    // The old password still works until the link is used.
+    assert_eq!(
+        sign_in(&server, "admin", PASSWORD, None).await.status,
+        StatusCode::OK
+    );
+    let redeemed = server
+        .post(
+            "/api/v1/auth/reset",
+            json!({"token": token, "password": PASSWORD2}),
+        )
+        .await;
+    assert_eq!(redeemed.status, StatusCode::NO_CONTENT, "{}", redeemed.text);
+    let again = server
+        .post(
+            "/api/v1/auth/reset",
+            json!({"token": token, "password": PASSWORD}),
+        )
+        .await;
+    assert_eq!(again.status, StatusCode::UNAUTHORIZED, "{}", again.text);
+    assert_eq!(
+        sign_in(&server, "admin", PASSWORD, None).await.status,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        sign_in(&server, "admin", PASSWORD2, None).await.status,
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn failed_sign_ins_run_out() {
+    let server = start(false);
+    server
+        .post(
+            "/api/v1/users",
+            json!({"name": "admin", "password": PASSWORD}),
+        )
+        .await;
+    for _ in 0..5 {
+        let reply = sign_in(&server, "admin", "wrong password entirely", None).await;
+        assert_eq!(reply.status, StatusCode::UNAUTHORIZED, "{}", reply.text);
+    }
+    let limited = sign_in(&server, "admin", PASSWORD, None).await;
+    assert_eq!(
+        limited.status,
+        StatusCode::TOO_MANY_REQUESTS,
+        "{}",
+        limited.text
+    );
+    assert_eq!(limited.body["error"]["code"], "too_many_requests");
+}
+
+#[tokio::test]
+async fn user_changes_are_audited_without_secrets() {
+    let server = start(true);
+    let created = server
+        .post(
+            "/api/v1/users",
+            json!({"name": "admin", "password": PASSWORD}),
+        )
+        .await;
+    assert_eq!(created.status, StatusCode::CREATED, "{}", created.text);
+    let audit = server.get("/api/v1/audit?limit=5").await;
+    assert_eq!(audit.status, StatusCode::OK, "{}", audit.text);
+    let entry = audit
+        .body
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["kind"] == "user")
+        .expect("the user's audit entry");
+    assert_eq!(entry["action"], "create");
+    assert_eq!(entry["after"]["spec"]["name"], "admin");
+    assert!(
+        entry["after"]["spec"].get("password_hash").is_none(),
+        "{}",
+        entry
+    );
+    assert!(!audit.text.contains("argon2"), "no hash in the audit log");
 }

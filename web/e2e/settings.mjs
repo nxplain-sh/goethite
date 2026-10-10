@@ -7,6 +7,10 @@ export const DOQ_PORT = 18157
 // A fixed token in goethite's format (gth_ and 64 hex digits): goethite
 // keeps only its SHA-256 hash.
 export const TOKEN = `gth_${'0123456789abcdef'.repeat(4)}`
+// The user the tests sign in as in the web UI; the server scripts create it
+// in the store before goethite starts.
+export const USER = 'admin'
+export const PASSWORD = 'e2e password, long enough'
 // A second goethite, a cluster member (e2e/serve-member.mjs).
 export const MEMBER_API_PORT = 18158
 export const MEMBER_DNS_PORT = 18159

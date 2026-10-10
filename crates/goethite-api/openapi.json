@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "goethite API",
-    "description": "Configure and observe a goethite DNS filtering resolver. Every request except `/api/v1/health` needs the admin token as `Authorization: Bearer <token>` once one is configured; until then the API only answers on loopback. Changes are validated, audit-logged and applied at once. Resources have a revision: send it back in `If-Match` to make an update fail if someone else changed the resource in the meantime.",
+    "description": "Configure and observe a goethite DNS filtering resolver. Every request except `/api/v1/health`, `/api/v1/auth/login` and `/api/v1/auth/reset` needs the admin token as `Authorization: Bearer <token>`, or a session cookie from a sign-in; while the node has neither a token nor users, the API only answers on loopback. Changes are validated, audit-logged and applied at once. Resources have a revision: send it back in `If-Match` to make an update fail if someone else changed the resource in the meantime.",
     "contact": {
       "name": "goethite contributors"
     },
@@ -53,6 +53,376 @@
                   "items": {
                     "$ref": "#/components/schemas/AuditEntry"
                   }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/auth/login": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Signs in with a name and a password, and a code when a second factor is\nenabled. Answers with the session cookie.",
+        "operationId": "login",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Login"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Signed in; the session is the Set-Cookie",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Wrong name or password, a wrong or missing code, or an expired reset",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The account is disabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many failed sign-ins",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/logout": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Signs out: the session is gone and the cookie is cleared.",
+        "operationId": "logout",
+        "responses": {
+          "204": {
+            "description": "Signed out"
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/auth/otp/disable": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Turns the second factor off; the password confirms it.",
+        "operationId": "otp_disable",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WithPassword"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Disabled; recovery codes are gone too"
+          },
+          "401": {
+            "description": "The password is wrong",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/auth/otp/enable": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Confirms the TOTP code and enables the factor; answers the recovery\ncodes, once.",
+        "operationId": "otp_enable",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WithCode"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Enabled; the recovery codes are shown once",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecoveryCodes"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The code is wrong",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "No setup is waiting",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/auth/otp/setup": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Starts setting up a TOTP second factor: answers the secret and the\n`otpauth://` URI. Nothing is enforced until a code confirms it. Storing\nthe pending secret changes the user's record, so the answer carries a\nfresh session cookie.",
+        "operationId": "otp_setup",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WithPassword"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The secret and its URI; this session continues with a new cookie",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OtpSetup"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The password is wrong",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A second factor is already enabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/auth/password": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Changes the signed-in user's password. Every other session of the user\nstops working; this one gets a fresh cookie.",
+        "operationId": "change_password",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangePassword"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Changed; this session continues with a new cookie"
+          },
+          "401": {
+            "description": "The current password is wrong",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The new password is not acceptable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/auth/reset": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Finishes a password reset with the one-time token an admin issued.",
+        "operationId": "reset_with_token",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResetWithToken"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "The password was set; all sessions of the user are gone"
+          },
+          "401": {
+            "description": "The token is not valid or has expired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The new password is not acceptable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many attempts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/session": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "What the signed-in caller is.",
+        "operationId": "session_info",
+        "responses": {
+          "200": {
+            "description": "The signed-in user",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
                 }
               }
             }
@@ -2903,6 +3273,450 @@
         ]
       }
     },
+    "/api/v1/users": {
+      "get": {
+        "tags": [
+          "users"
+        ],
+        "summary": "All users.",
+        "operationId": "list_users",
+        "responses": {
+          "200": {
+            "description": "The users",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/UserView"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Creates a user. The password is hashed here; nothing else ever sees it.",
+        "operationId": "create_user",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateUser"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The name is taken",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The user is not valid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/users/{id}": {
+      "get": {
+        "tags": [
+          "users"
+        ],
+        "summary": "One user, with its revision as the `ETag`.",
+        "operationId": "get_user",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The user",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such ID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Replaces a user's name, role and disabled flag. The password and the\nsecond factor are not touched here.",
+        "operationId": "update_user",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "The revision the change is based on",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateUser"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such ID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The name is taken, or the last admin would be disabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "It changed since that revision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The user is not valid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Deletes a user. The last enabled admin cannot be deleted.",
+        "operationId": "delete_user",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "The revision the deletion is based on",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "404": {
+            "description": "No such ID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "It is the last enabled admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "It changed since that revision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/users/{id}/otp/disable": {
+      "post": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Clears a user's second factor and recovery codes, as an admin: the way\nback in for someone who lost their authenticator.",
+        "operationId": "clear_user_otp",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Cleared"
+          },
+          "404": {
+            "description": "No such ID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/users/{id}/password": {
+      "post": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Sets a user's password, as an admin. Every session of that user stops\nworking.",
+        "operationId": "set_user_password",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewPassword"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Set"
+          },
+          "404": {
+            "description": "No such ID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The password is not acceptable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/users/{id}/reset": {
+      "post": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Issues a one-time password reset for a user: the answer carries the\ntoken for the `/reset` link, shown once.",
+        "operationId": "issue_reset",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Issued; the token goes into the reset link",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssuedReset"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such ID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      }
+    },
     "/metrics": {
       "get": {
         "tags": [
@@ -2967,6 +3781,13 @@
             "$ref": "#/components/schemas/ActorKind",
             "description": "What kind of actor."
           },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The user's sign-in name, when a user made the change."
+          },
           "node": {
             "type": [
               "string",
@@ -2978,9 +3799,10 @@
       },
       "ActorKind": {
         "type": "string",
-        "description": "Who made a change: `token` (an API client with the admin token), `unauthenticated` (an API client on loopback while no admin token is configured), `cli` (the goethite command line), `system` (goethite itself) or `replication` (a whole configuration taken from another cluster member). More may be added: show unknown values as they are.",
+        "description": "Who made a change: `token` (an API client with the admin token), `user` (a signed-in user, named in the actor's `name`), `unauthenticated` (an API client on loopback while no admin token is configured), `cli` (the goethite command line), `system` (goethite itself) or `replication` (a whole configuration taken from another cluster member). More may be added: show unknown values as they are.",
         "x-extensible-enum": [
           "token",
+          "user",
           "unauthenticated",
           "cli",
           "system",
@@ -3137,6 +3959,24 @@
           "optional",
           "legacy"
         ]
+      },
+      "ChangePassword": {
+        "type": "object",
+        "description": "A password change by the user itself.",
+        "required": [
+          "current_password",
+          "new_password"
+        ],
+        "properties": {
+          "current_password": {
+            "type": "string",
+            "description": "The current password."
+          },
+          "new_password": {
+            "type": "string",
+            "description": "The new password."
+          }
+        }
       },
       "Client": {
         "type": "object",
@@ -3400,6 +4240,28 @@
           }
         }
       },
+      "CreateUser": {
+        "type": "object",
+        "description": "A new user.",
+        "required": [
+          "name",
+          "password"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The sign-in name."
+          },
+          "password": {
+            "type": "string",
+            "description": "The first password."
+          },
+          "role": {
+            "$ref": "#/components/schemas/Role",
+            "description": "What the user may do; `admin` by default."
+          }
+        }
+      },
       "Directory": {
         "type": "object",
         "description": "The FilterLists directory, as far as goethite can use it.",
@@ -3597,7 +4459,7 @@
         "properties": {
           "code": {
             "type": "string",
-            "description": "A stable code: `not_found`, `invalid`, `conflict`,\n`revision_mismatch`, `unauthorized`, `forbidden`, `bad_request`,\n`unavailable` or `internal`."
+            "description": "A stable code: `not_found`, `invalid`, `conflict`,\n`revision_mismatch`, `unauthorized`, `otp_required`, `forbidden`,\n`bad_request`, `too_many_requests`, `unavailable` or `internal`."
           },
           "message": {
             "type": "string",
@@ -3758,6 +4620,25 @@
             "type": "string",
             "format": "date-time",
             "description": "When the hour starts."
+          }
+        }
+      },
+      "IssuedReset": {
+        "type": "object",
+        "description": "A password reset an admin issued; shown once.",
+        "required": [
+          "token",
+          "expires_at"
+        ],
+        "properties": {
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it stops working."
+          },
+          "token": {
+            "type": "string",
+            "description": "The one-time token; goes into the reset link."
           }
         }
       },
@@ -4034,6 +4915,31 @@
           }
         }
       },
+      "Login": {
+        "type": "object",
+        "description": "A sign-in attempt.",
+        "required": [
+          "name",
+          "password"
+        ],
+        "properties": {
+          "code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A TOTP or recovery code, when a second factor is enabled."
+          },
+          "name": {
+            "type": "string",
+            "description": "The sign-in name."
+          },
+          "password": {
+            "type": "string",
+            "description": "The password."
+          }
+        }
+      },
       "ManagedBy": {
         "type": "string",
         "description": "Who manages a resource.",
@@ -4153,6 +5059,37 @@
           "learner",
           "configured"
         ]
+      },
+      "NewPassword": {
+        "type": "object",
+        "description": "A password, set by an admin.",
+        "required": [
+          "password"
+        ],
+        "properties": {
+          "password": {
+            "type": "string",
+            "description": "The new password."
+          }
+        }
+      },
+      "OtpSetup": {
+        "type": "object",
+        "description": "A TOTP secret being set up; shown once.",
+        "required": [
+          "secret",
+          "uri"
+        ],
+        "properties": {
+          "secret": {
+            "type": "string",
+            "description": "The secret, base32."
+          },
+          "uri": {
+            "type": "string",
+            "description": "The `otpauth://` URI, for the QR code."
+          }
+        }
       },
       "Pause": {
         "type": "object",
@@ -4685,6 +5622,22 @@
         },
         "additionalProperties": false
       },
+      "RecoveryCodes": {
+        "type": "object",
+        "description": "Recovery codes; shown once.",
+        "required": [
+          "recovery_codes"
+        ],
+        "properties": {
+          "recovery_codes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The codes."
+          }
+        }
+      },
       "RecursionStatus": {
         "type": "object",
         "description": "Recursive resolution: from the root servers down, instead of asking\nupstream resolvers.",
@@ -4766,6 +5719,32 @@
             "minimum": 0
           }
         }
+      },
+      "ResetWithToken": {
+        "type": "object",
+        "description": "A password reset, with the one-time token an admin issued.",
+        "required": [
+          "token",
+          "password"
+        ],
+        "properties": {
+          "password": {
+            "type": "string",
+            "description": "The new password."
+          },
+          "token": {
+            "type": "string",
+            "description": "The one-time token from the reset link."
+          }
+        }
+      },
+      "Role": {
+        "type": "string",
+        "description": "What a user may do through the API.",
+        "enum": [
+          "admin",
+          "viewer"
+        ]
       },
       "RoleChange": {
         "type": "object",
@@ -4981,6 +5960,40 @@
           "source": {
             "type": "string",
             "description": "Where the catalog comes from."
+          }
+        }
+      },
+      "SessionView": {
+        "type": "object",
+        "description": "What a session says about its user.",
+        "required": [
+          "id",
+          "name",
+          "role",
+          "totp",
+          "recovery_codes_left"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The user's ID."
+          },
+          "name": {
+            "type": "string",
+            "description": "The sign-in name."
+          },
+          "recovery_codes_left": {
+            "type": "integer",
+            "description": "Recovery codes left.",
+            "minimum": 0
+          },
+          "role": {
+            "$ref": "#/components/schemas/Role",
+            "description": "What the user may do."
+          },
+          "totp": {
+            "type": "boolean",
+            "description": "Whether a second factor is enabled."
           }
         }
       },
@@ -5330,6 +6343,27 @@
           }
         }
       },
+      "UpdateUser": {
+        "type": "object",
+        "description": "What an admin may change about a user.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "disabled": {
+            "type": "boolean",
+            "description": "Whether the user is disabled."
+          },
+          "name": {
+            "type": "string",
+            "description": "The sign-in name."
+          },
+          "role": {
+            "$ref": "#/components/schemas/Role",
+            "description": "What the user may do."
+          }
+        }
+      },
       "UpstreamStatus": {
         "type": "object",
         "description": "One upstream.",
@@ -5357,6 +6391,69 @@
           "protocol": {
             "type": "string",
             "description": "`udp`, `tcp`, `tls` or `https`."
+          }
+        }
+      },
+      "UserView": {
+        "type": "object",
+        "description": "A user as the API shows one: never a hash, secret or code.",
+        "required": [
+          "id",
+          "name",
+          "role",
+          "disabled",
+          "totp",
+          "recovery_codes_left",
+          "reset_pending",
+          "revision",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the user was created."
+          },
+          "disabled": {
+            "type": "boolean",
+            "description": "Whether the user is disabled."
+          },
+          "id": {
+            "type": "string",
+            "description": "The ID."
+          },
+          "name": {
+            "type": "string",
+            "description": "The sign-in name."
+          },
+          "recovery_codes_left": {
+            "type": "integer",
+            "description": "Recovery codes left.",
+            "minimum": 0
+          },
+          "reset_pending": {
+            "type": "boolean",
+            "description": "Whether a password reset was issued and has not expired."
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Counts updates, as an `ETag` on the single-user responses.",
+            "minimum": 0
+          },
+          "role": {
+            "$ref": "#/components/schemas/Role",
+            "description": "What the user may do."
+          },
+          "totp": {
+            "type": "boolean",
+            "description": "Whether a second factor is enabled."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the user last changed."
           }
         }
       },
@@ -5399,6 +6496,32 @@
           }
         },
         "additionalProperties": false
+      },
+      "WithCode": {
+        "type": "object",
+        "description": "A code from an authenticator app.",
+        "required": [
+          "code"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Six digits, or a recovery code."
+          }
+        }
+      },
+      "WithPassword": {
+        "type": "object",
+        "description": "A password, to confirm something.",
+        "required": [
+          "password"
+        ],
+        "properties": {
+          "password": {
+            "type": "string",
+            "description": "The user's current password."
+          }
+        }
       }
     },
     "securitySchemes": {
@@ -5449,6 +6572,14 @@
     {
       "name": "audit",
       "description": "Every configuration change"
+    },
+    {
+      "name": "auth",
+      "description": "Signing in, sessions and second factors"
+    },
+    {
+      "name": "users",
+      "description": "The users with access to the API"
     },
     {
       "name": "cluster",

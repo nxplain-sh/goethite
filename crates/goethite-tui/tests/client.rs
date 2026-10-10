@@ -69,17 +69,17 @@ async fn talks_to_the_api() {
         .start_query_log(QueryLogConfig::default(), Vec::new())
         .unwrap();
     let (token, hash) = generate_token();
-    let api = Arc::new(Api {
+    let api = Arc::new(Api::new(
         store,
         log,
-        control: Arc::new(Idle),
-        config: ApiConfig {
+        Arc::new(Idle),
+        ApiConfig {
             token: Some(hash),
             tls: None,
             web: None,
             docs: None,
         },
-    });
+    ));
     let listeners = ApiListeners::bind(&["127.0.0.1:0".parse().unwrap()]).unwrap();
     let url = format!("http://{}", listeners.local_addrs().unwrap()[0]);
     tokio::spawn(goethite_api::serve(listeners, api, std::future::pending()));

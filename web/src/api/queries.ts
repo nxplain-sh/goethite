@@ -8,6 +8,19 @@ export const statusQuery = queryOptions({
 	refetchInterval: 5_000,
 })
 
+/** The signed-in user; a 401 sends the page to the login. */
+export const sessionQuery = queryOptions({
+	queryKey: ['session'],
+	queryFn: () => call(api.GET('/api/v1/auth/session')),
+	staleTime: 30_000,
+})
+
+/** The users with access to the API; admins only. */
+export const usersQuery = queryOptions({
+	queryKey: ['users'],
+	queryFn: () => call(api.GET('/api/v1/users')),
+})
+
 export const statsQuery = (hours: number) =>
 	queryOptions({
 		queryKey: ['stats', hours],

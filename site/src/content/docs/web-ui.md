@@ -22,10 +22,20 @@ machine through an SSH tunnel, then open `http://localhost:8053/`:
 ssh -L 8053:127.0.0.1:8053 dns.example.lan
 ```
 
-A node with a token (see [REST API](../api/#access)) asks for it on the sign-in page. The token
-stays in that browser tab only and is forgotten when the tab closes, on sign-out, or when the node
-stops accepting it. Serve the API over HTTPS (`tls_cert` and `tls_key`) when you use it across
-the network; otherwise the token crosses it in clear text.
+Everyone else signs in with a user name and password (see [Users and
+sign-in](../api/#users-and-sign-in)). Create the first user before reaching the node, since
+goethite holds its store file locked while it runs:
+
+```sh
+goethite user add admin
+```
+
+It prints a generated password once. The sign-in may ask for a six-digit code too, when the
+account has a second factor: set one up under **Account**, together with recovery codes for the
+day the authenticator app is lost. Sessions last twelve hours, end on sign-out, and end on every
+node when the account's password, role or new second factor changes. An admin can issue a
+one-time reset link under **Users**. Serve the API over HTTPS (`tls_cert` and `tls_key`) when you
+use it across the network; otherwise passwords cross it in clear text.
 
 ## Screens
 
@@ -65,6 +75,10 @@ the network; otherwise the token crosses it in clear text.
 - **Audit log**: who changed what, from where, with the resource before and after.
 - **Leak test**: whether this device's lookups reach goethite, over which protocol and as which
   client, or go to another resolver past its filtering; see [DNS leak test](../leak-test/).
+- **Users** (admins): add users, give them the `viewer` role, issue one-time password reset
+  links, set passwords, disable accounts, clear a lost second factor.
+- **Account**: change your password, set up or remove a TOTP second factor, see the recovery
+  codes.
 - **Settings**, in the header beside Pause and Sign out: filtering on or off, how blocked names
   are answered, how often lists are downloaded, and who may use goethite: the allowed and blocked
   clients (see [access control](../security/#access-control)). It also shows the running version;

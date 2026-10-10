@@ -39,7 +39,10 @@ fn every_operation_is_documented() {
                     .is_some_and(|r| !r.is_empty()),
                 "{method} {path} has no responses"
             );
-            if path != "/api/v1/health" {
+            if !matches!(
+                path.as_str(),
+                "/api/v1/health" | "/api/v1/auth/login" | "/api/v1/auth/reset"
+            ) {
                 assert!(
                     operation["security"].is_array(),
                     "{method} {path} does not say it needs the token"

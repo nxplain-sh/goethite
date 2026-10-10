@@ -7,7 +7,9 @@ import { gzipSync } from 'node:zlib'
 
 const KiB = 1024
 const limits = {
-	js: 200 * KiB, // gzipped
+	// 200 KiB until the sign-in, account, users and reset pages of ADR 0039
+	// needed about 4 more.
+	js: 210 * KiB, // gzipped
 	css: 16 * KiB, // gzipped
 	total: 1536 * KiB, // everything in dist/, uncompressed, as embedded
 }

@@ -9,7 +9,15 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
-import { ABSENT_PORT, MEMBER_API_PORT, MEMBER_CLUSTER_PORT, MEMBER_DNS_PORT, TOKEN } from './settings.mjs'
+import {
+	ABSENT_PORT,
+	MEMBER_API_PORT,
+	MEMBER_CLUSTER_PORT,
+	MEMBER_DNS_PORT,
+	PASSWORD,
+	TOKEN,
+	USER,
+} from './settings.mjs'
 
 const binary = process.env.GOETHITE_BIN ?? resolve(import.meta.dirname, '../../target/debug/goethite')
 const dir = mkdtempSync(join(tmpdir(), 'goethite-e2e-member-'))
@@ -51,6 +59,14 @@ node = "dns1"
 address = "127.0.0.1:${ABSENT_PORT}"
 `,
 )
+
+// Same admin as the first node; a cluster seed replaces these users with the
+// leader's anyway.
+const passwordFile = join(dir, 'password.txt')
+writeFileSync(passwordFile, PASSWORD)
+execFileSync(binary, ['user', 'add', USER, '--password-file', passwordFile, '--config', config], {
+	stdio: 'inherit',
+})
 
 const child = spawn(binary, ['run', '--config', config], { stdio: 'inherit' })
 const stop = () => {

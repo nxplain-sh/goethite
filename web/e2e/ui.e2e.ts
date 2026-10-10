@@ -4,14 +4,25 @@ import { createSocket } from 'node:dgram'
 
 import { type APIRequestContext, expect, type Page, test } from '@playwright/test'
 
-import { ABSENT_PORT, DNS_PORT, DOH_PORT, DOQ_PORT, DOT_PORT, MEMBER_API_PORT, TOKEN } from './settings.mjs'
+import {
+	ABSENT_PORT,
+	DNS_PORT,
+	DOH_PORT,
+	DOQ_PORT,
+	DOT_PORT,
+	MEMBER_API_PORT,
+	PASSWORD,
+	TOKEN,
+	USER,
+} from './settings.mjs'
 
 const auth = { Authorization: `Bearer ${TOKEN}` }
 
-/** Signs in with the admin token, as a person would; to the node at `base`, or the usual one. */
+/** Signs in with the admin user, as a person would; to the node at `base`, or the usual one. */
 async function signIn(page: Page, base = '') {
 	await page.goto(`${base}/login`)
-	await page.getByLabel('Admin token').fill(TOKEN)
+	await page.getByLabel('User name').fill(USER)
+	await page.getByLabel('Password', { exact: true }).fill(PASSWORD)
 	await page.getByRole('button', { name: 'Sign in' }).click()
 	await expect(page.getByRole('navigation', { name: 'Pages' })).toBeVisible()
 }
@@ -31,10 +42,11 @@ test.beforeEach(async ({ page }) => {
 	await signIn(page)
 })
 
-test('asks for the token, and refuses a wrong one', async ({ page }) => {
+test('asks to sign in, and refuses a wrong password', async ({ page }) => {
 	await page.getByRole('button', { name: 'Sign out' }).click()
 	await expect(page).toHaveURL(/\/login/)
-	await page.getByLabel('Admin token').fill('gth_wrong')
+	await page.getByLabel('User name').fill(USER)
+	await page.getByLabel('Password', { exact: true }).fill('not the password at all')
 	await page.getByRole('button', { name: 'Sign in' }).click()
 	await expect(page.getByRole('alert')).toBeVisible()
 	await expect(page).toHaveURL(/\/login/)

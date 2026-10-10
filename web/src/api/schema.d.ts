@@ -21,6 +21,156 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Signs in with a name and a password, and a code when a second factor is
+         *     enabled. Answers with the session cookie.
+         */
+        post: operations["login"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Signs out: the session is gone and the cookie is cleared. */
+        post: operations["logout"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/otp/disable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Turns the second factor off; the password confirms it. */
+        post: operations["otp_disable"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/otp/enable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Confirms the TOTP code and enables the factor; answers the recovery
+         *     codes, once.
+         */
+        post: operations["otp_enable"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/otp/setup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Starts setting up a TOTP second factor: answers the secret and the
+         *     `otpauth://` URI. Nothing is enforced until a code confirms it. Storing
+         *     the pending secret changes the user's record, so the answer carries a
+         *     fresh session cookie.
+         */
+        post: operations["otp_setup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Changes the signed-in user's password. Every other session of the user
+         *     stops working; this one gets a fresh cookie.
+         */
+        post: operations["change_password"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Finishes a password reset with the one-time token an admin issued. */
+        post: operations["reset_with_token"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** What the signed-in caller is. */
+        get: operations["session_info"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/clients": {
         parameters: {
             query?: never;
@@ -653,6 +803,106 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** All users. */
+        get: operations["list_users"];
+        put?: never;
+        /** Creates a user. The password is hashed here; nothing else ever sees it. */
+        post: operations["create_user"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One user, with its revision as the `ETag`. */
+        get: operations["get_user"];
+        /**
+         * Replaces a user's name, role and disabled flag. The password and the
+         *     second factor are not touched here.
+         */
+        put: operations["update_user"];
+        post?: never;
+        /** Deletes a user. The last enabled admin cannot be deleted. */
+        delete: operations["delete_user"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/{id}/otp/disable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Clears a user's second factor and recovery codes, as an admin: the way
+         *     back in for someone who lost their authenticator.
+         */
+        post: operations["clear_user_otp"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/{id}/password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Sets a user's password, as an admin. Every session of that user stops
+         *     working.
+         */
+        post: operations["set_user_password"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/{id}/reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Issues a one-time password reset for a user: the answer carries the
+         *     token for the `/reset` link, shown once.
+         */
+        post: operations["issue_reset"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/metrics": {
         parameters: {
             query?: never;
@@ -698,13 +948,15 @@ export interface components {
             address?: string | null;
             /** @description What kind of actor. */
             kind: components["schemas"]["ActorKind"];
+            /** @description The user's sign-in name, when a user made the change. */
+            name?: string | null;
             /**
              * @description The cluster node the change came from or through, when it was not
              *     made on this node.
              */
             node?: string | null;
         };
-        /** @description Who made a change: `token` (an API client with the admin token), `unauthenticated` (an API client on loopback while no admin token is configured), `cli` (the goethite command line), `system` (goethite itself) or `replication` (a whole configuration taken from another cluster member). More may be added: show unknown values as they are. */
+        /** @description Who made a change: `token` (an API client with the admin token), `user` (a signed-in user, named in the actor's `name`), `unauthenticated` (an API client on loopback while no admin token is configured), `cli` (the goethite command line), `system` (goethite itself) or `replication` (a whole configuration taken from another cluster member). More may be added: show unknown values as they are. */
         ActorKind: string;
         /** @description What an audit entry records: `create`, `update` or `delete` (a resource or the settings), `import` (the config file's `[filter]` table), `pause` or `resume` (filtering), `refresh` (a list download), `replicate` (the cluster's whole configuration, taken from another member), `promote` (this node took the cluster over) or `demote` (this node left its cluster to join another). More may be added: show unknown values as they are. */
         AuditAction: string;
@@ -776,6 +1028,13 @@ export interface components {
          * @enum {string}
          */
         Category: "base" | "security" | "optional" | "legacy";
+        /** @description A password change by the user itself. */
+        ChangePassword: {
+            /** @description The current password. */
+            current_password: string;
+            /** @description The new password. */
+            new_password: string;
+        };
         /** @description A stored client. */
         Client: {
             /**
@@ -945,6 +1204,15 @@ export interface components {
              */
             safe_search: number;
         };
+        /** @description A new user. */
+        CreateUser: {
+            /** @description The sign-in name. */
+            name: string;
+            /** @description The first password. */
+            password: string;
+            /** @description What the user may do; `admin` by default. */
+            role?: components["schemas"]["Role"];
+        };
         /** @description The FilterLists directory, as far as goethite can use it. */
         Directory: {
             /**
@@ -1026,8 +1294,8 @@ export interface components {
         ErrorDetail: {
             /**
              * @description A stable code: `not_found`, `invalid`, `conflict`,
-             *     `revision_mismatch`, `unauthorized`, `forbidden`, `bad_request`,
-             *     `unavailable` or `internal`.
+             *     `revision_mismatch`, `unauthorized`, `otp_required`, `forbidden`,
+             *     `bad_request`, `too_many_requests`, `unavailable` or `internal`.
              */
             code: string;
             /** @description For people. */
@@ -1116,6 +1384,16 @@ export interface components {
              * @description When the hour starts.
              */
             start: string;
+        };
+        /** @description A password reset an admin issued; shown once. */
+        IssuedReset: {
+            /**
+             * Format: date-time
+             * @description When it stops working.
+             */
+            expires_at: string;
+            /** @description The one-time token; goes into the reset link. */
+            token: string;
         };
         /** @description A lookup of a test name that reached goethite. */
         LeakLookup: {
@@ -1253,6 +1531,15 @@ export interface components {
              */
             unsupported?: number | null;
         };
+        /** @description A sign-in attempt. */
+        Login: {
+            /** @description A TOTP or recovery code, when a second factor is enabled. */
+            code?: string | null;
+            /** @description The sign-in name. */
+            name: string;
+            /** @description The password. */
+            password: string;
+        };
         /**
          * @description Who manages a resource.
          * @enum {string}
@@ -1299,6 +1586,18 @@ export interface components {
          * @enum {string}
          */
         Membership: "voter" | "learner" | "configured";
+        /** @description A password, set by an admin. */
+        NewPassword: {
+            /** @description The new password. */
+            password: string;
+        };
+        /** @description A TOTP secret being set up; shown once. */
+        OtpSetup: {
+            /** @description The secret, base32. */
+            secret: string;
+            /** @description The `otpauth://` URI, for the QR code. */
+            uri: string;
+        };
         /** @description Whether filtering is paused. */
         Pause: {
             /**
@@ -1535,6 +1834,11 @@ export interface components {
              */
             value: string;
         };
+        /** @description Recovery codes; shown once. */
+        RecoveryCodes: {
+            /** @description The codes. */
+            recovery_codes: string[];
+        };
         /**
          * @description Recursive resolution: from the root servers down, instead of asking
          *     upstream resolvers.
@@ -1596,6 +1900,18 @@ export interface components {
              */
             zones: number;
         };
+        /** @description A password reset, with the one-time token an admin issued. */
+        ResetWithToken: {
+            /** @description The new password. */
+            password: string;
+            /** @description The one-time token from the reset link. */
+            token: string;
+        };
+        /**
+         * @description What a user may do through the API.
+         * @enum {string}
+         */
+        Role: "admin" | "viewer";
         /** @description How to change a node's role. */
         RoleChange: {
             /**
@@ -1705,6 +2021,19 @@ export interface components {
             services: components["schemas"]["Service"][];
             /** @description Where the catalog comes from. */
             source: string;
+        };
+        /** @description What a session says about its user. */
+        SessionView: {
+            /** @description The user's ID. */
+            id: string;
+            /** @description The sign-in name. */
+            name: string;
+            /** @description Recovery codes left. */
+            recovery_codes_left: number;
+            /** @description What the user may do. */
+            role: components["schemas"]["Role"];
+            /** @description Whether a second factor is enabled. */
+            totp: boolean;
         };
         /** @description The settings, with their revision. */
         Settings: {
@@ -1860,6 +2189,15 @@ export interface components {
             /** @description The release's page. */
             url: string;
         };
+        /** @description What an admin may change about a user. */
+        UpdateUser: {
+            /** @description Whether the user is disabled. */
+            disabled?: boolean;
+            /** @description The sign-in name. */
+            name: string;
+            /** @description What the user may do. */
+            role?: components["schemas"]["Role"];
+        };
         /** @description One upstream. */
         UpstreamStatus: {
             /** @description Address and port. */
@@ -1873,6 +2211,38 @@ export interface components {
             healthy: boolean;
             /** @description `udp`, `tcp`, `tls` or `https`. */
             protocol: string;
+        };
+        /** @description A user as the API shows one: never a hash, secret or code. */
+        UserView: {
+            /**
+             * Format: date-time
+             * @description When the user was created.
+             */
+            created_at: string;
+            /** @description Whether the user is disabled. */
+            disabled: boolean;
+            /** @description The ID. */
+            id: string;
+            /** @description The sign-in name. */
+            name: string;
+            /** @description Recovery codes left. */
+            recovery_codes_left: number;
+            /** @description Whether a password reset was issued and has not expired. */
+            reset_pending: boolean;
+            /**
+             * Format: int64
+             * @description Counts updates, as an `ETag` on the single-user responses.
+             */
+            revision: number;
+            /** @description What the user may do. */
+            role: components["schemas"]["Role"];
+            /** @description Whether a second factor is enabled. */
+            totp: boolean;
+            /**
+             * Format: date-time
+             * @description When the user last changed.
+             */
+            updated_at: string;
         };
         /**
          * @description A day of the week.
@@ -1890,6 +2260,16 @@ export interface components {
             end: string;
             /** @description Local start time, `HH:MM`. */
             start: string;
+        };
+        /** @description A code from an authenticator app. */
+        WithCode: {
+            /** @description Six digits, or a recovery code. */
+            code: string;
+        };
+        /** @description A password, to confirm something. */
+        WithPassword: {
+            /** @description The user's current password. */
+            password: string;
         };
     };
     responses: never;
@@ -1921,6 +2301,308 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AuditEntry"][];
+                };
+            };
+        };
+    };
+    login: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Login"];
+            };
+        };
+        responses: {
+            /** @description Signed in; the session is the Set-Cookie */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionView"];
+                };
+            };
+            /** @description Wrong name or password, a wrong or missing code, or an expired reset */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The account is disabled */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Too many failed sign-ins */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    logout: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Signed out */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    otp_disable: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WithPassword"];
+            };
+        };
+        responses: {
+            /** @description Disabled; recovery codes are gone too */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The password is wrong */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    otp_enable: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WithCode"];
+            };
+        };
+        responses: {
+            /** @description Enabled; the recovery codes are shown once */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecoveryCodes"];
+                };
+            };
+            /** @description The code is wrong */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No setup is waiting */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    otp_setup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WithPassword"];
+            };
+        };
+        responses: {
+            /** @description The secret and its URI; this session continues with a new cookie */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OtpSetup"];
+                };
+            };
+            /** @description The password is wrong */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description A second factor is already enabled */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    change_password: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChangePassword"];
+            };
+        };
+        responses: {
+            /** @description Changed; this session continues with a new cookie */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The current password is wrong */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The new password is not acceptable */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    reset_with_token: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResetWithToken"];
+            };
+        };
+        responses: {
+            /** @description The password was set; all sessions of the user are gone */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The token is not valid or has expired */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The new password is not acceptable */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Too many attempts */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    session_info: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The signed-in user */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionView"];
+                };
+            };
+            /** @description Not signed in */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
                 };
             };
         };
@@ -3954,6 +4636,322 @@ export interface operations {
             };
             /** @description The check could not be made */
             503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    list_users: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The users */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserView"][];
+                };
+            };
+        };
+    };
+    create_user: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateUser"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserView"];
+                };
+            };
+            /** @description The name is taken */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The user is not valid */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    get_user: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The user */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserView"];
+                };
+            };
+            /** @description No such ID */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    update_user: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The revision the change is based on */
+                "If-Match"?: string | null;
+            };
+            path: {
+                /** @description The ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateUser"];
+            };
+        };
+        responses: {
+            /** @description Updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserView"];
+                };
+            };
+            /** @description No such ID */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The name is taken, or the last admin would be disabled */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description It changed since that revision */
+            412: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The user is not valid */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    delete_user: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The revision the deletion is based on */
+                "If-Match"?: string | null;
+            };
+            path: {
+                /** @description The ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such ID */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description It is the last enabled admin */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description It changed since that revision */
+            412: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    clear_user_otp: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Cleared */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such ID */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    set_user_password: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewPassword"];
+            };
+        };
+        responses: {
+            /** @description Set */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such ID */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The password is not acceptable */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    issue_reset: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Issued; the token goes into the reset link */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IssuedReset"];
+                };
+            };
+            /** @description No such ID */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -9,7 +9,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
-import { API_PORT, DNS_PORT, DOH_PORT, DOQ_PORT, DOT_PORT, TOKEN } from './settings.mjs'
+import { API_PORT, DNS_PORT, DOH_PORT, DOQ_PORT, DOT_PORT, PASSWORD, TOKEN, USER } from './settings.mjs'
 
 const binary = process.env.GOETHITE_BIN ?? resolve(import.meta.dirname, '../../target/debug/goethite')
 const dir = mkdtempSync(join(tmpdir(), 'goethite-e2e-'))
@@ -65,6 +65,14 @@ docs = true
 path = "${join(dir, 'goethite.redb')}"
 `,
 )
+
+// The admin the tests sign in as. The store is created here, before the
+// server starts, because a running goethite holds its store file locked.
+const passwordFile = join(dir, 'password.txt')
+writeFileSync(passwordFile, PASSWORD)
+execFileSync(binary, ['user', 'add', USER, '--password-file', passwordFile, '--config', config], {
+	stdio: 'inherit',
+})
 
 const child = spawn(binary, ['run', '--config', config], { stdio: 'inherit' })
 const stop = () => {

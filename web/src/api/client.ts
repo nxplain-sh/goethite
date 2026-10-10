@@ -3,7 +3,6 @@
 
 import createClient from 'openapi-fetch'
 
-import { currentToken } from '../auth'
 import type { components, paths } from './schema'
 
 export type Schemas = components['schemas']
@@ -45,6 +44,9 @@ export type BlockResponseKind = Schemas['BlockResponseKind']
 export type ManagedBy = Schemas['ManagedBy']
 export type AuditEntry = Schemas['AuditEntry']
 export type ClusterStatus = Schemas['ClusterStatus']
+export type SessionView = Schemas['SessionView']
+export type UserView = Schemas['UserView']
+export type Role = Schemas['Role']
 
 /** The If-Match header for a change based on `revision`. */
 export function ifMatch(revision: number): { 'If-Match': string } {
@@ -76,16 +78,6 @@ export class ApiError extends Error {
 }
 
 export const api = createClient<paths>({ baseUrl: '' })
-
-api.use({
-	onRequest({ request }) {
-		const value = currentToken()
-		if (value !== null) {
-			request.headers.set('Authorization', `Bearer ${value}`)
-		}
-		return request
-	},
-})
 
 type Result<T> =
 	| { data: T; error?: never; response: Response }

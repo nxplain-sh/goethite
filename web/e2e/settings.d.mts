@@ -4,6 +4,8 @@ export declare const DOT_PORT: number
 export declare const DOH_PORT: number
 export declare const DOQ_PORT: number
 export declare const TOKEN: string
+export declare const USER: string
+export declare const PASSWORD: string
 export declare const MEMBER_API_PORT: number
 export declare const MEMBER_DNS_PORT: number
 export declare const MEMBER_CLUSTER_PORT: number

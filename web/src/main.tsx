@@ -9,15 +9,13 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 
 import { ApiError } from './api/client'
-import { clearToken } from './auth'
 import { createAppRouter } from './router'
 
-/** A 401 means the token is missing or no longer valid: sign in again. */
+/** A 401 means there is no session: sign in again. */
 function onError(error: unknown) {
 	if (error instanceof ApiError && error.status === 401) {
-		clearToken()
 		const { pathname, href } = router.state.location
-		if (pathname !== '/login') {
+		if (pathname !== '/login' && pathname !== '/reset') {
 			void router.navigate({ to: '/login', search: { redirect: href } })
 		}
 	}

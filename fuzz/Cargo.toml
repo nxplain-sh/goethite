@@ -139,6 +139,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "parse-totp-secret"
+path = "fuzz_targets/parse-totp-secret.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "parse-vrrp"
 path = "fuzz_targets/parse-vrrp.rs"
 test = false
