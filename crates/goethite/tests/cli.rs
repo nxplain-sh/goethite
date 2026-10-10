@@ -488,6 +488,35 @@ mod serving {
         );
     }
 
+    /// The DNS server starts first: a control plane that cannot start, such
+    /// as an API certificate that does not parse, leaves the node answering
+    /// queries.
+    #[test]
+    fn answers_when_the_control_plane_cannot_start() {
+        let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+        let (cert, key) = (dir.join("bad_api.crt"), dir.join("bad_api.key"));
+        std::fs::write(&cert, "not a certificate").unwrap();
+        std::fs::write(&key, "not a key").unwrap();
+        let config = format!(
+            "[server]\nlisten = \"127.0.0.1:0\"\n\n[[upstream]]\naddress = \"{}\"\n\n\
+             [api]\nlisten = \"127.0.0.1:0\"\ntls_cert = {:?}\ntls_key = {:?}\n",
+            upstream(),
+            cert.display().to_string(),
+            key.display().to_string()
+        );
+        let mut server = Running::start_config("control_plane_fails", &config);
+        server.wait_for_log("cannot start the control plane");
+        let udp = field(&server.find_log(DNS_LISTENING), "udp");
+        let answer = ask(udp, "example.com.");
+        assert_eq!(answer.metadata.response_code, ResponseCode::NoError);
+        assert_eq!(
+            answer.answers[0].data,
+            RData::A(A(Ipv4Addr::new(192, 0, 2, 53)))
+        );
+        server.signal("TERM");
+        assert!(server.wait_for_exit().success());
+    }
+
     /// Nothing reads goethite's log any more (its supervisor died, a pipe
     /// closed): it goes on answering, and still stops on SIGTERM.
     #[test]

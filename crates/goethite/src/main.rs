@@ -523,9 +523,10 @@ async fn serve(
         started: Timestamp::now(),
         leak,
     };
-    let mut plane = Some(
-        plane::ControlPlane::start(config, config_path, &sockets, secrets, &data, true).await?,
-    );
+    // The control plane may fail to start (a certificate that is not valid
+    // yet, a store that cannot be used): the node then answers without it
+    // rather than not at all.
+    let mut plane = start_control_plane(config, config_path, &sockets, secrets, &data).await?;
     let mut dns = tokio::spawn(server.run(until(stopped.clone())));
     for (name, fd) in sockets.named() {
         notify::store(name, fd);
@@ -579,6 +580,26 @@ async fn serve(
         plane.stop().await?;
     }
     Ok(())
+}
+
+/// Starts the control plane. Under fail-closed filtering a failure is the
+/// operator's choice not to run unfiltered, so it is returned; any other
+/// failure is logged and the node answers without the control plane.
+async fn start_control_plane(
+    config: &Config,
+    config_path: &Path,
+    sockets: &Sockets,
+    secrets: &Secrets,
+    data: &plane::DataPlane,
+) -> Result<Option<plane::ControlPlane>> {
+    match plane::ControlPlane::start(config, config_path, sockets, secrets, data, true).await {
+        Ok(plane) => Ok(Some(plane)),
+        Err(err) if config.filter.on_failure == config::OnFailure::Closed => Err(err),
+        Err(err) => {
+            error!("cannot start the control plane: {err:#}; answering queries without it");
+            Ok(None)
+        }
+    }
 }
 
 /// Where the upgrade's private socket goes: systemd's runtime directory
