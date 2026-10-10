@@ -9,7 +9,6 @@ mod filterlists;
 mod filters;
 mod handoff;
 mod lists;
-mod metrics;
 mod migrate;
 mod node;
 mod notify;
@@ -21,6 +20,7 @@ mod secrets;
 mod services;
 mod sizes;
 mod sockets;
+mod telemetry;
 mod vrrp;
 mod witness;
 
@@ -472,7 +472,7 @@ async fn serve(
     let mut upgrades = upgrade_signal()?;
     let state = Arc::new(PolicyState::new(Policy::none()));
     let resolver = Arc::new(resolver(config, &state)?);
-    let metrics = Arc::new(metrics::Metrics::default());
+    let telemetry = telemetry::Telemetry::from_config(config)?;
     let observer_log = Arc::new(ArcSwapOption::empty());
     let leak = Arc::new(LeakTests::new());
     let mut server = Server::new(
@@ -482,7 +482,7 @@ async fn serve(
     )?
     .with_observer(Arc::new(observe::Observer::new(
         Arc::clone(&observer_log),
-        Arc::clone(&metrics),
+        telemetry.queries(),
         Arc::clone(&leak),
     )?));
     let dns_cert = match (&config.server.tls, &secrets.dns_tls) {
@@ -496,11 +496,11 @@ async fn serve(
         (Some(_), None) => anyhow::bail!("the DNS certificate is missing"),
         (None, _) => None,
     };
+    telemetry.observe(&resolver, &server.stats());
     let data = plane::DataPlane {
         resolver,
         state,
-        metrics,
-        server: server.stats(),
+        telemetry: Arc::new(telemetry),
         log: observer_log,
         dns_cert,
         started: Timestamp::now(),
@@ -558,6 +558,7 @@ async fn serve(
     if let Some(plane) = plane {
         plane.stop().await?;
     }
+    data.telemetry.shutdown();
     Ok(())
 }
 
@@ -676,7 +677,7 @@ fn api(
     config: &Config,
     control: &Arc<Control>,
     log: &Arc<goethite_store::QueryLog>,
-    node: node::Node,
+    node: Arc<node::Node>,
     tls: Option<Arc<rustls::ServerConfig>>,
 ) -> Arc<Api> {
     let token = config.api.token().ok().flatten();
@@ -713,7 +714,7 @@ fn api(
     Arc::new(Api {
         store: Arc::clone(control.store()),
         log: Arc::clone(log),
-        control: Arc::new(node),
+        control: node,
         config: ApiConfig {
             token,
             tls,

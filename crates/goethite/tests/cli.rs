@@ -1220,6 +1220,48 @@ mod serving {
         assert!(server.wait_for_exit().success());
     }
 
+    /// `/metrics` serves the data plane's and the control plane's metrics
+    /// under the names they had before OpenTelemetry (ADR 0034).
+    #[test]
+    fn serves_metrics() {
+        let mut server = Running::start("metrics", upstream());
+        let udp = field(&server.wait_for_log(DNS_LISTENING), "udp");
+        let api_addr = field(&server.find_log("API listening"), "address");
+        ask(udp, "example.com.");
+        ask(udp, "example.com.");
+
+        let mut stream = TcpStream::connect(api_addr).unwrap();
+        stream.set_read_timeout(Some(WAIT)).unwrap();
+        let (status, _, body) = request(&mut stream, "localhost", "GET /metrics HTTP/1.1", b"");
+        assert_eq!(status, 200);
+        let text = String::from_utf8(body).unwrap();
+        for line in [
+            "goethite_queries_total{outcome=\"forwarded\",protocol=\"udp\"} 1",
+            "goethite_queries_total{outcome=\"cached\",protocol=\"udp\"} 1",
+            "goethite_query_duration_seconds_count 2",
+            "goethite_cache_lookups_total{result=\"hit\"} 1",
+            "goethite_protection_enabled 1",
+            "goethite_protection_paused 0",
+            "goethite_filter_lists{state=\"enabled\"} 0",
+            "goethite_querylog_dropped_total 0",
+            "goethite_degraded 0",
+            "# TYPE goethite_queries_total counter",
+        ] {
+            assert!(
+                text.lines().any(|l| l == line),
+                "missing {line:?} in\n{text}"
+            );
+        }
+        assert!(
+            text.lines()
+                .any(|l| l.starts_with("goethite_filter_rules ")),
+            "{text}"
+        );
+        assert!(!text.contains("otel_scope"), "{text}");
+        server.signal("TERM");
+        assert!(server.wait_for_exit().success());
+    }
+
     #[test]
     fn serves_then_stops_on_sigterm() {
         serves_then_stops_on("TERM");

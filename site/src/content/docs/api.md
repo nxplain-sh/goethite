@@ -161,6 +161,22 @@ scrape_configs:
       - targets: ["dns.example.lan:8053"]
 ```
 
+goethite keeps these metrics with the OpenTelemetry SDK and serves them through its Prometheus
+reader, under the same names as before. An OpenTelemetry Collector reads them with its
+`prometheus` receiver and the same scrape configuration:
+
+```yaml
+receivers:
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: goethite
+          authorization:
+            credentials_file: /etc/otelcol/goethite-token
+          static_configs:
+            - targets: ["dns.example.lan:8053"]
+```
+
 ## The OpenAPI document
 
 `goethite openapi` prints the OpenAPI 3.1 document, which `/api/v1/openapi.json` also serves.

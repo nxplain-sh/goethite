@@ -31,6 +31,10 @@ goethite-server.workspace = true
 goethite-store.workspace = true
 goethite-tui.workspace = true
 jiff.workspace = true
+opentelemetry.workspace = true
+opentelemetry_sdk.workspace = true
+opentelemetry-prometheus.workspace = true
+prometheus.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 socket2.workspace = true
@@ -45,11 +49,16 @@ rustix.workspace = true
 seccompiler.workspace = true
 
 [dev-dependencies]
+criterion.workspace = true
 hickory-proto.workspace = true
 proptest.workspace = true
 hyper = { workspace = true, features = ["server"] }
 quinn.workspace = true
 rcgen.workspace = true
+
+[[bench]]
+name = "query-metrics"
+harness = false
 
 [lints]
 workspace = true

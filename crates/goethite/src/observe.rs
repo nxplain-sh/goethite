@@ -11,7 +11,7 @@ use goethite_server::{QueryEvent, QueryObserver, Transport};
 use goethite_store::{LogEvent, LogUpstream, NameBuf, Protocol, QueryLog, QueryOutcome, RuleHit};
 use jiff::Timestamp;
 
-use crate::metrics::Metrics;
+use crate::telemetry::QueryMetrics;
 
 /// Reports queries to the query log and the metrics. It only copies and
 /// queues: it never waits on the disk.
@@ -19,8 +19,8 @@ pub(crate) struct Observer {
     /// The query log, while the control plane runs: it can stop and start
     /// again (on an upgrade) while queries go on.
     log: Arc<ArcSwapOption<QueryLog>>,
-    /// The metrics.
-    metrics: Arc<Metrics>,
+    /// The per-query metrics.
+    metrics: Arc<QueryMetrics>,
     /// [`HEALTH_NAME`]: health checks are counted in the metrics, but kept
     /// out of the query log, which they would fill.
     health: Name,
@@ -36,7 +36,7 @@ impl Observer {
     /// Never in practice: [`HEALTH_NAME`] is a valid name.
     pub(crate) fn new(
         log: Arc<ArcSwapOption<QueryLog>>,
-        metrics: Arc<Metrics>,
+        metrics: Arc<QueryMetrics>,
         leak: Arc<LeakTests>,
     ) -> Result<Self, goethite_proto::NameError> {
         Ok(Self {

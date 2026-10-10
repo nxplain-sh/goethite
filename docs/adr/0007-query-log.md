@@ -1,6 +1,6 @@
 # ADR 0007: Query log and statistics off the hot path, in the store
 
-- **Status:** Accepted
+- **Status:** Accepted; the metrics are extended by [ADR 0034](0034-opentelemetry.md)
 - **Date:** 2026-10-08
 
 ## Context

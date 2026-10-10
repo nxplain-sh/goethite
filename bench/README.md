@@ -92,6 +92,28 @@ criterion's point estimates; Change is its estimate of the difference:
 The lookups move by a few nanoseconds either way; the profile is kept for the 24% smaller binary
 (less to download, verify and map on small arm64 hosts) at the cost of slower release builds.
 
+### Query metrics
+
+Counting one answered query (`cargo bench -p goethite --bench query-metrics`). The bench compares
+three ways of counting:
+
+- v0.5.0's relaxed atomics, copied into the bench;
+- the OpenTelemetry instruments that replaced them, bound once at start as goethite binds them
+  ([ADR 0034](../docs/adr/0034-opentelemetry.md));
+- the same instruments unbound, for scale.
+
+Apple M3 Pro, macOS, 2026-10-10, on a busy host (load average about 40), so compare the rows
+rather than the absolute times:
+
+| | Per query |
+| --- | --- |
+| `query metrics/v0.5.0 atomics` | 3.2 ns |
+| `query metrics/otel bound` | 14.5 ns |
+| `query metrics/otel unbound` | 86 ns |
+
+Bound instruments add about 11 ns to a query, about 3% of `resolve/cached answer`. Unbound ones
+would add a read lock and a hash of the attributes, about six times as much.
+
 ## End-to-end with dnsperf
 
 [`dnsperf.sh`](dnsperf.sh) drives a running goethite with
