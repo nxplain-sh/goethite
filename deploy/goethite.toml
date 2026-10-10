@@ -18,6 +18,12 @@
 # guide explains both: https://nxplain-sh.github.io/goethite/install/
 listen = ["0.0.0.0:53", "[::]:53"]
 
+# A fresh install answers only the addresses a local network can hold:
+# loopback, 10/8, 172.16/12, 192.168/16, link-local, carrier-grade NAT and
+# the IPv6 unique-local and link-local ranges. Widen the allowed list in the
+# web UI's Settings (or `access` in the API) before clients outside them are
+# answered; on a public server they are refused meanwhile.
+
 # Quad9 over DNS over TLS. Replace these with the resolvers you trust.
 [[upstream]]
 address = "9.9.9.9"

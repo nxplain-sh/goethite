@@ -15,7 +15,9 @@ talking to the attacker's site, so the page can reach devices that were never me
 to the internet.
 
 goethite removes such answers: when a forwarded answer for a public name contains an A or AAAA
-record with a private address, that record is dropped before the answer is cached or sent. These
+record with a private address, that record is dropped before the answer is cached or sent, and the
+`ipv4hint` and `ipv6hint` parameters of an `HTTPS` or `SVCB` record (RFC 9460) lose their private
+addresses too, since a client may connect to a hint before the A and AAAA records arrive. These
 addresses count as private:
 
 | Range | What it is |
@@ -26,6 +28,7 @@ addresses count as private:
 | `169.254.0.0/16`, `fe80::/10` | link-local |
 | `0.0.0.0/8`, `::` | "this host" and unspecified |
 | `fc00::/7` | unique local IPv6 (RFC 4193) |
+| `64:ff9b:1::/48` | local-use NAT64 (RFC 8215) |
 
 IPv4 addresses mapped into IPv6 (`::ffff:192.168.1.1`) are checked as IPv4. The question name
 decides, not the names in the answer: a public name that is a CNAME for `printer.lan` still loses
@@ -47,12 +50,18 @@ goethite gives itself, such as blocked names answered with `0.0.0.0`, are never 
 
 ## Access control
 
-goethite answers every client that reaches it unless you list who may use it. In the web UI's
-**Settings**, or through the API (`access` in `/api/v1/settings`), two lists take addresses,
-networks in CIDR notation and [client IDs](../encrypted-dns/#client-ids):
+A new node answers only the clients a local network can hold: loopback, the RFC 1918 ranges,
+link-local, carrier-grade NAT and the IPv6 unique-local and link-local ranges. It is not an open
+resolver on a public host unless you widen the list. When you edit the list, yours applies, and an
+empty allowed list means every client is answered. In the web UI's **Settings**, or through the
+API (`access` in `/api/v1/settings`), two lists take addresses, networks in CIDR notation and
+[client IDs](../encrypted-dns/#client-ids):
 
 - **Allowed clients:** when not empty, only these are answered.
 - **Blocked clients:** never answered, even when allowed.
+
+The defaults are `127.0.0.0/8`, `::1`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`,
+`169.254.0.0/16`, `fe80::/10`, `fc00::/7` and `100.64.0.0/10`.
 
 Both apply: with `192.168.1.0/24` allowed and `192.168.1.66` blocked, every device on the network
 but one is answered. The lists are part of the replicated configuration, so in a cluster they are

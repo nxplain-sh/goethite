@@ -99,7 +99,7 @@ three ways of counting:
 
 - v0.5.0's relaxed atomics, copied into the bench;
 - the OpenTelemetry instruments that replaced them, bound once at start as goethite binds them
-  ([ADR 0034](../docs/adr/0034-opentelemetry.md));
+  ([ADR 0040](../docs/adr/0040-opentelemetry.md));
 - the same instruments unbound, for scale.
 
 Apple M3 Pro, macOS, 2026-10-10, on a busy host (load average about 40), so compare the rows
@@ -235,7 +235,7 @@ v0.5.0 is within v0.4.0's range or better in every column, so the sandbox and th
 no regression. As in v0.4.0's run, neither version kept the p99 under a millisecond on this busy
 host; the sub-millisecond target still needs a run on a quiet machine before it can be claimed.
 
-2026-10-10, OpenTelemetry ([ADR 0034](../docs/adr/0034-opentelemetry.md); commit `37f2f5a`)
+2026-10-10, OpenTelemetry ([ADR 0040](../docs/adr/0040-opentelemetry.md); commit `37f2f5a`)
 against v0.5.0 (the release binary), same VM, interleaved in the same session. The Mac was quiet
 this time (load average under 2).
 

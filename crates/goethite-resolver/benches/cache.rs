@@ -44,6 +44,7 @@ fn query(name: &str) -> Query {
             udp_payload_size: 1232,
             dnssec_ok: false,
             padding: false,
+            extended_error: None,
         }),
     }
 }

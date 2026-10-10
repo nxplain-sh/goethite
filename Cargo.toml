@@ -65,7 +65,7 @@ landlock = "0.4.7"
 # Raft for the cluster's configuration (ADR 0031). 0.9 is the stable line; storage-v2
 # lets goethite keep the log and the state machine in its own store.
 openraft = { version = "=0.9.25", default-features = false, features = ["serde", "storage-v2"] }
-# OpenTelemetry for metrics, logs and traces (ADR 0034). Bound instruments keep
+# OpenTelemetry for metrics, logs and traces (ADR 0040). Bound instruments keep
 # a query's metrics to one atomic update per instrument: no lock, no hashing.
 opentelemetry = { version = "0.33.1", default-features = false, features = ["metrics", "logs", "trace", "experimental_metrics_bound_instruments"] }
 opentelemetry_sdk = { version = "0.33.1", default-features = false, features = ["metrics", "logs", "trace", "experimental_metrics_bound_instruments"] }

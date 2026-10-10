@@ -48,6 +48,7 @@ pub(crate) fn query() -> impl Strategy<Value = Query> {
                 udp_payload_size,
                 dnssec_ok,
                 padding,
+                extended_error: None,
             }),
         })
 }

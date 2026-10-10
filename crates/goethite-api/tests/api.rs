@@ -704,6 +704,23 @@ async fn flushing_the_cache_is_audited() {
 }
 
 #[tokio::test]
+async fn a_fresh_store_answers_local_networks_only() {
+    let server = start(true);
+    let settings = server.get("/api/v1/settings").await;
+    assert_eq!(
+        settings.body["spec"]["access"],
+        json!({
+            "allowed": [
+                "127.0.0.0/8", "::1", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
+                "169.254.0.0/16", "fe80::/10", "fc00::/7", "100.64.0.0/10"
+            ],
+            "blocked": []
+        }),
+        "a fresh store answers local networks only"
+    );
+}
+
+#[tokio::test]
 async fn pausing_refreshing_settings_and_observing() {
     let server = start(false);
     let paused = server
@@ -738,10 +755,6 @@ async fn pausing_refreshing_settings_and_observing() {
 
     let settings = server.get("/api/v1/settings").await;
     assert_eq!(settings.body["spec"]["protection"], true);
-    assert_eq!(
-        settings.body["spec"]["access"],
-        json!({"allowed": [], "blocked": []})
-    );
     let mut spec = settings.body["spec"].clone();
     spec["protection"] = json!(false);
     spec["access"]["blocked"] = json!(["192.168.1.5/24"]);
@@ -1814,4 +1827,17 @@ async fn user_changes_are_audited_without_secrets() {
         entry
     );
     assert!(!audit.text.contains("argon2"), "no hash in the audit log");
+}
+
+/// The documented dual-stack pair binds side by side: the IPv6 wildcard must
+/// be `IPV6_V6ONLY`, or it holds the IPv4 wildcard too and the second bind
+/// fails with "address in use".
+#[test]
+fn binds_dual_stack_wildcards() {
+    let Ok(ipv6) = ApiListeners::bind(&["[::]:0".parse().unwrap()]) else {
+        return; // this host has no IPv6
+    };
+    let port = ipv6.local_addrs().unwrap()[0].port();
+    let v4: SocketAddr = format!("0.0.0.0:{port}").parse().unwrap();
+    ApiListeners::bind(&[v4]).unwrap();
 }

@@ -854,6 +854,7 @@ mod tests {
                 udp_payload_size: 4096,
                 dnssec_ok: false,
                 padding: false,
+                extended_error: None,
             }),
         }
     }

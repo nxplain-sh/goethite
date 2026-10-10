@@ -76,8 +76,8 @@ not cover it.
 | Hosts lines with a real address as the answer | Yes | No (address ignored) | No | No (skipped) |
 | CNAME uncloaking | Yes, and answer IPs | Yes | No | Yes |
 | Blocked answer | 5 modes, including a custom IP | 5 modes, including an IP and NODATA | `0.0.0.0` / `::`, fixed | Null IP, NXDOMAIN or REFUSED |
-| Extended DNS Error on blocked answers | No ("not yet") | Yes, EDE 15 by default | Not checked | No |
-| Safe search | 7 engines | No | No | 4 engines |
+| Extended DNS Error on blocked answers | No ("not yet") | Yes, EDE 15 by default | Not checked | Yes, EDE 15 |
+| Safe search | 7 engines | No | No | 7 engines |
 | Blocked services | 142 services | No | No | Yes, AdGuard's catalog |
 | Safe browsing via a cloud lookup | Yes, hash prefixes to AdGuard | No | No | No |
 | Rebinding protection | As a filter list | Not by default | Opt-in | On by default |
@@ -95,7 +95,7 @@ not cover it.
 | Schedules | Blocked services only, one window a day | No | No | Lists and blocked services, weekly windows |
 | Client identification | IP, CIDR, MAC (with its own DHCP), client ID | IP, CIDR, MAC, hostname, interface, ECS | IP, CIDR | IP, CIDR, client ID |
 | Upstreams per client | Yes | No | No | No |
-| Access control | Allowed and disallowed clients | Listening modes | `allow_from` | Allowed and blocked clients |
+| Access control | Allowed and disallowed clients | Listening modes | `allow_from` | Allowed and blocked clients, local networks by default |
 | Rate limiting | 20 queries/s per /24 or /56, dropped | 1000 per minute per client, REFUSED | No (#378) | Per client, every transport |
 
 ### Resolution
@@ -134,7 +134,7 @@ not cover it.
 | API description | Hand-written OpenAPI | OpenAPI, embedded | None | OpenAPI generated from the code, breaking changes checked |
 | Prometheus metrics | No (#516) | No; JSON metrics | No | Yes |
 | Query log | JSON file, 90 days | SQLite, 91 days | Last 1,000, in memory | 7 days, up to 1,000,000 entries |
-| Authentication | Users with bcrypt hashes, no roles, no 2FA | Password, one app password, TOTP | Token; loopback exempt | One admin token |
+| Authentication | Users with bcrypt hashes, no roles, no 2FA | Password, one app password, TOTP | Token; loopback exempt | Users, roles and sessions, TOTP optional |
 | Backup and restore | No (#1147) | Teleporter archive | No | No file export; `goethite migrate` |
 | Terminal UI | Third-party | PADD | No | `goethite tui` |
 | DHCP server | Yes (v4, v6) | Yes (dnsmasq) | No | No |
@@ -166,7 +166,6 @@ users ask.
 | Regex rules | AdGuard Home, Pi-hole | Yes |
 | Hosts lines with a real address, as local answers | AdGuard Home | Yes |
 | Answer filtering by IP (`\|10.*`-style rules) | AdGuard Home | No |
-| Safe search for Ecosia, Pixabay and Yandex | AdGuard Home | No |
 | A rule tester: which rule blocks a name, for which client | AdGuard Home, Numa; Pi-hole (list search) | No |
 | A custom IP as the blocked answer | AdGuard Home, Pi-hole | No |
 
@@ -176,7 +175,6 @@ users ask.
 | --- | --- | --- |
 | Upstreams per domain, while forwarding as well as recursing | All three | Recursing only |
 | Serve stale and prefetch (RFC 8767) | All three serve stale; Numa prefetches | Yes |
-| Extended DNS Errors, at least EDE 15 for blocked answers | Pi-hole | Yes |
 | Firefox canary and iCloud Private Relay answers | Pi-hole | Canary only |
 | DoQ and HTTP/3 upstreams | AdGuard Home | No |
 | Hedged upstream requests (a second query after a delay) | Numa | No |
@@ -190,7 +188,7 @@ users ask.
 | --- | --- | --- |
 | DoH behind a reverse proxy (trusted proxies) | AdGuard Home | Yes |
 | PROXY protocol on listeners | Numa; asked of AdGuard Home (#2798, 95 votes) | No |
-| Several users or scoped tokens, and TOTP | AdGuard Home (several users, no roles); Pi-hole (app password, TOTP) | Scoped tokens only |
+| Scoped API tokens | AdGuard Home (several users, no roles); Pi-hole (app password, TOTP) | Scoped tokens only |
 | Backup and restore of the whole configuration | Pi-hole (Teleporter); asked of AdGuard Home (#1147) | No |
 | Apple configuration profiles for DoT and DoH | AdGuard Home, Numa | No |
 | Client names from reverse DNS, ARP or DHCP leases | AdGuard Home, Pi-hole | No |

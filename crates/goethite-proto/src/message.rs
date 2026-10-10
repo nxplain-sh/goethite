@@ -3,6 +3,7 @@
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
+use hickory_proto::rr::rdata::svcb::{IpHint, SvcParamValue};
 use hickory_proto::rr::{RData, rdata};
 use hickory_proto::serialize::binary::BinEncodable;
 
@@ -60,6 +61,10 @@ pub struct Edns {
     /// Padding hides a message's length from someone watching an encrypted
     /// connection; it is pointless, and never used, in plain DNS.
     pub padding: bool,
+    /// The info code of an Extended DNS Error (RFC 8914) the message
+    /// carries, without its extra text. Blocked answers use `15`
+    /// ("Blocked"); an upstream's code is relayed as it came.
+    pub extended_error: Option<u16>,
 }
 
 impl Edns {
@@ -69,6 +74,7 @@ impl Edns {
             udp_payload_size: MAX_UDP_PAYLOAD,
             dnssec_ok: false,
             padding: false,
+            extended_error: None,
         }
     }
 }
@@ -250,6 +256,32 @@ impl Record {
             _ => None,
         }
     }
+
+    /// Removes the `ipv4hint` and `ipv6hint` addresses of an `SVCB` or
+    /// `HTTPS` record (RFC 9460 7.3) for which `remove` is true, returning
+    /// how many addresses were there. Other record types are untouched.
+    pub fn prune_svc_hints(&mut self, remove: impl Fn(IpAddr) -> bool) -> usize {
+        let (RData::SVCB(svcb) | RData::HTTPS(rdata::HTTPS(svcb))) = &mut self.data else {
+            return 0;
+        };
+        let mut removed: usize = 0;
+        for (_, value) in &mut svcb.svc_params {
+            match value {
+                SvcParamValue::Ipv4Hint(IpHint(hints)) => {
+                    let before = hints.len();
+                    hints.retain(|address| !remove(IpAddr::V4(address.0)));
+                    removed = removed.saturating_add(before.saturating_sub(hints.len()));
+                }
+                SvcParamValue::Ipv6Hint(IpHint(hints)) => {
+                    let before = hints.len();
+                    hints.retain(|address| !remove(IpAddr::V6(address.0)));
+                    removed = removed.saturating_add(before.saturating_sub(hints.len()));
+                }
+                _ => {}
+            }
+        }
+        removed
+    }
 }
 
 /// The size of `records` in wire bytes, with each name written out in full
@@ -412,6 +444,44 @@ mod tests {
     }
 
     #[test]
+    fn svc_hints_lose_the_addresses_asked_for() {
+        use hickory_proto::rr::Name as HickoryName;
+        use hickory_proto::rr::rdata::svcb::{IpHint, SvcParamKey, SvcParamValue as Param, SVCB};
+        use hickory_proto::rr::rdata::{A, AAAA};
+
+        let params = vec![
+            (
+                SvcParamKey::Ipv4Hint,
+                Param::Ipv4Hint(IpHint(vec![
+                    A(Ipv4Addr::new(192, 168, 1, 5)),
+                    A(Ipv4Addr::new(192, 0, 2, 7)),
+                ])),
+            ),
+            (
+                SvcParamKey::Ipv6Hint,
+                Param::Ipv6Hint(IpHint(vec![AAAA("fd00::1".parse().unwrap())])),
+            ),
+        ];
+        let mut record = Record::from_parts(
+            "svc.example.".parse().unwrap(),
+            RecordClass::IN,
+            60,
+            RData::HTTPS(rdata::HTTPS(SVCB::new(
+                1,
+                HickoryName::root(),
+                params,
+            ))),
+        );
+        let removed = record.prune_svc_hints(|ip| match ip {
+            IpAddr::V4(v4) => v4.is_private(),
+            IpAddr::V6(v6) => !v6.is_loopback() && v6.segments()[0] & 0xfe00 == 0xfc00,
+        });
+        assert_eq!(removed, 2, "the 192.168.x and fd00:: hints");
+        // One hint is left: the public 192.0.2.7.
+        assert_eq!(record.prune_svc_hints(|_| true), 1);
+    }
+
+    #[test]
     fn udp_limit_without_edns_is_512() {
         assert_eq!(query(None).max_udp_response_len(), 512);
     }
@@ -423,6 +493,7 @@ mod tests {
                 udp_payload_size: size,
                 dnssec_ok: false,
                 padding: false,
+                extended_error: None,
             })
         };
         assert_eq!(query(edns(100)).max_udp_response_len(), 512);
@@ -436,6 +507,7 @@ mod tests {
             udp_payload_size: 4096,
             dnssec_ok: true,
             padding: true,
+            extended_error: None,
         }));
         let r = Response::for_query(&q, ResponseCode::REFUSED);
         assert_eq!(r.id, 7);
@@ -448,6 +520,7 @@ mod tests {
                 udp_payload_size: MAX_UDP_PAYLOAD,
                 dnssec_ok: true,
                 padding: false,
+                extended_error: None,
             })
         );
         assert_eq!(r.rcode, ResponseCode::REFUSED);

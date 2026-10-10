@@ -12,6 +12,10 @@ configuration format.
 - **Empty the cache**, from the web UI's Settings page or with `POST /api/v1/cache/flush`:
   names resolve again on their next query, without a restart. Filtering and local records are
   untouched.
+- **Blocked answers carry Extended DNS Error 15, "Blocked"** ([RFC
+  8914](https://www.rfc-editor.org/rfc/rfc8914)) when the client asked with EDNS, so `dig` and
+  browsers can tell a filtered name from a broken one. The info code of an upstream's own EDE is
+  relayed unchanged.
 - **Safe search for Ecosia, Pixabay and Yandex**, beside Google, YouTube, Bing and DuckDuckGo:
   Ecosia and Pixabay answer with a CNAME to their safe host, and Yandex, which has no such host,
   answers `A` queries with its fixed safe address `213.180.193.56`.
@@ -46,6 +50,14 @@ configuration format.
     API reference regenerated. New web UI pages: sign-in with code, Account, Users, Reset.
   - Argon2id password hashes, TOTP secrets and recovery hashes live in the store (replicated,
     schema version 3) and are never written to the audit log or any response.
+
+### Changed
+
+- **A fresh node answers local networks only.** The allowed list starts with loopback, the RFC
+  1918 ranges, link-local, carrier-grade NAT and the IPv6 unique-local and link-local ranges, so
+  an install on a public host is not an open resolver; an empty list still means every client is
+  answered, and existing nodes keep the list in their store. See [access
+  control](https://nxplain-sh.github.io/goethite/security/#access-control).
 
 ## [0.6.0] - 2026-10-10
 
@@ -86,7 +98,7 @@ configuration format.
 
 ### Changed
 
-- **Metrics are kept by the OpenTelemetry SDK** ([ADR 0034](docs/adr/0034-opentelemetry.md)),
+- **Metrics are kept by the OpenTelemetry SDK** ([ADR 0040](docs/adr/0040-opentelemetry.md)),
   the first step towards OpenTelemetry for metrics, logs and traces. `/metrics` serves the same
   families, labels, help and types as before, through the SDK's Prometheus reader, so scrapes and
   dashboards keep working. Small differences:
@@ -120,6 +132,16 @@ configuration format.
 
 ### Fixed
 
+- DNS rebinding protection strips the private `ipv4hint` and `ipv6hint` addresses of `SVCB` and
+  `HTTPS` answers too (RFC 9460 7.3), beside the A and AAAA records, and the local-use NAT64
+  prefix `64:ff9b:1::/48` (RFC 8215) counts as private.
+- The seccomp filter denies the x32 system calls on x86-64: they share the x86-64 audit
+  architecture and their numbers matched no rule, so a system call the filter takes away was
+  reachable as its x32 number on a kernel built with x32 support.
+- The API, cluster and witness listeners bind with `IPV6_V6ONLY` like the DNS ones, so the
+  documented dual-stack pair `listen = ["0.0.0.0:8053", "[::]:8053"]` starts instead of failing
+  with "address in use"; a `[::]` listener alone is IPv6-only, and IPv4 peers no longer arrive as
+  `::ffff:a.b.c.d`.
 - Deleting a filter list in the web UI no longer fails with a conflict when a group started using
   it after the page loaded, such as the default group just after the list was created: the UI
   checks which groups use the list at the moment it deletes it.

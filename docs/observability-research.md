@@ -2,7 +2,7 @@
 
 > **Outcome (2026-10-10):** goethite went OpenTelemetry-native against this report's
 > recommendation, keeping `/metrics` unchanged and the per-query cost low with bound instruments.
-> See [ADR 0034](adr/0034-opentelemetry.md). The report stands as written.
+> See [ADR 0040](adr/0040-opentelemetry.md). The report stands as written.
 
 This report asks whether goethite should use OpenTelemetry (OTel) for metrics, logs and traces.
 It compares OTel with what goethite v0.5.0 does today (commit `9cb816c`) and with the realistic

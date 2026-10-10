@@ -410,7 +410,7 @@ impl ApiSection {
 const TELEMETRY_INTERVAL: (u64, u64) = (10, 3600);
 
 /// The `[telemetry]` table: sending telemetry to an OpenTelemetry collector
-/// over OTLP/HTTP (ADR 0034). Nothing is sent without an endpoint.
+/// over OTLP/HTTP (ADR 0040). Nothing is sent without an endpoint.
 #[expect(
     clippy::struct_excessive_bools,
     reason = "independent on/off switches in the config file"
