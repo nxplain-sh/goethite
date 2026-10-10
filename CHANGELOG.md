@@ -19,6 +19,11 @@ configuration format.
   hostNetwork=true` answers on every node's port 53 instead, with real client addresses. CI lints
   the chart and renders its shapes. See
   [Install on Linux](https://nxplain-sh.github.io/goethite/install/#on-kubernetes-helm).
+- **An install script**, served from the site as
+  `curl -fsSL https://nxplain-sh.github.io/goethite/install.sh | sh`: it picks the package or the
+  tarball for the machine, checks the download against the release's `SHA256SUMS` and installs
+  goethite without starting it. The landing page now shows it beside the container and Helm
+  options.
 
 ## [0.6.0] - 2026-10-10
 

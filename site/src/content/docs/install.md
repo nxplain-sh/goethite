@@ -16,12 +16,26 @@ same bytes.
 
 ## Install
 
+### The install script
+
+On amd64 and arm64, one command picks the package or the tarball for this distribution, checks
+the download against the release's `SHA256SUMS`, and installs goethite without starting it:
+
+```sh
+curl -fsSL https://nxplain-sh.github.io/goethite/install.sh | sh
+```
+
+`sh -s -- 0.6.0` installs a particular version instead of the latest; so does
+`GOETHITE_VERSION=0.6.0`. The script is served from this site and kept in the repository
+(`site/public/install.sh`), where it can be read first. It checks the download's checksum only;
+for proof that the release workflow built it, see [Verifying releases](../verify/).
+
 ### From a package
 
 On Debian and Ubuntu:
 
 ```sh
-version=0.5.0
+version=0.6.0
 arch=$(dpkg --print-architecture)    # amd64 or arm64
 curl -fLO "https://github.com/nxplain-sh/goethite/releases/download/v$version/goethite_${version}-1_${arch}.deb"
 gh attestation verify "goethite_${version}-1_${arch}.deb" --repo nxplain-sh/goethite
@@ -31,7 +45,7 @@ sudo apt install "./goethite_${version}-1_${arch}.deb"
 On RHEL, Rocky, Alma and Fedora:
 
 ```sh
-version=0.5.0
+version=0.6.0
 arch=$(uname -m)    # x86_64 or aarch64
 curl -fLO "https://github.com/nxplain-sh/goethite/releases/download/v$version/goethite-${version}-1.${arch}.rpm"
 gh attestation verify "goethite-${version}-1.${arch}.rpm" --repo nxplain-sh/goethite
@@ -47,7 +61,7 @@ The package installs `/usr/bin/goethite`, the systemd units, and a config for a 
 On any distribution with glibc 2.34 or newer:
 
 ```sh
-version=0.5.0
+version=0.6.0
 arch=$(uname -m)    # x86_64 or aarch64
 base=https://github.com/nxplain-sh/goethite/releases/download/v$version
 curl -fLO "$base/goethite-$version-$arch-unknown-linux-gnu.tar.gz"
@@ -65,11 +79,11 @@ sudo install -m 0644 goethite.toml /etc/goethite/goethite.toml
 ### In a container
 
 The image is `ghcr.io/nxplain-sh/goethite`, for amd64 and arm64, tagged with each version, its
-minor version (`0.5`) and `latest`. The simplest way to run it is the repository's Compose file,
+minor version (`0.6`) and `latest`. The simplest way to run it is the repository's Compose file,
 with Docker Compose or Podman Compose:
 
 ```sh
-gh attestation verify oci://ghcr.io/nxplain-sh/goethite:0.5 --repo nxplain-sh/goethite
+gh attestation verify oci://ghcr.io/nxplain-sh/goethite:0.6 --repo nxplain-sh/goethite
 mkdir goethite && cd goethite
 curl -fLO https://raw.githubusercontent.com/nxplain-sh/goethite/main/deploy/container/compose.yaml
 docker compose up -d    # or: podman compose up -d
@@ -89,7 +103,7 @@ Without Compose:
 ```sh
 docker run -d --name goethite --restart unless-stopped \
   -p 53:53/udp -p 53:53/tcp -v goethite:/var/lib/goethite \
-  ghcr.io/nxplain-sh/goethite:0.5.0
+  ghcr.io/nxplain-sh/goethite:0.6.0
 ```
 
 The image is distroless: no shell, no package manager, the binary and the C library. Started this
