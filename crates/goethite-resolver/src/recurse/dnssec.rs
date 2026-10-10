@@ -341,6 +341,11 @@ pub(super) fn nsec_nxdomain(name: &Name, proof: &[Record]) -> bool {
     let Some((owner, nsec)) = covering_nsec(proof, name) else {
         return false;
     };
+    // The next name is below `name`: that makes `name` an empty
+    // non-terminal, which exists, so this is no NXDOMAIN proof.
+    if nsec.next.is_within(name) && nsec.next != *name {
+        return false;
+    }
     let encloser = [
         common_ancestor(name, owner),
         common_ancestor(name, &nsec.next),
@@ -392,10 +397,13 @@ pub(super) fn nsec_nodata(name: &Name, qtype: RecordType, proof: &[Record]) -> b
         && nsecs(proof).any(|(owner, nsec)| *owner == wildcard && without(&nsec))
 }
 
-/// NSEC proof for an answer synthesized from a wildcard: `name` itself
-/// does not exist.
-pub(super) fn nsec_wildcard(name: &Name, proof: &[Record]) -> bool {
-    covering_nsec(proof, name).is_some()
+/// NSEC proof for an answer synthesized from the wildcard below `encloser`:
+/// the next closer name does not exist (RFC 4035 5.3.4).
+pub(super) fn nsec_wildcard(name: &Name, encloser: &Name, proof: &[Record]) -> bool {
+    let Some(next_closer) = name.suffix(encloser.label_count().saturating_add(1)) else {
+        return false;
+    };
+    covering_nsec(proof, &next_closer).is_some()
 }
 
 /// The NSEC3 records of a proof, all with the same parameters as the
@@ -983,8 +991,33 @@ mod tests {
         assert!(nsec_nodata(&name("d.example."), T::DS, &insecure));
         // But that delegation NSEC proves nothing about other types there.
         assert!(!nsec_nodata(&name("d.example."), T::TXT, &insecure));
-        assert!(nsec_wildcard(&name("c.example."), &proof));
+        assert!(nsec_wildcard(
+            &name("c.example."),
+            &name("example."),
+            &proof
+        ));
+        // A wildcard at example would need b.example not to exist: an
+        // on-path attacker with b.example's own NSEC is not believed.
+        let attack = vec![nsec("b.example.", "c.example.", &[T::A, T::NSEC, T::RRSIG])];
+        assert!(!nsec_wildcard(
+            &name("a.b.example."),
+            &name("example."),
+            &attack
+        ));
         // An empty non-terminal: b.c.example has records, c.example none.
+        let ent = vec![
+            nsec(
+                "example.",
+                "a.example.",
+                &[T::SOA, T::NS, T::NSEC, T::RRSIG],
+            ),
+            nsec("a.example.", "b.c.example.", &[T::A, T::NSEC, T::RRSIG]),
+        ];
+        assert!(
+            !nsec_nxdomain(&name("c.example."), &ent),
+            "c.example exists"
+        );
+        assert!(nsec_nodata(&name("c.example."), T::TXT, &ent));
         let ent = vec![nsec(
             "a.example.",
             "b.c.example.",

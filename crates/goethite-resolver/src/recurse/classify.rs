@@ -40,8 +40,12 @@ pub enum Kind {
         /// The zone's SOA, for negative caching.
         soa: Option<Record>,
     },
-    /// The name does not exist.
+    /// The name asked, or the end of its CNAME chain, does not exist.
     NxDomain {
+        /// The CNAME chain from the name asked, within the zone.
+        records: Vec<Record>,
+        /// The name the denial is for: the chain's end (RFC 6604).
+        end: Name,
         /// The zone's SOA, for negative caching.
         soa: Option<Record>,
     },
@@ -91,8 +95,17 @@ pub fn classify(response: &Response, zone: &Name, name: &Name, qtype: RecordType
     match response.rcode {
         ResponseCode::NO_ERROR => {}
         ResponseCode::NX_DOMAIN => {
+            // RFC 6604: the denial is for the end of the CNAME chain, not
+            // the name asked, which may well exist.
+            let (records, end) = chain(response, zone, name);
+            if !end.is_within(zone) {
+                // A denial for a name this server does not hold.
+                return Kind::Lame;
+            }
             return Kind::NxDomain {
-                soa: soa(response, zone, name),
+                records,
+                soa: soa(response, zone, &end),
+                end,
             };
         }
         rcode => return Kind::Failed(rcode),
@@ -108,6 +121,30 @@ pub fn classify(response: &Response, zone: &Name, name: &Name, qtype: RecordType
         None if response.authoritative => Kind::NoData { soa: None },
         None => Kind::Lame,
     }
+}
+
+/// The CNAME chain from `name` that stays within `zone`: its records, and
+/// the name it ends at (RFC 6604, for a negative answer).
+fn chain(response: &Response, zone: &Name, name: &Name) -> (Vec<Record>, Name) {
+    let mut records = Vec::new();
+    let mut at = name.clone();
+    let mut seen = HashSet::new();
+    for _ in 0..=MAX_CNAME_CHAIN {
+        if !at.is_within(zone) || !seen.insert(at.clone()) {
+            break;
+        }
+        let Some(cname) = internet(&response.answers)
+            .find(|record| record.record_type() == RecordType::CNAME && record.name() == &at)
+        else {
+            break;
+        };
+        let Some(target) = cname.cname_target() else {
+            break;
+        };
+        records.push(cname.clone());
+        at = target;
+    }
+    (records, at)
 }
 
 /// The CNAME chain from `name` within `zone` and the records of `qtype` at
@@ -433,7 +470,51 @@ mod tests {
                 &name("www.example.com."),
                 RecordType::A
             ),
-            Kind::NxDomain { soa: Some(soa) }
+            Kind::NxDomain {
+                records: Vec::new(),
+                end: name("www.example.com."),
+                soa: Some(soa),
+            }
+        );
+        // An NXDOMAIN with a CNAME applies to the chain's end (RFC 6604).
+        let mut chained = response(ResponseCode::NX_DOMAIN);
+        chained.answers = vec![Record::cname(
+            name("www.example.com."),
+            300,
+            name("missing.example.com."),
+        )];
+        chained.authority = vec![Record::soa(
+            name("example.com."),
+            3_600,
+            name("ns1.example.com."),
+            300,
+        )];
+        let Kind::NxDomain { records, end, soa } = classify(
+            &chained,
+            &name("example.com."),
+            &name("www.example.com."),
+            RecordType::A,
+        ) else {
+            panic!("an NXDOMAIN");
+        };
+        assert_eq!(records.len(), 1, "the chain is kept");
+        assert_eq!(end, name("missing.example.com."));
+        assert!(soa.is_some());
+        // A chain leaving the zone: the server cannot deny the end.
+        let mut leaving = response(ResponseCode::NX_DOMAIN);
+        leaving.answers = vec![Record::cname(
+            name("www.example.com."),
+            300,
+            name("www.example.net."),
+        )];
+        assert_eq!(
+            classify(
+                &leaving,
+                &name("example.com."),
+                &name("www.example.com."),
+                RecordType::A
+            ),
+            Kind::Lame
         );
         // Neither an answer, a referral, a SOA nor authoritative: lame.
         assert_eq!(

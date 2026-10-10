@@ -550,12 +550,19 @@ impl Recursor {
                     minimise = false;
                 }
                 Kind::Answer { .. } | Kind::NoData { .. } | Kind::NxDomain { .. } => {
-                    let (rcode, records, next, soa) = match kind {
+                    let (rcode, found_name, records, next, soa) = match kind {
                         Kind::Answer { records, next } => {
-                            (ResponseCode::NO_ERROR, records, next, None)
+                            (ResponseCode::NO_ERROR, name.clone(), records, next, None)
                         }
-                        Kind::NoData { soa } => (ResponseCode::NO_ERROR, Vec::new(), None, soa),
-                        _ => (ResponseCode::NX_DOMAIN, Vec::new(), None, kind_soa(kind)),
+                        Kind::NoData { soa } => {
+                            (ResponseCode::NO_ERROR, name.clone(), Vec::new(), None, soa)
+                        }
+                        Kind::NxDomain { records, end, soa } => {
+                            (ResponseCode::NX_DOMAIN, end, records, None, soa)
+                        }
+                        Kind::Referral { .. } | Kind::Lame | Kind::Failed(_) => {
+                            return Err(RecurseError::NoServer);
+                        }
                     };
                     let evidence = if self.config.dnssec {
                         dnssec::evidence(&zone, response.answers.iter().chain(&response.authority))
@@ -563,7 +570,7 @@ impl Recursor {
                         Vec::new()
                     };
                     return Ok(Found {
-                        name: name.clone(),
+                        name: found_name,
                         qtype,
                         rcode,
                         records,
@@ -942,7 +949,7 @@ pub fn check_dnssec(
         .collect();
     let _ = dnssec::nsec_nxdomain(name, &proofs);
     let _ = dnssec::nsec_nodata(name, qtype, &proofs);
-    let _ = dnssec::nsec_wildcard(name, &proofs);
+    let _ = dnssec::nsec_wildcard(name, zone, &proofs);
     let _ = dnssec::nsec3_nxdomain(zone, name, &proofs);
     let _ = dnssec::nsec3_nodata(zone, name, qtype, &proofs);
     let _ = dnssec::nsec3_wildcard(zone, name, zone, &proofs);
@@ -1008,13 +1015,6 @@ fn outgoing(name: &Name, qtype: RecordType, randomize: bool, dnssec_ok: bool) ->
             dnssec_ok,
             ..Edns::ours()
         }),
-    }
-}
-
-fn kind_soa(kind: Kind) -> Option<Record> {
-    match kind {
-        Kind::NoData { soa } | Kind::NxDomain { soa } => soa,
-        _ => None,
     }
 }
 
