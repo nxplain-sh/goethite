@@ -203,6 +203,22 @@ fn check_config_rejects_problems() {
             "cannot read the DNS certificate",
         ),
         (
+            "check_bad_telemetry_headers",
+            &format!(
+                "[telemetry]\nendpoint = \"https://collector.example:4318\"\nheaders_file = {:?}\n",
+                config_file("bad_otlp_headers", "x-key secret")
+                    .display()
+                    .to_string()
+            ),
+            "line 1: not \"Name: value\"",
+        ),
+        (
+            "check_missing_telemetry_ca",
+            "[telemetry]\nendpoint = \"https://collector.example:4318\"\n\
+             ca_file = \"/nonexistent/otlp-ca.pem\"\n",
+            "cannot read the telemetry CA",
+        ),
+        (
             "check_bad_dns_certificate",
             &format!(
                 "[server.tls]\ncert = {path:?}\nkey = {path:?}\ndot = \"127.0.0.1:853\"\n",
@@ -1218,6 +1234,206 @@ mod serving {
         assert_eq!(entry["rule"], "||tiktokv.com^");
         server.signal("TERM");
         assert!(server.wait_for_exit().success());
+    }
+
+    /// `/metrics` serves the data plane's and the control plane's metrics
+    /// under the names they had before OpenTelemetry (ADR 0034).
+    #[test]
+    fn serves_metrics() {
+        let mut server = Running::start("metrics", upstream());
+        let udp = field(&server.wait_for_log(DNS_LISTENING), "udp");
+        let api_addr = field(&server.find_log("API listening"), "address");
+        ask(udp, "example.com.");
+        ask(udp, "example.com.");
+
+        let mut stream = TcpStream::connect(api_addr).unwrap();
+        stream.set_read_timeout(Some(WAIT)).unwrap();
+        let (status, _, body) = request(&mut stream, "localhost", "GET /metrics HTTP/1.1", b"");
+        assert_eq!(status, 200);
+        let text = String::from_utf8(body).unwrap();
+        for line in [
+            "goethite_queries_total{outcome=\"forwarded\",protocol=\"udp\"} 1",
+            "goethite_queries_total{outcome=\"cached\",protocol=\"udp\"} 1",
+            "goethite_query_duration_seconds_count 2",
+            "goethite_cache_lookups_total{result=\"hit\"} 1",
+            "goethite_protection_enabled 1",
+            "goethite_protection_paused 0",
+            "goethite_filter_lists{state=\"enabled\"} 0",
+            "goethite_querylog_dropped_total 0",
+            "goethite_degraded 0",
+            "# TYPE goethite_queries_total counter",
+        ] {
+            assert!(
+                text.lines().any(|l| l == line),
+                "missing {line:?} in\n{text}"
+            );
+        }
+        assert!(
+            text.lines()
+                .any(|l| l.starts_with("goethite_filter_rules ")),
+            "{text}"
+        );
+        assert!(!text.contains("otel_scope"), "{text}");
+        server.signal("TERM");
+        assert!(server.wait_for_exit().success());
+    }
+
+    /// A request to the fake collector: its head and its body.
+    struct Received {
+        head: String,
+        body: Vec<u8>,
+    }
+
+    /// A fake OpenTelemetry collector: answers every OTLP request with 200
+    /// and hands it over on the channel.
+    fn collector() -> (SocketAddr, mpsc::Receiver<Received>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (sent, received) = mpsc::channel();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let mut stream = BufReader::new(stream.unwrap());
+                let mut head = String::new();
+                loop {
+                    let mut line = String::new();
+                    if stream.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
+                        break;
+                    }
+                    head.push_str(&line);
+                }
+                let len = head
+                    .lines()
+                    .find_map(|l| {
+                        l.to_ascii_lowercase()
+                            .strip_prefix("content-length:")
+                            .map(|v| v.trim().parse::<usize>().unwrap())
+                    })
+                    .unwrap_or(0);
+                let mut body = vec![0; len];
+                stream.read_exact(&mut body).unwrap();
+                stream
+                    .get_mut()
+                    .write_all(b"HTTP/1.1 200 OK\r\ncontent-type: application/x-protobuf\r\ncontent-length: 0\r\n\r\n")
+                    .unwrap();
+                if sent.send(Received { head, body }).is_err() {
+                    break;
+                }
+            }
+        });
+        (addr, received)
+    }
+
+    /// With `[telemetry] endpoint`, the metrics and the log records go to
+    /// the collector over OTLP/HTTP with the configured headers, and a last
+    /// time on shutdown.
+    #[test]
+    fn sends_telemetry_over_otlp() {
+        let (collector, requests) = collector();
+        let headers = config_file(
+            "otlp_headers",
+            "# the key\nAuthorization: Bearer test-key\n",
+        );
+        let mut server = Running::start_with(
+            "otlp",
+            upstream(),
+            &format!(
+                "\n[telemetry]\nendpoint = \"http://{collector}\"\nheaders_file = {:?}\n\
+                 interval = 3600\n",
+                headers.display().to_string()
+            ),
+        );
+        let udp = field(&server.wait_for_log(DNS_LISTENING), "udp");
+        server.find_log("sending telemetry over OTLP");
+        ask(udp, "example.com.");
+        server.signal("TERM");
+        assert!(server.wait_for_exit().success());
+
+        let mut by_path = std::collections::HashMap::new();
+        while let Ok(request) = requests.recv_timeout(Duration::from_secs(2)) {
+            let path = request.head.split_whitespace().nth(1).unwrap().to_owned();
+            let head = request.head.to_ascii_lowercase();
+            assert!(head.starts_with("post "), "{head}");
+            assert!(
+                head.contains("content-type: application/x-protobuf"),
+                "{head}"
+            );
+            assert!(head.contains("authorization: bearer test-key"), "{head}");
+            by_path
+                .entry(path)
+                .or_insert_with(Vec::new)
+                .extend(request.body);
+        }
+        let contains = |path: &str, text: &str| {
+            by_path
+                .get(path)
+                .is_some_and(|body| body.windows(text.len()).any(|w| w == text.as_bytes()))
+        };
+        for name in [
+            "goethite.queries",
+            "goethite.query.duration",
+            "goethite.cache.lookups",
+            "goethite.filter.rules",
+            "goethite.telemetry.export_failures",
+            "service.name",
+        ] {
+            assert!(
+                contains("/v1/metrics", name),
+                "missing {name} in the metrics"
+            );
+        }
+        // goethite's own lines, not the export's.
+        for line in ["received SIGTERM", "service.name"] {
+            assert!(contains("/v1/logs", line), "missing {line:?} in the logs");
+        }
+        assert!(
+            !contains("/v1/logs", "sending telemetry"),
+            "the export logged itself"
+        );
+    }
+
+    /// With `traces = true`, the slow paths' spans reach the collector:
+    /// the forwarded query (`resolve`, `upstream`) and the API request (by
+    /// its route). The name looked up only with `query_details`.
+    #[test]
+    fn sends_traces_over_otlp() {
+        for details in [false, true] {
+            let (collector, requests) = collector();
+            let mut server = Running::start_with(
+                &format!("otlp_traces_{details}"),
+                upstream(),
+                &format!(
+                    "\n[telemetry]\nendpoint = \"http://{collector}\"\nmetrics = false\n\
+                     logs = false\ntraces = true\ntrace_sample_ratio = 1.0\n\
+                     query_details = {details}\n"
+                ),
+            );
+            let udp = field(&server.wait_for_log(DNS_LISTENING), "udp");
+            let api_addr = field(&server.find_log("API listening"), "address");
+            ask(udp, "traced.example.");
+            let (status, _) = api(api_addr, "GET /api/v1/status HTTP/1.1", "");
+            assert_eq!(status, 200);
+            server.signal("TERM");
+            assert!(server.wait_for_exit().success());
+
+            let mut traces = Vec::new();
+            while let Ok(request) = requests.recv_timeout(Duration::from_secs(2)) {
+                assert!(
+                    request.head.starts_with("POST /v1/traces "),
+                    "{}",
+                    request.head
+                );
+                traces.extend(request.body);
+            }
+            let contains = |text: &str| traces.windows(text.len()).any(|w| w == text.as_bytes());
+            for span in ["resolve", "upstream", "/api/v1/status", "service.name"] {
+                assert!(contains(span), "missing {span} (query_details = {details})");
+            }
+            assert_eq!(
+                contains("traced.example"),
+                details,
+                "query_details = {details}"
+            );
+        }
     }
 
     #[test]

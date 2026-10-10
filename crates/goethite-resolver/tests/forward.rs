@@ -977,3 +977,73 @@ async fn local_records_answer_first_and_lead_to_upstream_answers() {
     assert_eq!(tracker.outcome, Outcome::Blocked);
     assert_eq!(tracker.response.rcode, ResponseCode::NX_DOMAIN);
 }
+
+/// Records the spans opened, and the `name` fields recorded on them.
+#[derive(Clone, Default)]
+struct Spans(Arc<Mutex<(Vec<String>, Vec<String>)>>);
+
+impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for Spans {
+    fn on_new_span(
+        &self,
+        attrs: &tracing::span::Attributes<'_>,
+        _: &tracing::span::Id,
+        _: tracing_subscriber::layer::Context<'_, S>,
+    ) {
+        self.0
+            .lock()
+            .unwrap()
+            .0
+            .push(attrs.metadata().name().to_owned());
+    }
+
+    fn on_record(
+        &self,
+        _: &tracing::span::Id,
+        values: &tracing::span::Record<'_>,
+        _: tracing_subscriber::layer::Context<'_, S>,
+    ) {
+        struct Names<'a>(&'a mut Vec<String>);
+        impl tracing::field::Visit for Names<'_> {
+            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+                if field.name() == "name" {
+                    self.0.push(format!("{value:?}"));
+                }
+            }
+        }
+        values.record(&mut Names(&mut self.0.lock().unwrap().1));
+    }
+}
+
+/// Spans are opened on the slow path only: a forwarded query opens a
+/// `resolve` span with an `upstream` span inside, a cache hit opens none.
+/// The name looked up is on the span only with span details on.
+#[tokio::test]
+async fn spans_only_on_the_slow_path() {
+    use tracing_subscriber::layer::SubscriberExt as _;
+
+    let upstream = fake(always(Ipv4Addr::new(192, 0, 2, 7)), silent()).await;
+    let spans = Spans::default();
+    let _subscriber =
+        tracing::subscriber::set_default(tracing_subscriber::registry().with(spans.clone()));
+    let resolver = Resolver::new(Vec::new())
+        .with_cache(Cache::new(CacheConfig::default()))
+        .with_forwarder(forwarder(vec![UpstreamConfig::udp(upstream.addr)]));
+
+    let first = resolver.resolve(&query("example.com."), CLIENT).await;
+    assert_eq!(first.outcome, Outcome::Upstream(0));
+    assert_eq!(spans.0.lock().unwrap().0, ["resolve", "upstream"]);
+    let again = resolver.resolve(&query("example.com."), CLIENT).await;
+    assert_eq!(again.outcome, Outcome::Cached);
+    assert_eq!(
+        spans.0.lock().unwrap().0.len(),
+        2,
+        "a cache hit opens no span"
+    );
+    assert!(spans.0.lock().unwrap().1.is_empty(), "no names by default");
+
+    let detailed = Resolver::new(Vec::new())
+        .with_forwarder(forwarder(vec![UpstreamConfig::udp(upstream.addr)]))
+        .with_span_details(true);
+    detailed.resolve(&query("named.example."), CLIENT).await;
+    assert_eq!(spans.0.lock().unwrap().1, ["named.example."]);
+}

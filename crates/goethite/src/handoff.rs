@@ -75,10 +75,11 @@ mod linux {
             version: String,
         },
         /// Sockets, attached, in the order of `names`; `more` if another
-        /// message follows. The first carries the keys.
+        /// message follows. The first carries the keys (boxed: they are
+        /// much larger than the other messages).
         Sockets {
             names: Vec<String>,
-            secrets: Option<Secrets>,
+            secrets: Option<Box<Secrets>>,
             more: bool,
         },
         /// The child has the sockets and is ready for the store.
@@ -250,7 +251,7 @@ mod linux {
             for (index, chunk) in chunks.iter().enumerate() {
                 let message = Message::Sockets {
                     names: chunk.iter().map(|(name, _)| (*name).to_owned()).collect(),
-                    secrets: (index == 0).then(|| secrets.clone()),
+                    secrets: (index == 0).then(|| Box::new(secrets.clone())),
                     more: index < last,
                 };
                 let fds: Vec<BorrowedFd<'_>> = chunk.iter().map(|(_, fd)| *fd).collect();
@@ -376,7 +377,7 @@ mod linux {
                             keys = secrets;
                         }
                         if !more {
-                            return Ok((sockets, keys.unwrap_or_default()));
+                            return Ok((sockets, keys.map(|keys| *keys).unwrap_or_default()));
                         }
                     }
                     (other, _) => bail!("unexpected message from the previous goethite: {other:?}"),

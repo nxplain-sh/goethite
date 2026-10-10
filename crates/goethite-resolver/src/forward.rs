@@ -18,7 +18,7 @@ use goethite_proto::{
 use hyper::Uri;
 use rustls::pki_types::ServerName;
 use tokio::time::{Instant, timeout};
-use tracing::{debug, warn};
+use tracing::{Instrument as _, debug, debug_span, field, warn};
 
 use crate::exchange::{self, ExchangeError, OnCaseMismatch};
 use crate::restore_question_case;
@@ -294,35 +294,47 @@ impl Forwarder {
     pub async fn forward_from(&self, query: &Query) -> (Response, Option<usize>) {
         let start = Instant::now();
         let deadline = start.checked_add(self.total_timeout).unwrap_or(start);
-        for (index, upstream) in self.in_order(start) {
+        for (attempt, (index, upstream)) in self.in_order(start).enumerate() {
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
                 break;
             }
             let address = upstream.config.address;
-            let attempt = timeout(
+            let span = debug_span!(
+                "upstream",
+                %address,
+                transport = transport_name(&upstream.config.transport),
+                attempt = attempt.saturating_add(1),
+                result = field::Empty,
+            );
+            let exchange = timeout(
                 left.min(self.attempt_timeout),
                 self.exchange(upstream, query),
-            );
-            match attempt.await {
+            )
+            .instrument(span.clone());
+            match exchange.await {
                 Ok(Ok(response))
                     if matches!(
                         response.rcode,
                         ResponseCode::NO_ERROR | ResponseCode::NX_DOMAIN
                     ) =>
                 {
+                    span.record("result", field::display(response.rcode));
                     upstream.succeeded();
                     return (to_client(query, response), Some(index));
                 }
                 Ok(Ok(response)) => {
+                    span.record("result", field::display(response.rcode));
                     debug!(%address, rcode = %response.rcode, "upstream could not answer");
                     upstream.failed();
                 }
                 Ok(Err(err)) => {
+                    span.record("result", "error");
                     debug!(%address, %err, "upstream exchange failed");
                     upstream.failed();
                 }
                 Err(_) => {
+                    span.record("result", "timeout");
                     debug!(%address, "upstream timed out");
                     upstream.failed();
                 }
@@ -455,4 +467,14 @@ fn to_client(query: &Query, upstream: Response) -> Response {
     response.additional = upstream.additional;
     restore_question_case(&mut response, &query.question.name);
     response
+}
+
+/// How a span names `transport`.
+fn transport_name(transport: &Transport) -> &'static str {
+    match transport {
+        Transport::Udp => "udp",
+        Transport::Tcp => "tcp",
+        Transport::Tls { .. } => "tls",
+        Transport::Https { .. } => "https",
+    }
 }

@@ -201,6 +201,7 @@ impl Control {
     /// runtime, then the policy. The services catalog is read again too. If
     /// compiling fails, the current filter stays. Returns whether the new
     /// filter is in use.
+    #[tracing::instrument(level = "debug", name = "filter.build", skip_all)]
     pub(crate) async fn rebuild_filter(&self) -> bool {
         let _rebuilding = self.rebuilding.lock().await;
         self.reload_services().await;
@@ -340,6 +341,7 @@ impl Control {
     }
 
     /// Downloads every enabled URL list. Returns whether one changed.
+    #[tracing::instrument(level = "debug", name = "lists.refresh", skip_all)]
     async fn download_all(&self, downloader: &Downloader) -> bool {
         let config = self.store.config();
         let mut changed = false;

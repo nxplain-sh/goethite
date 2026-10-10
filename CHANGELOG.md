@@ -9,6 +9,24 @@ configuration format.
 
 ### Added
 
+- **Sending metrics, logs and traces to an OpenTelemetry collector** over OTLP/HTTP, with a new
+  `[telemetry]` table: `endpoint`, a `headers_file` for an API key, a `ca_file` for a private CA,
+  `metrics`, `logs`, `traces`, `trace_sample_ratio`, `query_details` and `interval`.
+  - Nothing is sent without an endpoint, and `/metrics` stays as it was.
+  - Log records are the lines at `INFO` and above. They also still go to standard error,
+    unchanged.
+  - Traces are off by default. With them on, a sampled share (5% by default) of the slow paths
+    is traced: queries that missed the cache, with each upstream attempt or each query to an
+    authoritative server and DNSSEC validation; list downloads; filter builds; Raft calls; API
+    requests. Cache hits, blocks and local answers open no span. Names looked up are on spans
+    only with `query_details = true`.
+  - goethite sends the requests with its own HTTP client: rustls with ring, names resolved
+    through its own upstreams.
+  - Exports never touch the DNS path. Failures are counted in
+    `goethite_telemetry_export_failures_total` and logged once per outage.
+
+  See [Metrics and telemetry](https://nxplain-sh.github.io/goethite/observability/).
+
 - **A Cluster page in the web UI**, on nodes in a cluster: the cluster's health in a word, the
   voters it can lose, a card per member (up or down, leader, voter, witness, version, how many
   changes behind the leader), how this node follows the leader, and the recovery steps where they
@@ -26,6 +44,17 @@ configuration format.
 
 ### Changed
 
+- **Metrics are kept by the OpenTelemetry SDK** ([ADR 0034](docs/adr/0034-opentelemetry.md)),
+  the first step towards OpenTelemetry for metrics, logs and traces. `/metrics` serves the same
+  families, labels, help and types as before, through the SDK's Prometheus reader, so scrapes and
+  dashboards keep working. Small differences:
+  - the upstream metrics list their labels in another order (`protocol` first), which Prometheus
+    ignores;
+  - `goethite_query_duration_seconds_sum` is a sum of seconds rather than of whole microseconds.
+
+  The per-query counters are bound instruments, about 11 ns per query (see
+  [`bench/`](bench/README.md#query-metrics)). An OpenTelemetry Collector can read `/metrics` with
+  its `prometheus` receiver ([API docs](https://nxplain-sh.github.io/goethite/api/#metrics)).
 - goethite is now licensed under the GNU Affero General Public License, version 3 only
   (`AGPL-3.0-only`), instead of MIT OR Apache-2.0. Releases up to and including v0.5.0 keep MIT OR
   Apache-2.0. Contributions come in under Apache-2.0

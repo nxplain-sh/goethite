@@ -56,7 +56,7 @@ The layout follows the [standard Rust project layout](https://github.com/miguelm
 ## Tech stack
 
 - Rust stable, edition 2024, MSRV pinned in `rust-toolchain.toml` and `Cargo.toml`
-- tokio (multi-thread), hickory-proto, axum, utoipa, rustls, arc-swap, fst, redb, serde + toml, tracing, clap, ratatui, thiserror (libraries) / anyhow (binary only)
+- tokio (multi-thread), hickory-proto, axum, utoipa, rustls, arc-swap, fst, redb, serde + toml, tracing, OpenTelemetry (metrics; `/metrics` through its Prometheus reader, [ADR 0034](docs/adr/0034-opentelemetry.md)), clap, ratatui, thiserror (libraries) / anyhow (binary only)
 - Web: Vite+ (`vp`: Vite, Vitest, Oxlint, Oxfmt), React, TypeScript (strict), TanStack Router (SPA, NOT TanStack Start: the strict CSP forbids its inline scripts), TanStack Query, TanStack Table + Virtual; typed API client generated from the OpenAPI spec; served from the binary via rust-embed with an SPA fallback route
 - Site: TanStack Start on Vite+, prerendered to static HTML; Markdown compiled at build time; Pagefind search
 

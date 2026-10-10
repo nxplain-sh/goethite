@@ -12,7 +12,6 @@ use goethite_api::{
     QueryLogStatus, RecursionStatus, Status, UpstreamStatus, Writes,
 };
 use goethite_resolver::{Resolver, Transport};
-use goethite_server::ServerStats;
 use goethite_store::{Actor, QueryLog};
 use jiff::Timestamp;
 use tracing::warn;
@@ -20,8 +19,8 @@ use tracing::warn;
 use crate::cluster::Cluster;
 use crate::control::Control;
 use crate::filterlists::FilterLists;
-use crate::metrics::{self, Metrics};
 use crate::sizes::ListSizes;
+use crate::telemetry;
 
 /// Everything the API reports on and acts through.
 pub(crate) struct Node {
@@ -29,10 +28,8 @@ pub(crate) struct Node {
     pub control: Arc<Control>,
     /// The resolver, for the cache and upstreams.
     pub resolver: Arc<Resolver>,
-    /// What the DNS listeners turned away.
-    pub server: Arc<ServerStats>,
-    /// Per-query counters.
-    pub metrics: Arc<Metrics>,
+    /// The metrics, for `/metrics`.
+    pub metrics: prometheus::Registry,
     /// The query log.
     pub log: Arc<QueryLog>,
     /// Whether queries are logged.
@@ -66,6 +63,11 @@ impl Node {
             ));
         }
         problems
+    }
+
+    /// Whether this node reports problems.
+    pub(crate) fn degraded(&self) -> bool {
+        !self.problems().is_empty()
     }
 }
 
@@ -301,37 +303,7 @@ impl goethite_api::Control for Node {
     }
 
     fn metrics(&self) -> String {
-        let config = self.control.store().config();
-        let upstreams = self
-            .resolver
-            .forwarder()
-            .map(goethite_resolver::Forwarder::upstreams)
-            .unwrap_or_default();
-        metrics::render(&metrics::Sources {
-            metrics: &self.metrics,
-            server: &self.server,
-            cache: self
-                .resolver
-                .cache()
-                .map(|cache| (cache.stats(), cache.len())),
-            upstreams: &upstreams,
-            recursion: self
-                .resolver
-                .recursor()
-                .map(goethite_resolver::Recursor::stats),
-            filter_rules: self.control.compiled().filter.rule_count(),
-            lists: (
-                config.lists.len(),
-                config.lists.iter().filter(|list| list.spec.enabled).count(),
-            ),
-            protection: (
-                config.settings.spec.protection,
-                self.control.state().paused_until().is_some(),
-            ),
-            querylog_dropped: self.log.dropped(),
-            filter_failures: self.resolver.filter_failures(),
-            degraded: !self.problems().is_empty(),
-        })
+        telemetry::render(&self.metrics)
     }
 }
 

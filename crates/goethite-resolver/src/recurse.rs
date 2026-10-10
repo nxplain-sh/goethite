@@ -44,7 +44,7 @@ use goethite_proto::{
 };
 use tokio::sync::Semaphore;
 use tokio::time::{Instant, timeout};
-use tracing::{debug, warn};
+use tracing::{Instrument as _, debug, debug_span, field, warn};
 
 use crate::exchange::{self, ExchangeError, OnCaseMismatch};
 use crate::{MAX_CNAME_CHAIN, restore_question_case};
@@ -258,6 +258,8 @@ pub struct Recursor {
     secure: AtomicU64,
     insecure: AtomicU64,
     bogus: AtomicU64,
+    /// Whether spans name the names asked and the servers asked them.
+    span_details: bool,
 }
 
 impl std::fmt::Debug for Recursor {
@@ -272,6 +274,14 @@ impl Recursor {
     /// A recursor that asks servers over the network.
     pub fn new(config: RecursorConfig) -> Self {
         Self::with_network(config, Arc::new(Sockets))
+    }
+
+    /// Whether the spans of the queries it sends name the name asked and
+    /// the server asked (off by default): both tell what a client looked up.
+    #[must_use]
+    pub fn with_span_details(mut self, on: bool) -> Self {
+        self.span_details = on;
+        self
     }
 
     pub(crate) fn with_network(config: RecursorConfig, network: Arc<dyn Network>) -> Self {
@@ -312,6 +322,7 @@ impl Recursor {
             secure: AtomicU64::new(0),
             insecure: AtomicU64::new(0),
             bogus: AtomicU64::new(0),
+            span_details: false,
         }
     }
 
@@ -356,10 +367,13 @@ impl Recursor {
                 .await?;
             let security = if validate {
                 let mut validation = Validation::new();
-                Some(
-                    self.validate(&mut segments, &mut budget, &mut validation)
-                        .await?,
-                )
+                let span = debug_span!("dnssec", security = field::Empty);
+                let security = self
+                    .validate(&mut segments, &mut budget, &mut validation)
+                    .instrument(span.clone())
+                    .await?;
+                span.record("security", field::debug(security));
+                Some(security)
             } else {
                 None
             };
@@ -713,9 +727,39 @@ impl Recursor {
         Ok(())
     }
 
+    /// Sends one query to `server`, in a span of its own.
+    async fn query(
+        &self,
+        server: SocketAddr,
+        name: &Name,
+        qtype: RecordType,
+        budget: &mut Budget,
+    ) -> Result<Response, RecurseError> {
+        let span = debug_span!(
+            "authoritative",
+            %qtype,
+            server = field::Empty,
+            name = field::Empty,
+            rcode = field::Empty,
+        );
+        if self.span_details {
+            span.record("server", field::display(server));
+            span.record("name", field::display(name));
+        }
+        let result = self
+            .query_unspanned(server, name, qtype, budget)
+            .instrument(span.clone())
+            .await;
+        match &result {
+            Ok(response) => span.record("rcode", field::display(response.rcode)),
+            Err(_) => span.record("rcode", "error"),
+        };
+        result
+    }
+
     /// Sends one query to `server`: over TCP if the answer is truncated,
     /// again without 0x20 if the server does not keep case.
-    async fn query(
+    async fn query_unspanned(
         &self,
         server: SocketAddr,
         name: &Name,

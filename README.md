@@ -19,8 +19,9 @@ with a recommended set of lists, and a whole service (TikTok, YouTube, ...) can 
 group. Clients can reach it over DNS over TLS, HTTPS and QUIC, or Oblivious DNS over HTTPS, be
 known by a client ID wherever they are, and be allowed or refused by address or ID. Clients can
 be put in groups with their own lists, schedules and safe search, and blocking sees through CNAME
-cloaking. It keeps a query log and statistics, exports Prometheus metrics, and is managed through
-a REST API (with an OpenAPI description), a terminal UI and a web UI; every change is
+cloaking. It keeps a query log and statistics, keeps OpenTelemetry metrics that Prometheus
+scrapes at `/metrics`, and is managed through a REST API (with an OpenAPI description), a
+terminal UI and a web UI; every change is
 audit-logged, a DNS leak test shows whether a device's lookups reach it, and `goethite migrate`
 brings a Pi-hole's or AdGuard Home's configuration over. Nodes form a cluster that agrees on one
 configuration with Raft, with a vote-only witness so two nodes survive losing either, and share a
@@ -114,6 +115,8 @@ Benchmarks and how to record them are in [`bench/`](bench/README.md). The layout
 - [Backlog](docs/BACKLOG.md): work noticed along the way and not scheduled yet
 - [Competitor features](docs/competitor-features.md): AdGuard Home, Pi-hole and Numa set against
   goethite
+- [Observability research](docs/observability-research.md): OpenTelemetry against goethite's
+  Prometheus metrics and logs
 
 ## Independent implementation
 
@@ -122,11 +125,14 @@ NextDNS, Numa or any other DNS filter, translated from another language, or used
 What it does comes from the DNS RFCs, the published formats of the filter lists it reads (hosts
 files, domain lists, AdGuard-style rules) and its own design, which the [ADRs](docs/adr/) record.
 
-Other projects were studied, never copied, in two places, both linked so anyone can check them:
+Other projects were studied, never copied, in three places, all linked so anyone can check them:
 
 - [Competitor features](docs/competitor-features.md) records what the other projects do, citing
   their documentation and source, so goethite can decide what to build. It lists features, not
   code.
+- [Observability research](docs/observability-research.md) records how other DNS servers and
+  OpenTelemetry handle metrics, logs and traces, citing their documentation and source. It lists
+  choices, not code.
 - `goethite migrate` reads Pi-hole's and AdGuard Home's web APIs, so the shape of their answers was
   checked against their source, for interoperability only
   ([ADR 0030](docs/adr/0030-migrating-from-pihole-and-adguard-home.md)).

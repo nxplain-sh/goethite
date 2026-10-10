@@ -117,7 +117,8 @@ impl Policy {
 
 /// The files the config file names that goethite reads again after it
 /// starts: certificates and keys (reloaded on `SIGHUP`, or read by an
-/// upgraded goethite) and the services catalog.
+/// upgraded goethite), the telemetry headers and CA (read by an upgraded
+/// goethite) and the services catalog.
 fn files_read(config: &Config) -> Vec<PathBuf> {
     let mut files = Vec::new();
     if let Some(tls) = &config.server.tls {
@@ -133,6 +134,8 @@ fn files_read(config: &Config) -> Vec<PathBuf> {
         ]);
     }
     files.extend(config.filter.services_file.iter().cloned());
+    files.extend(config.telemetry.headers_file.iter().cloned());
+    files.extend(config.telemetry.ca_file.iter().cloned());
     files
 }
 
