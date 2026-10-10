@@ -25,6 +25,10 @@ jobs:
   push:
     name: push the image
     runs-on: ubuntu-24.04
+    # Only the released tag runs this, from the default branch: a dispatched
+    # run from another branch would run that branch's copy of the workflow.
+    if: github.event_name == 'release' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    environment: release
     permissions:
       contents: read
       packages: write # push to ghcr.io
@@ -34,9 +38,15 @@ jobs:
       TAG: ${{ github.event.release.tag_name || inputs.tag }}
       IMAGE: ghcr.io/${{ github.repository }}
     steps:
+      - name: Check the tag
+        run: |
+          if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::$TAG is not a vX.Y.Z release tag"
+            exit 1
+          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ env.TAG }}
+          ref: refs/tags/${{ env.TAG }}
           persist-credentials: false
       - name: Install the pinned toolchain
         run: rustup toolchain install
@@ -59,17 +69,20 @@ jobs:
         env:
           REGISTRY_TOKEN: ${{ github.token }}
         run: echo "$REGISTRY_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
-      # A release gets its version, its minor version and latest; a
-      # pre-release (v0.5.0-rc.1) only its own.
+      # A release gets its version, and the newest release also its minor
+      # version and latest; a pre-release (v0.5.0-rc.1) only its own.
       - name: Build and push the image
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           docker buildx create --use > /dev/null
           version=${TAG#v}
-          if [ "$version" = "${version%-*}" ]; then
-            cargo xtask image --push "$IMAGE:$version" "$IMAGE:${version%.*}" "$IMAGE:latest"
-          else
-            cargo xtask image --push "$IMAGE:$version"
+          set -- "$IMAGE:$version"
+          latest=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)
+          if [ "${version%-*}" = "$version" ] && [ "$latest" = "$TAG" ]; then
+            set -- "$@" "$IMAGE:${version%.*}" "$IMAGE:latest"
           fi
+          cargo xtask image --push "$@"
           echo "DIGEST=$(jq -r '."containerimage.digest"' target/dist/image-metadata.json)" >> "$GITHUB_ENV"
       - name: Attest the image
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2

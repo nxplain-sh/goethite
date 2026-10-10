@@ -83,7 +83,7 @@ configuration format.
 
 ### Changed
 
-- **Metrics are kept by the OpenTelemetry SDK** ([ADR 0034](docs/adr/0034-opentelemetry.md)),
+- **Metrics are kept by the OpenTelemetry SDK** ([ADR 0040](docs/adr/0040-opentelemetry.md)),
   the first step towards OpenTelemetry for metrics, logs and traces. `/metrics` serves the same
   families, labels, help and types as before, through the SDK's Prometheus reader, so scrapes and
   dashboards keep working. Small differences:
@@ -120,6 +120,10 @@ configuration format.
 - The seccomp filter denies the x32 system calls on x86-64: they share the x86-64 audit
   architecture and their numbers matched no rule, so a system call the filter takes away was
   reachable as its x32 number on a kernel built with x32 support.
+- The API, cluster and witness listeners bind with `IPV6_V6ONLY` like the DNS ones, so the
+  documented dual-stack pair `listen = ["0.0.0.0:8053", "[::]:8053"]` starts instead of failing
+  with "address in use"; a `[::]` listener alone is IPv6-only, and IPv4 peers no longer arrive as
+  `::ffff:a.b.c.d`.
 - Deleting a filter list in the web UI no longer fails with a conflict when a group started using
   it after the page loaded, such as the default group just after the list was created: the UI
   checks which groups use the list at the moment it deletes it.

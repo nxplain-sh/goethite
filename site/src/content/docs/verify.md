@@ -74,6 +74,7 @@ it checked first:
 gh attestation verify oci://ghcr.io/nxplain-sh/goethite:0.5.0 \
   --repo nxplain-sh/goethite \
   --signer-workflow nxplain-sh/goethite/.github/workflows/image.yaml \
+  --source-ref refs/tags/v0.5.0 \
   --deny-self-hosted-runners
 ```
 

@@ -1,4 +1,4 @@
-# ADR 0034: Instrument goethite with OpenTelemetry, keeping `/metrics` as it was
+# ADR 0040: Instrument goethite with OpenTelemetry, keeping `/metrics` as it was
 
 - **Status:** Accepted, extends ADR 0007
 - **Date:** 2026-10-10

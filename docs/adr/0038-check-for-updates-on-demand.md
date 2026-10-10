@@ -16,7 +16,7 @@ Constraints:
 - **The control plane is unprivileged.** It cannot replace `/usr/bin/goethite`, and the upgrade
   handover belongs to the operator's step (SIGUSR2, or the package postinstall).
 - **Nothing is sent on its own.** Telemetry only exists once `[telemetry] endpoint` is set
-  ([ADR 0034](0034-opentelemetry.md)); a version check that phones GitHub at startup would break
+  ([ADR 0040](0040-opentelemetry.md)); a version check that phones GitHub at startup would break
   that stance.
 - **A node knows its own version**, reported in `GET /api/v1/status` and shown in the TUI and the
   web UI's Cluster page.
