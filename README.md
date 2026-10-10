@@ -28,8 +28,7 @@ configuration with Raft, with a vote-only witness so two nodes survive losing ei
 floating IP over VRRP; goethite upgrades without dropping a query. It protects against DNS
 rebinding, rate limits clients, pads encrypted messages, drops its privileges after binding port
 53, then confines itself with Landlock and seccomp, and ships hardened systemd units
-([`deploy/systemd/`](deploy/systemd/)). See the [changelog](CHANGELOG.md) and the roadmap in
-[`AGENTS.md`](AGENTS.md#roadmap-respect-the-order).
+([`deploy/systemd/`](deploy/systemd/)). See the [changelog](CHANGELOG.md).
 
 Releases are built reproducibly, with signed build provenance and SBOMs, as tarballs, `.deb` and
 `.rpm` packages for amd64 and arm64, and a container image (`ghcr.io/nxplain-sh/goethite`): see
@@ -114,7 +113,9 @@ Benchmarks and how to record them are in [`bench/`](bench/README.md). The layout
 - [Security policy](SECURITY.md): how to report vulnerabilities
 - [Threat model](docs/THREAT_MODEL.md)
 - [Architecture decision records](docs/adr/)
-- [Backlog](docs/BACKLOG.md): work noticed now that belongs to later phases
+- [Backlog](docs/BACKLOG.md): work noticed along the way and not scheduled yet
+- [Competitor features](docs/competitor-features.md): AdGuard Home, Pi-hole and Numa set against
+  goethite
 
 ## License
 

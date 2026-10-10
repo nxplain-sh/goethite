@@ -1,7 +1,7 @@
 # Contributing to goethite
 
 Thanks for your interest. goethite is pre-alpha. Read [`AGENTS.md`](AGENTS.md) first: it
-defines the architecture, security rules, conventions and roadmap, and it binds humans and coding
+defines the architecture, security rules and conventions, and it binds humans and coding
 agents alike.
 
 ## Prerequisites
@@ -216,7 +216,7 @@ The full list is in [`AGENTS.md`](AGENTS.md). The short version:
 - Architectural decisions get a short ADR in [`docs/adr/`](docs/adr/).
 - New dependencies must pass `cargo deny check` and be justified in the PR description. Prefer
   fewer, well-maintained crates.
-- Stay inside the current phase. Work that belongs to a later phase goes in
+- Keep each change to its task. Other work you notice goes in
   [`docs/BACKLOG.md`](docs/BACKLOG.md).
 - Docs ship with features. A feature is not done until its docs page is updated.
 
@@ -321,5 +321,5 @@ One-time settings on `nxplain-sh/goethite` that the repository cannot set itself
 - [ ] Parser changes: the fuzz target was run for at least 60 seconds without findings
 - [ ] No new `unwrap`/`expect`/panicking indexing on untrusted data
 - [ ] Public items are documented. User-facing changes update `site/` or the README.
-- [ ] Architectural decisions have an ADR. Later-phase ideas are in `docs/BACKLOG.md`.
+- [ ] Architectural decisions have an ADR. Ideas left for later are in `docs/BACKLOG.md`.
 - [ ] Commits follow the conventions above
