@@ -1,8 +1,10 @@
 # Backlog
 
-Work noticed during earlier phases that belongs to a later one. Per [`AGENTS.md`](../AGENTS.md),
-we note these items here instead of building them early. Each item is tagged with its target phase.
-When an item is picked up, move it into an issue or PR and delete it from this list.
+Work noticed along the way and not scheduled yet. Per [`AGENTS.md`](../AGENTS.md), we note these
+items here instead of building them inside an unrelated change. Phases 0 to 5 have shipped, Phase N
+as v0.N (see the [changelog](../CHANGELOG.md)); each item keeps the tag of the phase it was first
+meant for, and `[later]` marks the ones that never had one. When an item is picked up, move it into
+an issue or PR and delete it from this list.
 
 ## Phase 1: v0.1 core blocker
 
@@ -14,7 +16,10 @@ Phase 1's scope shipped in v0.1.0. These items came up along the way; they are c
   `LimitNOFILE=65536`; goethite could raise its soft limit to the hard limit itself.
 - **[P2] Users from the name service switch.** `server.user` is looked up in `/etc/passwd`
   only; accept a numeric `uid:gid` for users that live in LDAP or systemd-homed.
-- **[P1] Config hot reload** via `arc-swap`, without dropping queries.
+- **[P1] Config file hot reload** via `arc-swap`, without dropping queries, on `SIGHUP` as well
+  as the filter lists and certificates it reloads today: upstreams, recursion and cache settings
+  are read once at startup. Settings in the store already apply live, and `SIGUSR2` re-reads the
+  file only by handing over to a new process.
 - **[P1, perf] Zero-allocation fast-path decoder** behind `DnsCodec`
   (see [ADR 0001](adr/0001-hickory-proto-behind-trait.md)). Only with a criterion bench that shows
   the win.
@@ -31,8 +36,6 @@ Phase 1's scope shipped in v0.1.0. These items came up along the way; they are c
 - **[P1] Less allocation per forwarded query.** Each exchange allocates a receive buffer and
   re-encodes records through hickory; a cache hit clones its records to count TTLs down. Measure
   with `bench/` before and after.
-- **[P2] Cache statistics in metrics.** `Cache::stats` counts hits and misses; export them (and
-  the entry count) once Prometheus metrics exist.
 - **[later] Serve-stale and prefetch** (RFC 8767): answer from an expired entry while refreshing it
   in the background, and refresh popular entries shortly before they expire.
 - **[later] Smarter eviction.** The cache evicts the oldest entry first. Compare S3-FIFO or LRU
@@ -53,7 +56,6 @@ Phase 1's scope shipped in v0.1.0. These items came up along the way; they are c
   (with client groups), and internationalized names in lists (convert to punycode).
 - **[later] Regular-expression rules.** They cannot live in the FST; they would need a separate,
   bounded matcher (e.g. a size-limited `regex-automata` DFA) run only after the FST.
-- **[P1] Re-read the config file on SIGHUP**, not only the filter lists.
 - **[later] Signed or hash-pinned lists**, for list sources that publish signatures.
 - **[P1] Name parsing for filter lists.** `Name::from_str` only accepts host-style names (no
   escapes, no wildcards). Filter syntax needs wildcards and may need RFC 1035 escapes; extend the
@@ -109,8 +111,9 @@ Phase 3's scope shipped in v0.3.0. These items came up along the way.
 - **[later] An open leak test page** for devices whose users have no admin token (family
   devices): a page that runs one test and shows only its own result, with its own rate limit.
 - **[later] Stopping bypasses, not just seeing them:** answering the canary domain
-  `use-application-dns.net` with NXDOMAIN (Firefox then keeps its DoH off), blocking known DoH
-  resolvers' names by a preset, and a guide for redirecting port 53 at the router.
+  `use-application-dns.net` with NXDOMAIN (Firefox then keeps its DoH off), and a guide for
+  redirecting port 53 at the router. Known DoH resolvers are already blocked by the HaGeZi bypass
+  list in the Strict and Family presets.
 - **[later] Extended DNS Errors (RFC 8914):** say why an answer is SERVFAIL (DNSSEC bogus,
   signature expired, no reachable authority) or blocked (filtered), for clients and the query
   log.
@@ -172,6 +175,8 @@ Phase 3's scope shipped in v0.3.0. These items came up along the way.
 
 ## Phase 5: v0.5
 
+- **[P5] The external security review** of v0.5.0 is still ahead: the brief is
+  [`security-review.md`](security-review.md), and its findings become issues.
 - **[later] Landlock network rules for outgoing connections.** The sandbox stops new TCP
   listeners only: upstreams, list hosts and cluster members can be on any port, some of them
   added at run time. Restricting outgoing TCP to the ports in use would need the policy to follow

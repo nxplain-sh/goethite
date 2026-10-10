@@ -66,8 +66,8 @@ packages and a container image.
 ## 4. Defenses by phase
 
 Status legend: **done** means implemented as of v0.5.0. **partial** means implemented with a known
-gap, named in the row. **planned** means scheduled and not implemented yet. Phases follow the roadmap in
-[`AGENTS.md`](../AGENTS.md#roadmap-respect-the-order).
+gap, named in the row. **planned** means scheduled and not implemented yet. Phase N shipped as
+v0.N (see the [changelog](../CHANGELOG.md)).
 
 | Threat                                      | Controls                                                                                          | Phase | Status  |
 | ------------------------------------------- | ------------------------------------------------------------------------------------------------- | ----- | ------- |

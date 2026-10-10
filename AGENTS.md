@@ -13,7 +13,7 @@ In scope for 1.0:
 - Clustering with HA: replicated config, floating IP (VRRP), zero-downtime reload and upgrade
 - Interfaces: REST API, TUI (`goethite tui`), embedded web UI, Terraform provider
 - Project website + docs on GitHub Pages, with a Scalar API reference built from the OpenAPI spec
-- Recursive resolution with full DNSSEC validation (later phase)
+- Recursive resolution with full DNSSEC validation
 
 Out of scope for 1.0: hosted cloud service, developer features like Numa's `.numa` proxy/mDNS, Windows as a server platform. Linux (amd64 + arm64) is first-class; macOS is for development only.
 
@@ -53,7 +53,7 @@ docs/                 architecture, threat model, ADRs
 
 The layout follows the [standard Rust project layout](https://github.com/miguelmartens/standard-rust-project-layout); [ADR 0025](docs/adr/0025-standard-rust-project-layout.md) records where goethite deviates and why. Read it before adding a crate, a top-level directory or a workspace lint.
 
-The Terraform provider lives in a separate repo (`terraform-provider-goethite`, Go, terraform-plugin-framework) and is built from the OpenAPI spec. Do not start it before Phase 3.5.
+The Terraform provider lives in a separate repo (`terraform-provider-goethite`, Go, terraform-plugin-framework) and is built from the OpenAPI spec.
 
 ## Tech stack
 
@@ -105,23 +105,11 @@ Shared by the web UI and (where possible) the TUI.
 - The web UI has one theme, light. Palette (dark), for the website only: bg `#15120E`, panel `#211C16`, ink `#F2ECE1`, rust `#E06A4B`, teal `#5CC2B0`.
 - Accessibility: 4.5:1 text contrast, visible focus states, never rely on color alone (blocked/allowed always carry a text label).
 
-## Roadmap (respect the order)
-
-- **Phase 0 — Foundation:** workspace, CI, security tooling, fuzz harness, threat model, site skeleton deployed to GitHub Pages, a server answering a hardcoded query.
-- **Phase 1 — v0.1 core blocker:** listeners, forwarding (plain/DoH/DoT) with failover, sharded TTL cache, filter engine (hosts, domain lists, core AdGuard syntax) compiled to FST + Bloom with hot swap, scheduled list updates, hardened systemd unit.
-- **Phase 2 — v0.2 control:** Scalar API reference on the site + breaking-change check, client groups + schedules, CNAME uncloaking, safe search, query log
-  - stats, Prometheus metrics, `/api/v1` + OpenAPI, audit log, TUI, web app skeleton + design tokens.
-- **Phase 3 — v0.3 HA:** two-node config sync over mTLS, VRRP floating IP, graceful reload via socket handoff, cluster-wide stats, fail-open, chaos tests.
-- **Phase 3.5 — Terraform provider** (separate repo).
-- **Phase 4 — v0.4:** full web UI, DoH/DoT/DoQ server, ODoH, recursion + DNSSEC.
-- **Phase 5 — v0.5:** Raft clustering (openraft, with a vote-only witness), reproducible signed builds, SBOM, packaging (.deb, .rpm, container image), fuzzing out of public CI (local runs before each release), Landlock + seccomp sandboxing, client access control, local DNS records, importers from Pi-hole and AdGuard Home, external security review.
-- **1.0:** not scheduled yet; it follows v0.5.
-
 ## How to work in this repo
 
 - Plan before coding: for any non-trivial task, outline the approach and files to touch first.
 - Branch from and target `development`; `main` takes pull requests from `development` only ([Branches](CONTRIBUTING.md#branches)).
-- Stay inside the current phase. If something belongs to a later phase, note it in [`docs/BACKLOG.md`](docs/BACKLOG.md) instead of building it.
+- Keep each change to its task. Note other work you notice in [`docs/BACKLOG.md`](docs/BACKLOG.md) instead of building it.
 - Ask before adding a dependency, changing the public API, or changing anything in the security rules above.
 - Before saying a task is done: `cargo xtask ci` and (for parser changes) a short fuzz run pass. Summarize what changed and what is left.
 - Development binds to port `15353` by default so it runs without root; production uses `53`. (Not `5353`: that is the multicast DNS port, held by mDNSResponder on macOS and often by Avahi on Linux.)
