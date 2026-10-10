@@ -67,5 +67,4 @@ color alone.
 | <kbd>t</kbd>                                               | leak tests | Test this machine's DNS                                          |
 | <kbd>q</kbd>, <kbd>Esc</kbd>, <kbd>Ctrl</kbd>+<kbd>C</kbd> | everywhere | Quit                                                             |
 
-Lists managed by Terraform cannot be changed from the TUI; change them in Terraform instead. Every
-change the TUI makes goes through the API, so it lands in the audit log like any other.
+Every change the TUI makes goes through the API, so it lands in the audit log like any other.

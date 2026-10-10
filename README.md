@@ -20,8 +20,7 @@ group. Clients can reach it over DNS over TLS, HTTPS and QUIC, or Oblivious DNS 
 known by a client ID wherever they are, and be allowed or refused by address or ID. Clients can
 be put in groups with their own lists, schedules and safe search, and blocking sees through CNAME
 cloaking. It keeps a query log and statistics, exports Prometheus metrics, and is managed through
-a REST API (with an OpenAPI description), a terminal UI, a web UI and a
-[Terraform provider](https://github.com/nxplain-sh/terraform-provider-goethite); every change is
+a REST API (with an OpenAPI description), a terminal UI and a web UI; every change is
 audit-logged, a DNS leak test shows whether a device's lookups reach it, and `goethite migrate`
 brings a Pi-hole's or AdGuard Home's configuration over. Nodes form a cluster that agrees on one
 configuration with Raft, with a vote-only witness so two nodes survive losing either, and share a
@@ -107,8 +106,6 @@ Benchmarks and how to record them are in [`bench/`](bench/README.md). The layout
 ## Documentation
 
 - Website: <https://nxplain-sh.github.io/goethite/>
-- Terraform and OpenTofu provider:
-  [nxplain-sh/terraform-provider-goethite](https://github.com/nxplain-sh/terraform-provider-goethite)
 - [Contributing](CONTRIBUTING.md): build, test, fuzz, commit conventions
 - [Security policy](SECURITY.md): how to report vulnerabilities
 - [Threat model](docs/THREAT_MODEL.md)

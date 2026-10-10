@@ -1,6 +1,6 @@
 # ADR 0014: The Terraform provider
 
-- **Status:** Accepted
+- **Status:** Superseded by [ADR 0034](0034-drop-the-terraform-provider.md)
 - **Date:** 2026-10-08
 
 ## Context

@@ -169,17 +169,14 @@ function ListFields({
 	}))
 	const [useInDefault, setUseInDefault] = useState(true)
 	const queryClient = useQueryClient()
-	// Terraform's default group is left to Terraform.
 	const defaultGroup = useQuery({ ...groupQuery(DEFAULT_GROUP), enabled: stored === undefined })
-	const canUseDefault =
-		defaultGroup.data !== undefined && defaultGroup.data.spec.managed_by !== 'terraform'
+	const canUseDefault = defaultGroup.data !== undefined
 	// goethite refuses to delete a list a group uses: deleting takes it out of
-	// them first, unless Terraform manages one of them.
+	// them first.
 	const groups = useQuery({ ...groupsQuery, enabled: stored !== undefined })
 	const users = usersOf(groups.data ?? [], stored?.id)
-	const terraformUser = terraformUserOf(users)
 	const remove =
-		stored === undefined || terraformUser !== undefined || groups.data === undefined
+		stored === undefined || groups.data === undefined
 			? undefined
 			: async () => {
 					// The groups as they are now: the ones shown can be older than a
@@ -188,12 +185,6 @@ function ListFields({
 						await queryClient.fetchQuery({ ...groupsQuery, staleTime: 0 }),
 						stored.id,
 					)
-					const managed = terraformUserOf(current)
-					if (managed !== undefined) {
-						throw new Error(
-							`Terraform manages ${managed.spec.name}, which now uses this list: take it out there first.`,
-						)
-					}
 					for (const group of current) {
 						await withoutList(group, stored.id)
 					}
@@ -230,10 +221,7 @@ function ListFields({
 		>
 			{users.length === 0 ? null : (
 				<p className="muted">
-					Used by {users.map((group) => group.spec.name).join(', ')}.{' '}
-					{terraformUser === undefined
-						? 'Deleting it takes it out of them.'
-						: `Terraform manages ${terraformUser.spec.name}: take the list out of it there before deleting it.`}
+					Used by {users.map((group) => group.spec.name).join(', ')}. Deleting it takes it out of them.
 				</p>
 			)}
 			<TextField label="Name" value={form.name} onChange={set('name')} mono={false} required />
@@ -282,11 +270,6 @@ function ListFields({
 /** The groups that use a list. */
 function usersOf(groups: readonly Group[], list: string | undefined) {
 	return groups.filter((group) => (group.spec.lists ?? []).some((entry) => entry.list === list))
-}
-
-/** One of `groups` that Terraform manages, if any. */
-function terraformUserOf(groups: readonly Group[]) {
-	return groups.find((group) => group.spec.managed_by === 'terraform')
 }
 
 /** Takes a list out of a group. */

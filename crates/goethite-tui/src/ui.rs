@@ -469,7 +469,6 @@ fn render_log(frame: &mut Frame<'_>, area: Rect, app: &App) {
 
 fn managed(by: ManagedBy) -> Cell<'static> {
     match by {
-        ManagedBy::Terraform => Cell::from("terraform (read-only)").fg(OCHRE),
         ManagedBy::ConfigFile => Cell::from("config file"),
         ManagedBy::Api => Cell::from("api"),
     }
@@ -977,7 +976,7 @@ mod tests {
                 path: None,
                 enabled: false,
                 comment: String::new(),
-                managed_by: ManagedBy::Terraform,
+                managed_by: ManagedBy::ConfigFile,
             },
         }]));
         app.apply(Update::Groups(vec![Group {
@@ -1001,7 +1000,7 @@ mod tests {
             lists.contains("StevenBlack") && lists.contains("OFF"),
             "{lists}"
         );
-        assert!(lists.contains("terraform (read-only)"), "{lists}");
+        assert!(lists.contains("config file"), "{lists}");
         app.tab = Tab::Clients;
         assert!(screen(&app).contains("No clients yet"));
         app.apply(Update::Clients(vec![Client {

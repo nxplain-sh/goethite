@@ -70,8 +70,7 @@ the network; otherwise the token crosses it in clear text.
   clients (see [access control](../security/#access-control)).
 
 Changes are made with the revision you saw: if someone else changed the same thing meanwhile, the
-UI says so and offers their version instead of overwriting it. What [Terraform](../terraform/)
-manages is shown read-only, with a note to change it there. A list, schedule or group that
+UI says so and offers their version instead of overwriting it. A list, schedule or group that
 something still uses says what: deleting a list takes it out of the groups that use it, while a
 schedule or a group can only go once nothing uses it.
 

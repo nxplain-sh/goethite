@@ -53,16 +53,16 @@ pub const MAX_COMMENT_LEN: usize = 1000;
 /// The longest list URL or path, in bytes.
 pub const MAX_SOURCE_LEN: usize = 2048;
 
-/// Who manages a resource. Resources managed by Terraform are read-only in
-/// the web UI and the TUI, so they do not drift from their definition.
+/// Who manages a resource.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ManagedBy {
     /// Created through the API, the web UI or the TUI.
     #[default]
+    // Stores and requests from when goethite had a Terraform provider may
+    // still say `terraform`.
+    #[serde(alias = "terraform")]
     Api,
-    /// Created by the Terraform provider.
-    Terraform,
     /// Imported from the `[filter]` table of the config file.
     ConfigFile,
 }
@@ -1392,6 +1392,13 @@ mod tests {
                 .contains("supported")
         );
         assert!(rule("not a rule!").validate("r").is_err());
+    }
+
+    #[test]
+    fn terraform_reads_as_api() {
+        let by: ManagedBy = serde_json::from_str(r#""terraform""#).unwrap();
+        assert_eq!(by, ManagedBy::Api);
+        assert_eq!(serde_json::to_string(&by).unwrap(), r#""api""#);
     }
 
     #[test]

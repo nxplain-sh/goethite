@@ -229,24 +229,6 @@ test('saves settings, and the audit log shows the change', async ({ page }) => {
 	await expect(page.getByRole('status')).toContainText('Saved')
 })
 
-test('shows what Terraform manages read-only', async ({ page, request }) => {
-	const rule = await apiCall(request, 'POST', '/api/v1/rules', {
-		rule: '||e2e-terraform.example^',
-		managed_by: 'terraform',
-	})
-	await page.getByRole('link', { name: 'Rules', exact: true }).click()
-	const row = page.getByRole('row').filter({ hasText: '||e2e-terraform.example^' })
-	await expect(row).toContainText('TERRAFORM')
-	await expect(row.getByRole('checkbox')).toBeDisabled()
-	await expect(row.getByRole('button', { name: 'Delete' })).toHaveCount(0)
-
-	await row.getByRole('link', { name: '||e2e-terraform.example^' }).click()
-	await expect(page.getByText('Terraform manages this rule')).toBeVisible()
-	await expect(page.getByLabel('Rule')).toBeDisabled()
-	await expect(page.getByRole('button', { name: 'Save' })).toHaveCount(0)
-	await apiCall(request, 'DELETE', `/api/v1/rules/${rule.id}`)
-})
-
 test('refuses to overwrite a change made meanwhile', async ({ page, request }) => {
 	const list = await apiCall(request, 'POST', '/api/v1/lists', {
 		name: 'E2E shared',
