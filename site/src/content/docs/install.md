@@ -65,23 +65,41 @@ sudo install -m 0644 goethite.toml /etc/goethite/goethite.toml
 ### In a container
 
 The image is `ghcr.io/nxplain-sh/goethite`, for amd64 and arm64, tagged with each version, its
-minor version (`0.5`) and `latest`:
+minor version (`0.5`) and `latest`. The simplest way to run it is the repository's Compose file,
+with Docker Compose or Podman Compose:
 
 ```sh
-gh attestation verify oci://ghcr.io/nxplain-sh/goethite:0.5.0 --repo nxplain-sh/goethite
+gh attestation verify oci://ghcr.io/nxplain-sh/goethite:0.5 --repo nxplain-sh/goethite
+mkdir goethite && cd goethite
+curl -fLO https://raw.githubusercontent.com/nxplain-sh/goethite/main/deploy/container/compose.yaml
+docker compose up -d    # or: podman compose up -d
+```
+
+It runs goethite as an unprivileged user (65532) from the start, with no capabilities, no way to
+gain any and a read-only root file system, and keeps the store and lists in a volume. It follows
+the minor version's tag: `docker compose pull && docker compose up -d` brings a patch release; for
+the next minor version, change the tag in the file first. Its comments show how to use your own
+config, how to reach the [API](../api/) and the web UI, and what to do where the container runtime
+shows every client as one address, which would put your whole network under one client's
+[rate limit](../security/#rate-limiting). For a cluster of nodes that share their configuration
+and a floating IP, see [High availability](../ha/#in-containers).
+
+Without Compose:
+
+```sh
 docker run -d --name goethite --restart unless-stopped \
   -p 53:53/udp -p 53:53/tcp -v goethite:/var/lib/goethite \
   ghcr.io/nxplain-sh/goethite:0.5.0
 ```
 
-The image is distroless: no shell, no package manager, the binary and the C library. goethite
-starts as root to bind port 53, then switches to an unprivileged user (65532) and gives up every
-capability before it reads a packet. Its store and lists live in the `/var/lib/goethite` volume.
-The image's config listens on IPv4 only, since container networks often have no IPv6; to change
-anything, mount your own over `/etc/goethite/goethite.toml`. The [API](../api/) and the web UI
-answer inside the container only until you set an admin token there, as below, and publish port
-8053. To upgrade, pull the new tag and recreate the container: unlike the packages, a container
-restart drops queries for a second or two.
+The image is distroless: no shell, no package manager, the binary and the C library. Started this
+way, goethite starts as root to bind port 53 on any runtime, then switches to the unprivileged
+user (65532) and gives up every capability before it reads a packet. Its store and lists live in
+the `/var/lib/goethite` volume. The image's config listens on IPv4 only, since container networks
+often have no IPv6; to change anything, mount your own over `/etc/goethite/goethite.toml`. The API
+and the web UI answer inside the container only until you set an admin token there, as below, and
+publish port 8053. To upgrade, pull the new tag and recreate the container: unlike the packages, a
+container restart drops queries for a second or two.
 
 ### From source
 

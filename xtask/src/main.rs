@@ -32,7 +32,8 @@ Tasks:
     test          the test suite, doctests included
     doc           rustdoc, warnings denied
     toolchain     rust-toolchain.toml pins the MSRV from Cargo.toml
-    versions      the internal crates and the web UI carry the workspace version
+    versions      the internal crates and the web UI carry the workspace version,
+                  and the Compose files run its minor version
     shellcheck    lint the shell scripts (needs shellcheck)
     supply-chain  cargo deny and cargo audit on both workspaces (needs both)
     dist          the release tarball, packages and SBOMs for this machine's
@@ -186,8 +187,9 @@ fn toolchain() -> Result {
 }
 
 /// A release bumps one version in several places: the internal crates'
-/// `version` in `[workspace.dependencies]`, and the web UI's package.json and
-/// its lockfile, whose version names the web UI in its SBOM.
+/// `version` in `[workspace.dependencies]`, the web UI's package.json and
+/// its lockfile, whose version names the web UI in its SBOM, and the image
+/// tag in the Compose files, which is the minor version.
 fn versions() -> Result {
     let root = root()?;
     let manifest = root.join("Cargo.toml");
@@ -207,11 +209,30 @@ fn versions() -> Result {
             .find_map(|line| quoted_after(line, "\"version\": "));
         found.push((file.to_owned(), first));
     }
-    let wrong: Vec<String> = found
+    let mut wrong: Vec<String> = found
         .into_iter()
         .filter(|(_, found)| found.as_deref() != Some(version.as_str()))
         .map(|(name, found)| format!("{name} has {}", found.as_deref().unwrap_or("no version")))
         .collect();
+    // The Compose files run the newest release of this minor version.
+    let minor = version.splitn(3, '.').take(2).collect::<Vec<_>>().join(".");
+    for compose in compose_files(&root.join("deploy"))? {
+        let name = compose.strip_prefix(&root)?.display().to_string();
+        let tags: Vec<String> = fs::read_to_string(&compose)?
+            .lines()
+            .filter_map(|line| {
+                line.trim()
+                    .strip_prefix("image: ghcr.io/nxplain-sh/goethite:")
+                    .map(str::to_owned)
+            })
+            .collect();
+        if tags.is_empty() {
+            wrong.push(format!("{name} runs no goethite image"));
+        }
+        for tag in tags.into_iter().filter(|tag| *tag != minor) {
+            wrong.push(format!("{name} runs {tag}, not {minor}"));
+        }
+    }
     if wrong.is_empty() {
         say(&format!("everything carries version {version}"));
         Ok(())
@@ -222,6 +243,21 @@ fn versions() -> Result {
         )
         .into())
     }
+}
+
+/// Every `compose.yaml` under `dir`, at any depth, sorted.
+fn compose_files(dir: &Path) -> Result<Vec<PathBuf>> {
+    let mut found = Vec::new();
+    for entry in fs::read_dir(dir)? {
+        let path = entry?.path();
+        if path.is_dir() {
+            found.extend(compose_files(&path)?);
+        } else if path.file_name().is_some_and(|name| name == "compose.yaml") {
+            found.push(path);
+        }
+    }
+    found.sort();
+    Ok(found)
 }
 
 /// The double-quoted string after `prefix` in `text`.
@@ -733,17 +769,35 @@ fn image(args: &[String]) -> Result {
         fs::copy(root.join(from), context.join(to))?;
     }
     let epoch = capture(git(&root).args(["log", "-1", "--format=%ct", "HEAD"]))?;
+    let revision = capture(git(&root).args(["rev-parse", "HEAD"]))?;
+    let containerfile = root.join("deploy").join("container").join("Containerfile");
     let mut build = Command::new("docker");
     build
         .args(["buildx", "build", "--platform", &platforms.join(",")])
         .arg("--file")
-        .arg(root.join("deploy").join("container").join("Containerfile"))
+        .arg(&containerfile)
         // buildx's own provenance carries build times; the release workflow
         // attests the image instead.
         .args(["--provenance=false", "--sbom=false"])
+        // A cached layer from another commit's build keeps that commit's
+        // timestamps, which rewrite-timestamp only lowers. Nothing here
+        // compiles, so a fresh build costs seconds.
+        .arg("--no-cache")
         .arg("--build-arg")
         .arg(format!("SOURCE_DATE_EPOCH={epoch}"))
+        .arg("--build-arg")
+        .arg(format!("VERSION={version}"))
+        .arg("--build-arg")
+        .arg(format!("REVISION={revision}"))
         .env("SOURCE_DATE_EPOCH", &epoch);
+    // ghcr.io shows a multi-architecture image's description from its index,
+    // not from the images' labels, so the labels go on the index too. One
+    // architecture alone has no index to annotate.
+    if platforms.len() > 1 {
+        for label in oci_labels(&fs::read_to_string(&containerfile)?, &version, &revision) {
+            build.arg("--annotation").arg(format!("index:{label}"));
+        }
+    }
     if push.is_empty() {
         let archive = dist.join(format!("goethite-{version}-image.oci.tar"));
         build.arg("--output").arg(format!(
@@ -763,6 +817,24 @@ fn image(args: &[String]) -> Result {
     run(build.arg(&context))?;
     fs::remove_dir_all(&context)?;
     Ok(())
+}
+
+/// The `org.opencontainers.image.*` labels a Containerfile sets, one
+/// `key="value"` per line, as `key=value` with `${VERSION}` and
+/// `${REVISION}` filled in.
+fn oci_labels(containerfile: &str, version: &str, revision: &str) -> Vec<String> {
+    containerfile
+        .lines()
+        .filter(|line| !line.trim_start().starts_with('#'))
+        .filter_map(|line| {
+            let (_, label) = line.split_once("org.opencontainers.image.")?;
+            let (key, value) = label.split_once('=')?;
+            let value = quoted_after(value, "")?
+                .replace("${VERSION}", version)
+                .replace("${REVISION}", revision);
+            Some(format!("org.opencontainers.image.{key}={value}"))
+        })
+        .collect()
 }
 
 /// Runs the fuzz targets one after another, on the nightly that

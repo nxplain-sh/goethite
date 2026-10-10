@@ -198,6 +198,14 @@ Phase 3's scope shipped in v0.3.0. These items came up along the way.
 
 - **[later] APT and DNF repositories** for `apt upgrade` and `dnf upgrade`: they need a
   long-lived signing key and hosting (ADR 0027).
+- **[later] A health check for containers.** The image has no shell or HTTP client, so neither it
+  nor the Compose file has a `HEALTHCHECK` (ADR 0036). A `goethite` subcommand that asks the
+  running server would give both one; it should ask the DNS listener, not only the API, since the
+  data plane must count as up while the control plane is down.
+- **[later] `goethite vrrp` as an unprivileged user in containers.** Docker gives a user other
+  than root no capabilities, so the cluster's Compose file starts it as root with `CAP_NET_ADMIN`
+  and `CAP_NET_RAW`, and it warns that it runs as root (ADR 0036). Switching to a user named in
+  the config while keeping `CAP_NET_ADMIN` (`PR_SET_KEEPCAPS`) would end both.
 - **[later] Static musl builds** that run on any Linux, including Alpine. musl's allocator is
   much slower under goethite's multi-threaded load, so this needs another allocator (a new
   dependency) and a bench against the glibc build first (see ADR 0026).

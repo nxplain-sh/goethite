@@ -1,0 +1,32 @@
+# goethite configuration for the witness of a cluster of two DNS nodes and a
+# witness, in a container (compose.yaml beside this file). Copy it as
+# goethite.toml, then change the addresses to yours.
+#
+#   dns1       192.0.2.11
+#   dns2       192.0.2.12
+#   witness    192.0.2.13   this host
+#
+# A witness needs no [[upstream]] and no [server]: it answers no DNS.
+
+[cluster]
+node = "witness"
+# Every address in the container. The nodes reach the witness on its host's
+# address, 192.0.2.13:8054 in their config files, through the published
+# port; only a member that starts a cluster gives its own listen address to
+# the others, and a witness never does.
+listen = "0.0.0.0:8054"
+ca = "/etc/goethite/cluster/ca.crt"
+cert = "/etc/goethite/cluster/witness.crt"
+key = "/etc/goethite/cluster/witness.key"
+
+[[cluster.member]]
+node = "dns1"
+address = "192.0.2.11:8054"
+
+[[cluster.member]]
+node = "dns2"
+address = "192.0.2.12:8054"
+
+[store]
+# The cluster's configuration and log, in the volume.
+path = "/var/lib/goethite/goethite.redb"
