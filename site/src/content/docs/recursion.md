@@ -37,6 +37,9 @@ for a name nearby goes straight to the right server.
   is truncated. A server that does not repeat the case is asked without it.
 - **Servers** that answer slowly or not at all are tried last; one that fails three times in a
   row is set aside for a minute.
+- **No self-queries.** Recursion never asks loopback, unspecified, multicast or broadcast
+  addresses, or any of the node's own listen addresses, whatever a referral's glue says. A
+  delegation pointing there fails instead of resolving against goethite itself.
 - **IPv6.** goethite asks servers over IPv6 too when this host has an IPv6 route; set
   `ipv6 = true` or `false` to decide yourself.
 

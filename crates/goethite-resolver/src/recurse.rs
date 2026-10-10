@@ -99,6 +99,9 @@ pub struct RecursorConfig {
     /// DS records for the root zone to trust instead of IANA's trust
     /// anchors, for tests.
     pub anchors: Option<Vec<Record>>,
+    /// The node's own addresses. Recursion never asks them: a delegation or
+    /// glue pointing there would make goethite resolve against itself.
+    pub local_addresses: Vec<IpAddr>,
 }
 
 impl Default for RecursorConfig {
@@ -113,6 +116,7 @@ impl Default for RecursorConfig {
             roots: None,
             dnssec: true,
             anchors: None,
+            local_addresses: Vec::new(),
         }
     }
 }
@@ -629,6 +633,22 @@ impl Recursor {
         })
     }
 
+    /// Whether recursion must never send a query to `ip`: loopback,
+    /// unspecified, multicast or broadcast addresses, or one of the node's
+    /// own, which would make goethite resolve against itself (Unbound's
+    /// `do-not-query-localhost`). The configured root hints are exempt; they
+    /// are a test hook and are never loopback in production.
+    fn refused(&self, ip: IpAddr) -> bool {
+        if self.roots.iter().any(|(_, ips)| ips.contains(&ip)) {
+            return false;
+        }
+        ip.is_loopback()
+            || ip.is_unspecified()
+            || ip.is_multicast()
+            || matches!(ip, IpAddr::V4(ip) if ip.is_broadcast())
+            || self.config.local_addresses.contains(&ip)
+    }
+
     /// Asks `zone`'s servers about `name`, one after another, until one
     /// gives a usable response; looks up name server addresses as needed.
     async fn ask_with_response(
@@ -648,7 +668,9 @@ impl Recursor {
                 .iter()
                 .filter_map(|server| self.known_addresses(server, now))
                 .flat_map(|ips| ips.iter().copied().collect::<Vec<_>>())
-                .filter(|ip| (ip.is_ipv4() || self.config.ipv6) && !tried.contains(ip))
+                .filter(|ip| {
+                    (ip.is_ipv4() || self.config.ipv6) && !tried.contains(ip) && !self.refused(*ip)
+                })
                 .collect();
             ips.sort_unstable();
             ips.dedup();

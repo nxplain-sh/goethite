@@ -486,6 +486,71 @@ fn addresses(response: &Response) -> Vec<IpAddr> {
 }
 
 #[tokio::test]
+async fn loopback_and_local_addresses_are_never_queried() {
+    // Glue of 127.0.0.1 would make goethite query itself. The fake serves a
+    // good answer there so a query to it could not be mistaken for a
+    // failure.
+    let mut fake = Fake::default();
+    fake.serve(
+        "10.0.0.1",
+        ".",
+        vec![
+            Record::ns(name("example."), 172_800, name("ns.example.")),
+            Record::a(name("ns.example."), 172_800, Ipv4Addr::LOCALHOST),
+        ],
+    )
+    .serve(
+        "127.0.0.1",
+        "example.",
+        vec![Record::a(
+            name("www.example."),
+            300,
+            Ipv4Addr::new(192, 0, 2, 1),
+        )],
+    );
+    let (node, fake) = recursor(fake, config());
+    let (response, _) = node.resolve(&query("www.example.", RecordType::A)).await;
+    assert_eq!(response.rcode, ResponseCode::SERV_FAIL);
+    assert!(
+        fake.asked()
+            .iter()
+            .all(|(address, ..)| *address != ip("127.0.0.1")),
+        "loopback glue is never queried"
+    );
+
+    // The node's own address from the config is refused too.
+    let mut fake = Fake::default();
+    fake.serve(
+        "10.0.0.1",
+        ".",
+        vec![
+            Record::ns(name("example."), 172_800, name("ns.example.")),
+            Record::a(name("ns.example."), 172_800, Ipv4Addr::new(10, 0, 3, 1)),
+        ],
+    )
+    .serve(
+        "10.0.3.1",
+        "example.",
+        vec![Record::a(
+            name("www.example."),
+            300,
+            Ipv4Addr::new(192, 0, 2, 1),
+        )],
+    );
+    let mut config = config();
+    config.local_addresses = vec![ip("10.0.3.1")];
+    let (node, fake) = recursor(fake, config);
+    let (response, _) = node.resolve(&query("www.example.", RecordType::A)).await;
+    assert_eq!(response.rcode, ResponseCode::SERV_FAIL);
+    assert!(
+        fake.asked()
+            .iter()
+            .all(|(address, ..)| *address != ip("10.0.3.1")),
+        "the node's own address is never queried"
+    );
+}
+
+#[tokio::test]
 async fn resolves_from_the_root_down_showing_each_server_little() {
     let (recursor, fake) = recursor(internet(), config());
     let (response, server) = recursor

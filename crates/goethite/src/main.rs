@@ -27,6 +27,7 @@ mod witness;
 
 use std::future::Future;
 use std::io::IsTerminal;
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -415,7 +416,14 @@ fn resolver(config: &Config, state: &Arc<PolicyState>) -> Result<Resolver> {
     info!(max_entries = config.cache.max_entries, "cache");
     let mut resolver = Resolver::new(vec![test_record()?, health_record()?]).with_cache(cache);
     if config.recursion.enabled {
-        let recursion = config.recursion.to_recursor_config(has_ipv6_route);
+        let mut recursion = config.recursion.to_recursor_config(has_ipv6_route);
+        recursion.local_addresses = config
+            .server
+            .listen
+            .iter()
+            .map(SocketAddr::ip)
+            .filter(|ip| !ip.is_unspecified())
+            .collect();
         info!(
             qname_minimisation = recursion.qname_minimisation,
             ipv6 = recursion.ipv6,
