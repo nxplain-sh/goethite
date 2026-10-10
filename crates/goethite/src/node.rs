@@ -229,6 +229,12 @@ impl goethite_api::Control for Node {
                 return;
             }
             match change {
+                Change::Lists => {
+                    // Fetch the lists now; the downloader rebuilds the
+                    // filter once they are on disk.
+                    self.control.refresh_lists();
+                    self.control.rebuild_filter().await;
+                }
                 Change::Filter => {
                     self.control.rebuild_filter().await;
                 }

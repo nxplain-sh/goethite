@@ -151,7 +151,9 @@ use a group's [blocked services](../groups/#blocked-services) instead of a list.
 ## Downloaded lists
 
 Lists with a `url` are downloaded at startup and then every `update_hours`, with up to 10% random
-delay so many installations do not hit list servers at the same moment:
+delay so many installations do not hit list servers at the same moment. A list added, changed or
+removed through the API or the web UI takes effect right away, without waiting for the next
+update:
 
 - Only `https://` URLs are accepted, and redirects must stay on HTTPS. Certificates are checked
   against the Mozilla roots built into goethite.

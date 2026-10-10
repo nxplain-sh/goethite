@@ -91,7 +91,10 @@ pub struct ApiConfig {
 /// What changed in the store, so the data plane knows what to recompile.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Change {
-    /// Lists or custom rules: the filter must be recompiled.
+    /// Filter lists: the filter must be recompiled, and the lists fetched
+    /// now rather than at the next scheduled refresh.
+    Lists,
+    /// Custom rules: the filter must be recompiled.
     Filter,
     /// Groups, clients, schedules, local records or settings: only the
     /// policy.

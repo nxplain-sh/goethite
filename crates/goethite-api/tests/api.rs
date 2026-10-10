@@ -473,15 +473,11 @@ async fn resources_round_trip_with_revisions_and_references() {
         .await;
     assert_eq!(default_group.status, StatusCode::CONFLICT);
 
-    // Changes reached the data plane: filter for lists, policy for the rest.
+    // Changes reached the data plane: lists refresh and filter, the rest
+    // rebuilds the policy.
     assert_eq!(
         *server.control.applied.lock().unwrap(),
-        [
-            Change::Filter,
-            Change::Filter,
-            Change::Policy,
-            Change::Policy
-        ]
+        [Change::Lists, Change::Lists, Change::Policy, Change::Policy]
     );
 
     // The audit log names the actor.
