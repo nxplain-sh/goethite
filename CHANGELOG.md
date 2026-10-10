@@ -44,6 +44,14 @@ configuration format.
   - Argon2id password hashes, TOTP secrets and recovery hashes live in the store (replicated,
     schema version 3) and are never written to the audit log or any response.
 
+### Changed
+
+- **A fresh node answers local networks only.** The allowed list starts with loopback, the RFC
+  1918 ranges, link-local, carrier-grade NAT and the IPv6 unique-local and link-local ranges, so
+  an install on a public host is not an open resolver; an empty list still means every client is
+  answered, and existing nodes keep the list in their store. See [access
+  control](https://nxplain-sh.github.io/goethite/security/#access-control).
+
 ## [0.6.0] - 2026-10-10
 
 ### Added
