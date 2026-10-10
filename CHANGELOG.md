@@ -9,6 +9,9 @@ configuration format.
 
 ### Added
 
+- **`$important` and `$badfilter` in filter rules**: an `$important` block outranks an exception,
+  an `$important` exception outranks that, and `$badfilter` disables the rule it names, from any
+  list. Other modifiers stay unsupported, so a rule carrying one is skipped rather than misread.
 - **Empty the cache**, from the web UI's Settings page or with `POST /api/v1/cache/flush`:
   names resolve again on their next query, without a restart. Filtering and local records are
   untouched.

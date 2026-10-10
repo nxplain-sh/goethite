@@ -58,9 +58,26 @@ pub struct Rule {
     pub scope: Scope,
     /// What it does.
     pub action: Action,
+    /// The `$important` modifier: the rule outranks the same rule without
+    /// it, an exception included.
+    pub important: bool,
+    /// The `$badfilter` modifier: the rule disables the rule it names
+    /// instead of matching names itself.
+    pub badfilter: bool,
 }
 
 impl Rule {
+    /// A rule without modifiers.
+    pub fn new(name: Name, scope: Scope, action: Action) -> Self {
+        Self {
+            name,
+            scope,
+            action,
+            important: false,
+            badfilter: false,
+        }
+    }
+
     /// Whether this rule matches `name`.
     pub fn matches(&self, name: &Name) -> bool {
         match self.scope {
@@ -187,11 +204,7 @@ pub fn parse_line(line: &str, mut add: impl FnMut(Rule)) -> LineKind {
             } else {
                 Scope::Exact
             };
-            add(Rule {
-                name,
-                scope,
-                action: Action::Block,
-            });
+            add(Rule::new(name, scope, Action::Block));
             LineKind::Rules(1)
         }
         Err(kind) => kind,
@@ -210,9 +223,13 @@ fn parse_adblock(pattern: &str, action: Action, add: &mut impl FnMut(Rule)) -> L
     if pattern.len() > 1 && pattern.starts_with('/') && pattern.ends_with('/') {
         return LineKind::Unsupported("regular expression");
     }
-    if pattern.contains('$') {
-        return LineKind::Unsupported("modifiers");
-    }
+    let (pattern, modifiers) = match pattern.split_once('$') {
+        Some((pattern, list)) => match Modifiers::parse(list) {
+            Ok(modifiers) => (pattern, modifiers),
+            Err(kind) => return kind,
+        },
+        None => (pattern, Modifiers::default()),
+    };
     let (body, anchored_subtree) = if let Some(rest) = pattern.strip_prefix("||") {
         (rest, true)
     } else if let Some(rest) = pattern.strip_prefix('|') {
@@ -249,10 +266,40 @@ fn parse_adblock(pattern: &str, action: Action, add: &mut impl FnMut(Rule)) -> L
                 name,
                 scope,
                 action,
+                important: modifiers.important,
+                badfilter: modifiers.badfilter,
             });
             LineKind::Rules(1)
         }
         Err(kind) => kind,
+    }
+}
+
+/// The rule modifiers goethite understands. Anything else makes the line
+/// unsupported, as AdGuard does: an unknown modifier means the rule is
+/// ignored rather than misread.
+#[derive(Clone, Copy, Debug, Default)]
+struct Modifiers {
+    /// `$important`: the rule outranks one without it.
+    important: bool,
+    /// `$badfilter`: the rule disables the rule it names.
+    badfilter: bool,
+}
+
+impl Modifiers {
+    /// Parses the comma-separated list after `$`.
+    fn parse(list: &str) -> Result<Self, LineKind> {
+        let mut out = Self::default();
+        for modifier in list.split(',') {
+            // A value (`$client=1.2.3.4`) is not supported yet either.
+            let name = modifier.split_once('=').map_or(modifier, |(name, _)| name);
+            match name.trim() {
+                "important" => out.important = true,
+                "badfilter" => out.badfilter = true,
+                _ => return Err(LineKind::Unsupported("modifier")),
+            }
+        }
+        Ok(out)
     }
 }
 
@@ -284,11 +331,7 @@ fn parse_hosts<'a>(
     for token in names {
         match parse_pattern(token) {
             Ok((name, false)) => {
-                add(Rule {
-                    name,
-                    scope: Scope::Exact,
-                    action: Action::Block,
-                });
+                add(Rule::new(name, Scope::Exact, Action::Block));
                 count = count.saturating_add(1);
             }
             Ok((_, true)) => invalid = Some("wildcard in a hosts file"),
@@ -344,11 +387,7 @@ mod tests {
     }
 
     fn rule(name: &str, scope: Scope, action: Action) -> Rule {
-        Rule {
-            name: name.parse().unwrap(),
-            scope,
-            action,
-        }
+        Rule::new(name.parse().unwrap(), scope, action)
     }
 
     #[test]
@@ -470,6 +509,47 @@ mod tests {
     }
 
     #[test]
+    fn modifier_lines() {
+        let with = |line: &str, important: bool, badfilter: bool| {
+            let (kind, rules) = parse(line);
+            assert_eq!(kind, LineKind::Rules(1), "{line:?}");
+            assert_eq!(rules.len(), 1, "{line:?}");
+            assert_eq!(rules[0].important, important, "{line:?}");
+            assert_eq!(rules[0].badfilter, badfilter, "{line:?}");
+            rules[0].clone()
+        };
+        assert_eq!(
+            with("||ads.example^$important", true, false),
+            Rule {
+                important: true,
+                ..rule("ads.example", Scope::Subtree, Action::Block)
+            }
+        );
+        assert_eq!(
+            with("||ads.example^$badfilter", false, true),
+            Rule {
+                badfilter: true,
+                ..rule("ads.example", Scope::Subtree, Action::Block)
+            }
+        );
+        assert_eq!(
+            with("@@||good.example^$important", true, false).action,
+            Action::Allow
+        );
+        assert!(with("||ads.example^$important,badfilter", true, true).badfilter);
+        // Unknown modifiers (with or without a value) are unsupported, so the
+        // rule is ignored rather than misread.
+        for line in [
+            "||ads.example^$client=1.2.3.4",
+            "||ads.example^$dnsrewrite=NXDOMAIN",
+            "||ads.example^$",
+            "||ads.example^$important,ctag=os_windows",
+        ] {
+            assert_eq!(parse(line).0, LineKind::Unsupported("modifier"), "{line:?}");
+        }
+    }
+
+    #[test]
     fn unsupported_and_ignored_lines() {
         for (line, kind) in [
             ("", LineKind::Ignored),
@@ -482,8 +562,8 @@ mod tests {
                 LineKind::Unsupported("regular expression"),
             ),
             (
-                "||ads.example^$important",
-                LineKind::Unsupported("modifiers"),
+                "||ads.example^$client=1.2.3.4",
+                LineKind::Unsupported("modifier"),
             ),
             (
                 "ads.example^",
