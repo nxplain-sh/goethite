@@ -110,10 +110,22 @@ impl Default for SettingsSpec {
             block_response: BlockResponseKind::default(),
             blocked_ttl: default_blocked_ttl(),
             list_update_hours: default_update_hours(),
-            access: AccessSpec::default(),
+            access: AccessSpec {
+                allowed: DEFAULT_ALLOWED.iter().map(|entry| (*entry).to_owned()).collect(),
+                blocked: Vec::new(),
+            },
         }
     }
 }
+
+/// The clients a node answers before an admin changes the allowed list: the
+/// addresses only a local network can hold, so an install on a public host
+/// is not an open resolver. An empty list still means "everyone", so an
+/// admin can clear it on purpose.
+pub const DEFAULT_ALLOWED: &[&str] = &[
+    "127.0.0.0/8", "::1", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16",
+    "fe80::/10", "fc00::/7", "100.64.0.0/10",
+];
 
 /// Which clients are answered, over every transport. An entry is an IP
 /// address, a network in CIDR notation (`192.168.1.0/24`) or a client ID. A
