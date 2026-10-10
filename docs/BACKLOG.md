@@ -167,6 +167,8 @@ Phase 3's scope shipped in v0.3.0. These items came up along the way.
 - **[P4] Scalar's AI SDK advisory.** `npm audit` reports a low-severity resource consumption
   issue (GHSA-866g-f22w-33x8) in `@ai-sdk/provider-utils`, which `@scalar/api-reference` pulls in
   for its chat agent; goethite turns the agent off. Update Scalar once it ships a fixed version.
+- **[P5] The web UI's JS budget is full:** 199.8 of 200 KiB gzipped (every chunk counts, lazy ones
+  too) after the cluster page. The next page needs a deliberate raise or a trim first.
 - **[later] Ask TanStack Charts for a CSP-friendly root.** Its SVG root carries an inline style,
   which goethite strips (ADR 0017); an option to leave it out would remove the workaround.
 
@@ -188,6 +190,11 @@ Phase 3's scope shipped in v0.3.0. These items came up along the way.
 - **[later] Leadership transfer.** openraft 0.9 cannot hand leadership to another member, so
   `promote` inside a healthy cluster is refused rather than moving the leader (for example
   before maintenance). openraft 0.10 can; revisit when it is stable (ADR 0031).
+- **[later] The cluster page in the TUI:** the web UI's Cluster page (health, voters it can
+  lose, a card per member, recovery steps) as a TUI view; the TUI's header shows the cluster only.
+- **[later] Each node's counts on the cluster page.** `GET /api/v1/stats?scope=cluster` returns the
+  sum and the names of the nodes in it; a per-node breakdown would show which member answers how
+  much.
 - **[later] Cluster metrics:** this node's Raft state, term, leader changes and how far each
   member's log reaches, in Prometheus metrics.
 - **[later] Keep-alive connections between members.** Raft opens a TLS connection per message

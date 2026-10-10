@@ -4,13 +4,13 @@ import { createSocket } from 'node:dgram'
 
 import { type APIRequestContext, expect, type Page, test } from '@playwright/test'
 
-import { DNS_PORT, DOH_PORT, DOQ_PORT, DOT_PORT, TOKEN } from './settings.mjs'
+import { ABSENT_PORT, DNS_PORT, DOH_PORT, DOQ_PORT, DOT_PORT, MEMBER_API_PORT, TOKEN } from './settings.mjs'
 
 const auth = { Authorization: `Bearer ${TOKEN}` }
 
-/** Signs in with the admin token, as a person would. */
-async function signIn(page: Page) {
-	await page.goto('/login')
+/** Signs in with the admin token, as a person would; to the node at `base`, or the usual one. */
+async function signIn(page: Page, base = '') {
+	await page.goto(`${base}/login`)
 	await page.getByLabel('Admin token').fill(TOKEN)
 	await page.getByRole('button', { name: 'Sign in' }).click()
 	await expect(page.getByRole('navigation', { name: 'Pages' })).toBeVisible()
@@ -694,4 +694,60 @@ test('every page links to the docs and the API reference', async ({ page }) => {
 	await expect(
 		page.getByRole('navigation', { name: 'Documentation' }).getByRole('link', { name: 'API docs', exact: true }),
 	).toHaveAttribute('href', 'https://nxplain-sh.github.io/goethite/api-reference/')
+})
+
+test('a node outside a cluster has no cluster page', async ({ page }) => {
+	// Once the node's status is in, the pages it has are known.
+	await expect(page.getByRole('banner').getByText('FILTERING ON')).toBeVisible()
+	await expect(page.getByRole('navigation', { name: 'Pages' }).getByRole('link', { name: 'Cluster' })).toHaveCount(0)
+	await page.goto('/cluster')
+	await expect(page.getByText('This node is not in a cluster')).toBeVisible()
+})
+
+test('the cluster page: a member waiting for its cluster starts one', async ({ page }) => {
+	// dns2 lists dns1, which never answers, and waits to be added.
+	await signIn(page, `http://127.0.0.1:${MEMBER_API_PORT}`)
+	await page.getByRole('navigation', { name: 'Pages' }).getByRole('link', { name: 'Cluster' }).click()
+	await expect(page).toHaveURL(/\/cluster$/)
+	const health = page.getByRole('region', { name: 'Health' })
+	await expect(health).toContainText('WAITING TO BE ADDED')
+	await expect(health).toContainText('no voters yet')
+	const members = page.getByRole('region', { name: 'Members' })
+	const self = members.getByRole('article', { name: 'dns2' })
+	await expect(self).toContainText('this node')
+	const absent = members.getByRole('article', { name: 'dns1' })
+	await expect(absent).toContainText('DOWN')
+	await expect(absent).toContainText('NOT ADDED YET')
+	await expect(absent).toContainText(`127.0.0.1:${ABSENT_PORT}`)
+	// Not in the cluster, so nothing to remove.
+	await expect(absent.getByRole('button', { name: 'Remove' })).toHaveCount(0)
+
+	// The way out, after a second click.
+	const recovery = page.getByRole('region', { name: 'Recovery' })
+	await recovery.getByRole('button', { name: 'Start a cluster here' }).click()
+	await recovery.getByRole('button', { name: 'Keep it' }).click()
+	await recovery.getByRole('button', { name: 'Start a cluster here' }).click()
+	await recovery.getByRole('button', { name: 'Start it on dns2' }).click()
+
+	// dns2 leads a cluster of its own; dns1 is still down.
+	await expect(health).toContainText('DEGRADED', { timeout: 15_000 })
+	await expect(health).toContainText('Changes work, but dns1 is down.')
+	await expect(health).toContainText('1 voter, 1 needed: can lose none')
+	await expect(self).toContainText('LEADER')
+	await expect(self).toContainText('VOTER')
+	await expect(recovery).toContainText('Nothing to recover: dns2 leads')
+	await expect(page.getByRole('navigation', { name: 'Pages' }).getByRole('link', { name: 'Cluster' })).toHaveAttribute(
+		'aria-current',
+		'page',
+	)
+	// The header says what this node does, and leads here.
+	await page.goto(`http://127.0.0.1:${MEMBER_API_PORT}/`)
+	await page.getByRole('banner').getByRole('link', { name: /dns2 · LEADER/ }).click()
+	await expect(page).toHaveURL(/\/cluster$/)
+	// The dashboard's panel says the same, and leads here too.
+	await page.goto(`http://127.0.0.1:${MEMBER_API_PORT}/`)
+	const panel = page.getByRole('region', { name: 'Cluster' })
+	await expect(panel).toContainText('DEGRADED')
+	await panel.getByRole('link', { name: 'Open the cluster' }).click()
+	await expect(page).toHaveURL(/\/cluster$/)
 })

@@ -1,10 +1,11 @@
 import { defineConfig, devices } from '@playwright/test'
 
-import { API_PORT } from './e2e/settings.mjs'
+import { API_PORT, MEMBER_API_PORT } from './e2e/settings.mjs'
 
 // End-to-end tests: Chromium against a real goethite (e2e/serve.mjs) that
-// serves the built web UI. Build it first: `npm run build`. One goethite and
-// one worker, since the tests share its configuration.
+// serves the built web UI. Build it first: `npm run build`. One worker, since
+// the tests share its configuration. A second goethite, a cluster member
+// (e2e/serve-member.mjs), serves the cluster page.
 export default defineConfig({
 	testDir: 'e2e',
 	testMatch: '*.e2e.ts',
@@ -18,12 +19,22 @@ export default defineConfig({
 		trace: 'retain-on-failure',
 	},
 	projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
-	webServer: {
-		command: 'node e2e/serve.mjs',
-		url: `http://127.0.0.1:${API_PORT}/api/v1/health`,
-		reuseExistingServer: false,
-		timeout: 60_000,
-		stdout: 'ignore',
-		stderr: 'pipe',
-	},
+	webServer: [
+		{
+			command: 'node e2e/serve.mjs',
+			url: `http://127.0.0.1:${API_PORT}/api/v1/health`,
+			reuseExistingServer: false,
+			timeout: 60_000,
+			stdout: 'ignore',
+			stderr: 'pipe',
+		},
+		{
+			command: 'node e2e/serve-member.mjs',
+			url: `http://127.0.0.1:${MEMBER_API_PORT}/api/v1/health`,
+			reuseExistingServer: false,
+			timeout: 60_000,
+			stdout: 'ignore',
+			stderr: 'pipe',
+		},
+	],
 })

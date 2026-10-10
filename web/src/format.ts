@@ -57,6 +57,24 @@ export function dateTime(iso: string): string {
 	})
 }
 
+/** How long before `now` `iso` was: `just now`, `4 s ago`, `3 min ago`, `2 h ago`, `5 d ago`. */
+export function ago(iso: string, now: number = Date.now()): string {
+	const seconds = Math.floor((now - Date.parse(iso)) / 1000)
+	if (seconds < 1) {
+		return 'just now'
+	}
+	if (seconds < 60) {
+		return `${seconds} s ago`
+	}
+	if (seconds < 3600) {
+		return `${Math.floor(seconds / 60)} min ago`
+	}
+	if (seconds < 86_400) {
+		return `${Math.floor(seconds / 3600)} h ago`
+	}
+	return `${Math.floor(seconds / 86_400)} d ago`
+}
+
 /** How a query arrived, as people call it. */
 export const PROTOCOL_LABEL: Record<QueryEntry['protocol'], string> = {
 	udp: 'UDP',

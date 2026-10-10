@@ -38,8 +38,9 @@ the network; otherwise the token crosses it in clear text.
   in two clicks: that adds a custom rule. The range is part of the address. The header shows
   whether filtering is on, and pauses it for 10 minutes or resumes it. In a [cluster](../ha/), the counts are every
   node's together, the header shows what this node does in the cluster and how many members are
-  up, a Cluster panel shows the leader, each member and whether changes are possible, and cluster
+  up, a Cluster panel shows the cluster's health, the leader and each member, and cluster
   problems appear at the top.
+- **Cluster**, only on a node in a cluster: see [below](#the-cluster-page).
 - **Query log**: the newest queries, following new ones live, with the client, the answer and
   what decided it (the rule, a CNAME, the upstream). Search by name and by answer, and page back
   through older entries. Filters set from the dashboard (a client, a time window) show as chips
@@ -82,6 +83,33 @@ the [API reference](#api-reference), both in a new tab; the sign-in page has the
 On narrow screens the top bar shows only their icons, a book and braces. The API
 reference is the node's own (for its exact version) when it serves one, which it does only to
 a browser on the same machine; otherwise it is the one on this site.
+
+## The cluster page
+
+A node in a [cluster](../ha/) has a **Cluster** page; the header's cluster badges and the
+dashboard's Cluster panel lead there too. It shows, as this node sees it:
+
+- **Health**, in a word: `HEALTHY` (every member up, changes work), `DEGRADED` (changes work, but
+  a member is down or something needs a look), `READ-ONLY` (a leader, but changes through this
+  node are refused, and why), `NO LEADER` (changes are frozen until most voters reach each other)
+  or `WAITING TO BE ADDED` (this node is in no cluster yet). Beside it: the leader, whether
+  changes work, and the voters: how many there are, how many it takes, and how many more the
+  cluster can lose (`3 voters, 2 needed: can lose 1`).
+- **A card per member**: up or down, what it does (leader, follower, learner), whether it votes,
+  whether it is a witness, its address and goethite version (flagged when it differs from this
+  node's), its configuration version and how many changes it is behind the leader, when it was
+  last checked, and why the check failed. The leader's card has an ochre header; a member that is
+  down has a dashed border, and says `DOWN`.
+- **Following the leader**, on a member that does not lead: when it last heard from the leader,
+  and when its configuration last changed.
+- **Recovery**: the steps from [When the cluster cannot elect a
+  leader](../ha/#when-the-cluster-cannot-elect-a-leader), offered only where they apply. Without
+  a leader, **Take the cluster over** (or **Start a cluster here** on a node in no cluster yet).
+  When another member leads a cluster of its own, **Join its cluster**. On the card of a member
+  that is down, **Remove** takes it out of the cluster for good (first take it out of every
+  member's config file). Each needs a second click, and acts on the node you are looking at. When
+  goethite refuses one because it does not apply, the refusal offers to do it anyway, with what
+  that means.
 
 ## Security
 
