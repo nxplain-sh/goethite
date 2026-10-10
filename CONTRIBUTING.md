@@ -4,6 +4,12 @@ Thanks for your interest. goethite is pre-alpha. Read [`AGENTS.md`](AGENTS.md) f
 defines the architecture, security rules and conventions, and it binds humans and coding
 agents alike.
 
+goethite is licensed under the AGPL-3.0-only, and what you contribute comes in under Apache-2.0
+unless you say otherwise: see [License](README.md#license) and
+[ADR 0033](docs/adr/0033-agpl-license.md). Dependencies stay permissive: `cargo deny` allows only
+the licenses in `deny.toml`, and a copyleft crate or copyleft data needs a decision, not an
+exception.
+
 ## Prerequisites
 
 - [rustup](https://rustup.rs). The pinned toolchain (Rust 1.99.0 with rustfmt and clippy) installs

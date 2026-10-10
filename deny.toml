@@ -22,7 +22,9 @@ yanked = "deny"
 ignore = []
 
 [licenses]
-# Licenses compatible with shipping goethite under MIT OR Apache-2.0.
+# goethite is AGPL-3.0-only, but its dependencies stay permissive: copyleft
+# code in them would keep goethite from being offered under other terms too,
+# such as a hosted service or a commercial license (ADR 0033).
 # Unicode-3.0 covers the ICU crates behind IDNA name handling; ISC and
 # BSD-3-Clause come with the TLS stack (ring, rustls-webpki, untrusted, subtle).
 allow = [
@@ -33,6 +35,11 @@ allow = [
     "Unicode-3.0",
 ]
 confidence-threshold = 0.93
+
+# goethite's own crates (publish = false) carry goethite's license, which the
+# list above is not for.
+[licenses.private]
+ignore = true
 
 # webpki-roots is the Mozilla root certificate data, under a permissive data
 # license.

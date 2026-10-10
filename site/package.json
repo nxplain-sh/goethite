@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "description": "Project website and docs for goethite (Astro Starlight, deployed to GitHub Pages).",
-  "license": "MIT OR Apache-2.0",
+  "license": "AGPL-3.0-only",
   "scripts": {
     "dev": "astro dev",
     "build": "astro build",
