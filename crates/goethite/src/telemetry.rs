@@ -1,4 +1,4 @@
-//! OpenTelemetry (ADR 0034). The node's metrics are kept by the OpenTelemetry
+//! OpenTelemetry (ADR 0040). The node's metrics are kept by the OpenTelemetry
 //! SDK and served at `/metrics` in the Prometheus text format, under the same
 //! names as before.
 //!
