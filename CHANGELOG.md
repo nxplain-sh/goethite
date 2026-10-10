@@ -117,6 +117,9 @@ configuration format.
 
 ### Fixed
 
+- DNS rebinding protection strips the private `ipv4hint` and `ipv6hint` addresses of `SVCB` and
+  `HTTPS` answers too (RFC 9460 7.3), beside the A and AAAA records, and the local-use NAT64
+  prefix `64:ff9b:1::/48` (RFC 8215) counts as private.
 - The seccomp filter denies the x32 system calls on x86-64: they share the x86-64 audit
   architecture and their numbers matched no rule, so a system call the filter takes away was
   reachable as its x32 number on a kernel built with x32 support.

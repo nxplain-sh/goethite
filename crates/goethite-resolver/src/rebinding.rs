@@ -30,9 +30,11 @@ impl RebindingProtection {
         Self { private_domains }
     }
 
-    /// Removes the A and AAAA records with private addresses from `response`
-    /// unless `question` is below a private domain. Returns how many records
-    /// were removed.
+    /// Removes the private addresses from `response` unless `question` is
+    /// below a private domain: the A and AAAA records with private
+    /// addresses, and the `ipv4hint` and `ipv6hint` addresses of SVCB and
+    /// HTTPS records (RFC 9460 7.3). Returns how many addresses were
+    /// removed.
     pub fn apply(&self, question: &Name, response: &mut Response) -> usize {
         if self
             .private_domains
@@ -48,7 +50,11 @@ impl RebindingProtection {
         response
             .additional
             .retain(|record| !record.ip().is_some_and(is_private));
-        before.saturating_sub(response.answers.len())
+        let mut removed = before.saturating_sub(response.answers.len());
+        for record in response.answers.iter_mut().chain(response.additional.iter_mut()) {
+            removed = removed.saturating_add(record.prune_svc_hints(is_private));
+        }
+        removed
     }
 }
 
@@ -77,13 +83,15 @@ fn is_private_v4(ip: Ipv4Addr) -> bool {
 }
 
 fn is_private_v6(ip: Ipv6Addr) -> bool {
-    let first = ip.segments().first().copied().unwrap_or(0);
+    let [first, second, third, ..] = ip.segments();
     ip.is_loopback()
         || ip.is_unspecified()
         // fc00::/7, unique local (RFC 4193).
         || first & 0xfe00 == 0xfc00
         // fe80::/10, link-local.
         || first & 0xffc0 == 0xfe80
+        // 64:ff9b:1::/48, local-use NAT64 (RFC 8215).
+        || (first == 0x0064 && second == 0xff9b && third == 0x0001)
 }
 
 #[cfg(test)]
