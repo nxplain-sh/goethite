@@ -81,9 +81,10 @@ use it across the network; otherwise passwords cross it in clear text.
   codes.
 - **Settings**, in the header beside Pause and Sign out: filtering on or off, how blocked names
   are answered, how often lists are downloaded, and who may use goethite: the allowed and blocked
-  clients (see [access control](../security/#access-control)). It also shows the running version;
-  **Check for updates** asks GitHub for the newest release and says whether this node runs it,
-  and installs nothing.
+  clients (see [access control](../security/#access-control)). **Empty the cache** makes the next
+  query for a name reach the upstreams again. It also shows the running version; **Check for
+  updates** asks GitHub for the newest release and says whether this node runs it, and installs
+  nothing.
 
 Changes are made with the revision you saw: if someone else changed the same thing meanwhile, the
 UI says so and offers their version instead of overwriting it. A list, schedule or group that

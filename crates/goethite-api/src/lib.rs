@@ -127,6 +127,8 @@ pub trait Control: Send + Sync + 'static {
     fn apply(&self, change: Change) -> BoxFuture<'_>;
     /// Downloads the filter lists now.
     fn refresh_lists(&self);
+    /// Empties the answer cache now, where one is configured.
+    fn flush_cache(&self) {}
     /// Pauses filtering until `until`, or resumes it with `None`.
     fn pause(&self, until: Option<SystemTime>);
     /// Until when filtering is paused, if it is.

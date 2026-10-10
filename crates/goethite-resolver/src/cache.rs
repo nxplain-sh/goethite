@@ -306,6 +306,17 @@ impl Cache {
         }
     }
 
+    /// Empties the cache now. Settings and counters stay.
+    pub fn clear(&self) {
+        for shard in &self.shards {
+            if let Ok(mut shard) = shard.lock() {
+                shard.entries.clear();
+                shard.order.clear();
+                shard.bytes = 0;
+            }
+        }
+    }
+
     /// Number of entries, including expired ones not yet evicted.
     pub fn len(&self) -> usize {
         self.shards
@@ -574,6 +585,18 @@ mod tests {
                 .get(&query("example.com.", RecordType::AAAA))
                 .is_none()
         );
+    }
+
+    #[test]
+    fn clearing_empties_the_cache() {
+        let cache = cache();
+        let q = query("example.com.", RecordType::A);
+        cache.insert(&q, &answer(&q, vec![a("example.com.", 300, 1)]));
+        assert!(cache.get(&q).is_some());
+        cache.clear();
+        assert!(cache.get(&q).is_none());
+        assert_eq!(cache.len(), 0);
+        assert_eq!(cache.stats(), CacheStats { hits: 1, misses: 1 });
     }
 
     #[test]

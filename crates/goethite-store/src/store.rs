@@ -241,6 +241,8 @@ pub enum AuditAction {
     Resume,
     /// A list download was started.
     Refresh,
+    /// The answer cache was emptied.
+    Flush,
     /// This node took the cluster's whole configuration from another
     /// member.
     Replicate,
@@ -254,11 +256,12 @@ extensible_enum!(
     AuditAction,
     "What an audit entry records: `create`, `update` or `delete` (a resource or the settings), \
      `import` (the config file's `[filter]` table), `pause` or `resume` (filtering), `refresh` \
-     (a list download), `replicate` (the cluster's whole configuration, taken from another \
-     member), `promote` (this node took the cluster over) or `demote` (this node left its \
-     cluster to join another). More may be added: show unknown values as they are.",
+     (a list download), `flush` (the answer cache), `replicate` (the cluster's whole \
+     configuration, taken from another member), `promote` (this node took the cluster over) or \
+     `demote` (this node left its cluster to join another). More may be added: show unknown \
+     values as they are.",
     [
-        Create, Update, Delete, Import, Pause, Resume, Refresh, Replicate, Promote, Demote
+        Create, Update, Delete, Import, Pause, Resume, Refresh, Flush, Replicate, Promote, Demote
     ]
 );
 

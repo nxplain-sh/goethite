@@ -9,6 +9,9 @@ configuration format.
 
 ### Added
 
+- **Empty the cache**, from the web UI's Settings page or with `POST /api/v1/cache/flush`:
+  names resolve again on their next query, without a restart. Filtering and local records are
+  untouched.
 - **Safe search for Ecosia, Pixabay and Yandex**, beside Google, YouTube, Bing and DuckDuckGo:
   Ecosia and Pixabay answer with a CNAME to their safe host, and Yandex, which has no such host,
   answers `A` queries with its fixed safe address `213.180.193.56`.

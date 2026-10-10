@@ -109,6 +109,11 @@ export function refreshLists() {
 	return call(api.POST('/api/v1/lists/refresh'))
 }
 
+/** Empties the node's answer cache. */
+export function flushCache() {
+	return call(api.POST('/api/v1/cache/flush'))
+}
+
 /** Asks the node to check GitHub for a newer release. */
 export function checkUpdate() {
 	return call(api.POST('/api/v1/update/check'))

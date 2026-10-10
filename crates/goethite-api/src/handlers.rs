@@ -473,6 +473,21 @@ pub(crate) async fn refresh_lists(
     Ok(StatusCode::ACCEPTED)
 }
 
+/// Empties the answer cache now. Fresh names are resolved again on their next
+/// query.
+#[utoipa::path(post, path = "/api/v1/cache/flush", tag = "settings",
+    responses((status = 200, description = "The cache is empty")),
+    security(("token" = [])))]
+pub(crate) async fn flush_cache(
+    State(api): Shared,
+    Extension(actor): Extension<Actor>,
+) -> Result<StatusCode, ApiError> {
+    let store = Arc::clone(&api.store);
+    blocking(move || store.record(&actor, AuditAction::Flush, None)).await?;
+    api.control.flush_cache();
+    Ok(StatusCode::OK)
+}
+
 /// What to look for in the query log.
 #[derive(Debug, Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
@@ -774,6 +789,7 @@ pub(crate) fn routes() -> Router<Arc<Api>> {
         )
         .route("/api/v1/lists", get(list_lists).post(create_list))
         .route("/api/v1/lists/refresh", post(refresh_lists))
+        .route("/api/v1/cache/flush", post(flush_cache))
         .route("/api/v1/lists/recommended", get(recommended_lists))
         .route("/api/v1/lists/recommended/sizes", get(recommended_sizes))
         .route("/api/v1/lists/directory", get(get_directory))
