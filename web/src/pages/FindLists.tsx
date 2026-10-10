@@ -36,7 +36,10 @@ export function FindLists() {
 			</p>
 			<h1>Find lists</h1>
 			<p className="muted">
-				The <a href="https://filterlists.com" target="_blank" rel="noreferrer noopener">FilterLists</a>{' '}
+				The{' '}
+				<a href="https://filterlists.com" target="_blank" rel="noreferrer noopener">
+					FilterLists
+				</a>{' '}
 				directory, as far as goethite can use it: hosts files, domain lists and adblock-style domain rules.
 				Allowlists are left out. Adding a list opens it for you to check before it is saved.
 			</p>
@@ -79,9 +82,9 @@ export function FindLists() {
 							))}
 						</ul>
 						<p className="muted">
-							Names, descriptions and licenses are FilterLists' and its contributors', and may be out of
-							date: check a list's home page. This node fetched the directory{' '}
-							{dateTime(directory.data.fetched_at)} and keeps it for a day.
+							Names, descriptions and licenses are FilterLists' and its contributors', and may be out of date:
+							check a list's home page. This node fetched the directory {dateTime(directory.data.fetched_at)}{' '}
+							and keeps it for a day.
 						</p>
 					</div>
 				</>
@@ -150,10 +153,7 @@ function DirectoryDetails({ id }: { id: number }) {
 					<table className="table">
 						<tbody>
 							{list.urls.map((url) => {
-								const name = (parts > 1 ? `${list.name} (part ${url.segment})` : list.name).slice(
-									0,
-									MAX_NAME,
-								)
+								const name = (parts > 1 ? `${list.name} (part ${url.segment})` : list.name).slice(0, MAX_NAME)
 								return (
 									<tr key={url.url}>
 										<td className="name">

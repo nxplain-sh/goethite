@@ -7,33 +7,26 @@
 //! bounded in size and time, and revalidated with `ETag` and
 //! `Last-Modified` so unchanged lists are not transferred again.
 
-use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
-use goethite_proto::Name;
 use goethite_resolver::Resolver;
 use http_body_util::{BodyExt, Empty, Limited};
 use hyper::body::{Bytes, Incoming};
 use hyper::header::{
-    ETAG, HOST, HeaderMap, IF_MODIFIED_SINCE, IF_NONE_MATCH, LAST_MODIFIED, LOCATION, RANGE,
-    USER_AGENT,
+    ETAG, HeaderMap, IF_MODIFIED_SINCE, IF_NONE_MATCH, LAST_MODIFIED, LOCATION, RANGE,
 };
-use hyper::{Request, Response, StatusCode, Uri};
-use hyper_util::rt::{TokioExecutor, TokioIo};
+use hyper::{Method, Response, StatusCode, Uri};
 use rustls::ClientConfig;
-use rustls::pki_types::ServerName;
-use tokio::net::TcpStream;
 use tokio::time::timeout;
 use tokio_rustls::TlsConnector;
 use tracing::debug;
 
+use crate::connect::Connection;
+
 /// Redirects followed before giving up.
 const MAX_REDIRECTS: usize = 3;
-
-/// How long connecting to one address may take.
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// How long a whole download may take, redirects included.
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(120);
@@ -144,35 +137,9 @@ impl Downloader {
         start: Option<usize>,
         ranged: bool,
     ) -> Result<Step> {
-        let host = uri.host().context("URL has no host")?;
-        let port = uri.port_u16().unwrap_or(443);
-        let bare_host = host.trim_start_matches('[').trim_end_matches(']');
-        let addresses = if let Ok(ip) = bare_host.parse::<IpAddr>() {
-            vec![ip]
-        } else {
-            let name: Name = bare_host
-                .parse()
-                .with_context(|| format!("{host:?} is not a valid host name"))?;
-            self.resolver.lookup_addresses(&name).await
-        };
-        if addresses.is_empty() {
-            bail!("cannot resolve {host}");
-        }
-        let tcp = connect(&addresses, port).await?;
-        let server_name = ServerName::try_from(bare_host.to_owned())
-            .with_context(|| format!("{host:?} is not a valid TLS server name"))?;
-        let tls = self.connector.connect(server_name, tcp).await?;
-        let http2 = tls.get_ref().1.alpn_protocol() == Some(b"h2");
-        let io = TokioIo::new(tls);
-
-        let mut request = if http2 {
-            Request::get(uri.clone())
-        } else {
-            let path = uri.path_and_query().map_or("/", |p| p.as_str());
-            let authority = uri.authority().context("URL has no authority")?;
-            Request::get(path).header(HOST, authority.as_str())
-        };
-        request = request.header(USER_AGENT, concat!("goethite/", env!("CARGO_PKG_VERSION")));
+        let mut connection =
+            Connection::<Empty<Bytes>>::open(&self.resolver, &self.connector, uri).await?;
+        let mut request = connection.request(Method::GET, uri)?;
         if let Some(etag) = &validators.etag {
             request = request.header(IF_NONE_MATCH, etag);
         }
@@ -182,18 +149,9 @@ impl Downloader {
         if let Some(last) = start.and_then(|len| len.checked_sub(1)).filter(|_| ranged) {
             request = request.header(RANGE, format!("bytes=0-{last}"));
         }
-        let request = request.body(Empty::<Bytes>::new())?;
-
-        let response = if http2 {
-            let (mut sender, connection) =
-                hyper::client::conn::http2::handshake(TokioExecutor::new(), io).await?;
-            tokio::spawn(connection);
-            sender.send_request(request).await?
-        } else {
-            let (mut sender, connection) = hyper::client::conn::http1::handshake(io).await?;
-            tokio::spawn(connection);
-            sender.send_request(request).await?
-        };
+        let response = connection
+            .send(request.body(Empty::<Bytes>::new())?)
+            .await?;
         match start {
             Some(len) => Self::handle_start(response, len).await,
             None => self.handle(response).await,
@@ -266,27 +224,6 @@ fn redirect(response: &Response<Incoming>) -> Result<Step> {
         }
         status => bail!("HTTP status {status}"),
     }
-}
-
-/// Connects to the first reachable address.
-async fn connect(addresses: &[IpAddr], port: u16) -> Result<TcpStream> {
-    let mut last_error = None;
-    for &ip in addresses {
-        match timeout(
-            CONNECT_TIMEOUT,
-            TcpStream::connect(SocketAddr::new(ip, port)),
-        )
-        .await
-        {
-            Ok(Ok(stream)) => return Ok(stream),
-            Ok(Err(err)) => last_error = Some(err.to_string()),
-            Err(_) => last_error = Some("connection timed out".to_owned()),
-        }
-    }
-    bail!(
-        "cannot connect: {}",
-        last_error.unwrap_or_else(|| "no addresses".to_owned())
-    )
 }
 
 /// Parses `url`, which must be an `https://` URL with a host.

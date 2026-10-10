@@ -32,11 +32,12 @@ packages and a container image.
 | B1 | Clients → DNS listeners (UDP/TCP 53, DoT, DoH, DoQ) | untrusted → node | Highest-volume, fully attacker-controlled input; DoT, DoH and DoQ may face the internet |
 | B2 | Resolver → upstream resolvers / authoritative servers | node → untrusted | Responses are untrusted; off-path spoofing is possible over plain DNS |
 | B3 | Filter list downloads                          | untrusted → node   | Large, third-party-controlled content, parsed on the node    |
-| B4 | Admins → REST API / web UI / TUI / Terraform   | semi-trusted → node | Authenticated (Phase 2), can change all behaviour           |
+| B4 | Admins → REST API / web UI / TUI               | semi-trusted → node | Authenticated (Phase 2), can change all behaviour           |
 | B5 | Cluster member ↔ cluster member               | peer ↔ peer        | Raft's log of config changes (Phase 5; replication in Phase 3), and VRRP |
 | B6 | Local OS: config files, storage, other local users | host ↔ process | goethite runs unprivileged after binding (Phase 1)          |
 | B7 | Build and supply chain: crates, npm packages, CI actions, release artifacts | upstream → users | Affects every installation                                  |
 | B8 | A Pi-hole or AdGuard Home being migrated → `goethite migrate` | semi-trusted → admin tool | Another server's answers, planned into changes made through goethite's API (Phase 5) |
+| B9 | Node → OpenTelemetry collector (OTLP/HTTP) | node → semi-trusted | Optional; carries metrics, log records and, if turned on, traces, with the operator's headers (ADR 0034) |
 
 ## 2. Assets
 
@@ -66,8 +67,8 @@ packages and a container image.
 ## 4. Defenses by phase
 
 Status legend: **done** means implemented as of v0.5.0. **partial** means implemented with a known
-gap, named in the row. **planned** means scheduled and not implemented yet. Phases follow the roadmap in
-[`AGENTS.md`](../AGENTS.md#roadmap-respect-the-order).
+gap, named in the row. **planned** means scheduled and not implemented yet. Phase N shipped as
+v0.N (see the [changelog](../CHANGELOG.md)).
 
 | Threat                                      | Controls                                                                                          | Phase | Status  |
 | ------------------------------------------- | ------------------------------------------------------------------------------------------------- | ----- | ------- |
@@ -134,6 +135,8 @@ gap, named in the row. **planned** means scheduled and not implemented yet. Phas
 | Tampered releases (B7)                      | Releases are built in a pinned image (Rust, GCC, Node.js and tools by digest or version), twice per architecture on separate runners, and drafted only if the bytes match; anyone can rebuild one with `cargo xtask dist`. Build provenance (SLSA v1) and CycloneDX SBOMs are attested with keyless Sigstore signatures from the release workflow, so there is no key to steal; the binary embeds its dependency list (cargo-auditable). No build cache, and a release tag must be on `main` and match the version ([ADR 0026](adr/0026-release-builds.md)). The .deb, .rpm and container image hold the same binary and are attested too; the image is built from the published tarballs after checking their attestations ([ADR 0027](adr/0027-packages-and-container-image.md)) | 5 | done |
 | Hostile migration source (B8)               | `goethite migrate` reads the old server's API with the admin's credentials, 16 MiB and 10 s per answer; planning is pure, bounded by goethite's own limits and fuzzed (`plan-migration`); it changes nothing without `--apply`, and then only through goethite's API, with its validation, its audit log and the admin token. Lists come over only as `https://` URLs, never as local paths ([ADR 0030](adr/0030-migrating-from-pihole-and-adguard-home.md)) | 5 | done |
 | Local records redirecting names (B4)        | Local records answer before the filter for every client, so whoever holds the admin token can point any name anywhere, as with any DNS server's local data: changes are audit-logged. Names and values are validated, goethite's own names refused, CNAME chains followed for at most 16 links with loops answered SERVFAIL, at most 10,000 records ([ADR 0029](adr/0029-local-dns-records.md)) | 5 | done |
+| Leaking through telemetry (B9)              | Nothing is sent without `[telemetry] endpoint`. Metrics carry counts and states, never names looked up or client addresses; log records are the `INFO` and above lines journald gets, a few of which name a name looked up (no upstream could answer it, or filtering it failed) or a client (an answer that could not be encoded) (`logs = false` keeps them back); traces are off by default and carry names looked up and servers asked only with `query_details`, client addresses never. HTTPS with rustls (ring) against the public roots or the operator's CA; plain HTTP beyond loopback logs a warning. Header files are read before privileges drop, at most 16 headers and 8 KiB, never quoted in errors, kept in memory and handed over on upgrades like keys. The collector's name is resolved through goethite's own upstreams, not the system resolver ([ADR 0034](adr/0034-opentelemetry.md)) | 6 | done |
+| A slow or hostile collector (B9)            | Exports run on the SDK's own threads, never on a DNS worker: 10 s per export with retries, 64 KiB answers at most, no redirects; log records and spans wait in bounded queues (2,048 each) and are dropped when they are full. The export runs without a subscriber, so its own lookups, connections and lines never become telemetry that feeds it. Failures are counted and logged once per outage, and DNS goes on whatever the collector does | 6 | done |
 | Residual design and implementation flaws    | External security review of v0.5.0 ([scope](security-review.md))                                   | 5     | planned |
 
 ## 5. Non-goals
@@ -167,6 +170,10 @@ Decided since the first draft:
 - **Secrets:** the admin token is stored as a SHA-256 hash; TLS and cluster keys are files the
   operator places, read before privileges are dropped (or handed over on upgrades), and the store
   is mode 0600. Rotating is replacing the files and reloading or restarting.
+
+- **Telemetry:** off by default; when on, metrics (without names or client addresses), log lines
+  at `INFO` and above (a few of which name a name or a client) and, if turned on, sampled traces
+  (names only with `query_details`), never on the DNS path ([ADR 0034](adr/0034-opentelemetry.md)).
 
 Still open:
 

@@ -1,0 +1,838 @@
+/*
+ * goethite's neobrutalist look (AGENTS.md, "UI design: neobrutalism"): thick
+ * ink borders, hard offset shadows with no blur, no gradients, no rounding,
+ * buttons that press.
+ *
+ * Every color has a light and a dark value (light-dark()); `color-scheme`
+ * picks one. It follows the system unless the theme menu set data-theme on
+ * <html>. Every text/background pair is at least 4.5:1 in both themes. Ochre
+ * is only ever a background, with dark ink text on it.
+ */
+
+/* Fonts come from npm and are served by the site itself: no font CDN. */
+@import '@fontsource-variable/space-grotesk';
+@import '@fontsource-variable/jetbrains-mono';
+
+:root {
+	color-scheme: light dark;
+	--bg: light-dark(#f2ece1, #15120e);
+	--panel: light-dark(#fffdf8, #211c16);
+	--ink: light-dark(#111111, #f2ece1);
+	--muted: light-dark(#4f483f, #b3a999);
+	--rust: light-dark(#a63d22, #e06a4b);
+	--cached: light-dark(#f6dfa8, #3a2e1a);
+	--ochre: #e8a33d;
+	--on-accent: #111111;
+
+	--border: 3px solid var(--ink);
+	--shadow: 6px 6px 0 var(--ink);
+	--shadow-small: 4px 4px 0 var(--ink);
+	--shadow-pressed: 1px 1px 0 var(--ink);
+	--font: 'Space Grotesk Variable', system-ui, sans-serif;
+	--mono: 'JetBrains Mono Variable', ui-monospace, monospace;
+	--header: 4.25rem;
+}
+
+:root[data-theme='light'] {
+	color-scheme: light;
+}
+
+:root[data-theme='dark'] {
+	color-scheme: dark;
+}
+
+*,
+*::before,
+*::after {
+	box-sizing: border-box;
+}
+
+body {
+	margin: 0;
+	background: var(--bg);
+	color: var(--ink);
+	font:
+		1rem/1.65 var(--font),
+		system-ui,
+		sans-serif;
+	-webkit-text-size-adjust: 100%;
+}
+
+/* .page wraps every page but the API reference, which Scalar styles itself. */
+:where(.page) a {
+	color: var(--rust);
+	text-decoration-thickness: 2px;
+	text-underline-offset: 3px;
+}
+
+:where(.page) a:hover {
+	color: var(--ink);
+}
+
+:focus-visible {
+	outline: 3px solid var(--ink);
+	outline-offset: 3px;
+}
+
+code,
+kbd,
+pre {
+	font-family: var(--mono);
+}
+
+.sr-only {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	margin: -1px;
+	padding: 0;
+	overflow: hidden;
+	clip-path: inset(50%);
+	white-space: nowrap;
+	border: 0;
+}
+
+.muted {
+	color: var(--muted);
+}
+
+/* Controls that need JavaScript; the boot script in __root.tsx adds .js. */
+.needs-js {
+	display: none !important;
+}
+
+.js .needs-js {
+	display: inline-flex !important;
+}
+
+.skip-link {
+	position: absolute;
+	top: 0.5rem;
+	left: -100vw;
+	z-index: 20;
+	padding: 0.5rem 1rem;
+	background: var(--ochre);
+	color: var(--on-accent);
+	border: var(--border);
+	font-weight: 700;
+}
+
+.skip-link:focus {
+	left: 0.5rem;
+}
+
+/* Buttons and button-like links */
+
+.button,
+.theme select,
+.search-button {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.5rem;
+	padding: 0.4rem 0.85rem;
+	background: var(--panel);
+	color: var(--ink);
+	border: var(--border);
+	border-radius: 0;
+	box-shadow: var(--shadow-small);
+	font: inherit;
+	font-weight: 700;
+	line-height: 1.4;
+	text-decoration: none;
+	cursor: pointer;
+	transition:
+		transform 80ms ease-out,
+		box-shadow 80ms ease-out;
+}
+
+.button:hover,
+.search-button:hover {
+	background: var(--cached);
+	color: var(--ink);
+}
+
+.button:active,
+.search-button:active {
+	transform: translate(3px, 3px);
+	box-shadow: var(--shadow-pressed);
+}
+
+.button.primary,
+.button.primary:hover {
+	background: var(--ochre);
+	color: var(--on-accent);
+}
+
+:where(.page) kbd {
+	padding: 0 0.35em;
+	background: var(--panel);
+	border: 2px solid var(--ink);
+	border-bottom-width: 3px;
+	font-size: 0.85em;
+	font-weight: 600;
+}
+
+/* Header */
+
+.header {
+	position: sticky;
+	top: 0;
+	z-index: 10;
+	display: flex;
+	align-items: center;
+	gap: 1rem;
+	height: var(--header);
+	padding: 0 1.25rem;
+	background: var(--panel);
+	border-bottom: var(--border);
+}
+
+.brand {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.6rem;
+	color: var(--ink);
+	font-size: 1.4rem;
+	font-weight: 700;
+	text-decoration: none;
+}
+
+.search-button {
+	min-width: 12rem;
+	justify-content: space-between;
+	font-weight: 500;
+}
+
+.header > * {
+	flex-shrink: 0;
+}
+
+.header-end {
+	display: flex;
+	align-items: center;
+	gap: 0.75rem;
+	margin-left: auto;
+}
+
+.theme select {
+	appearance: none;
+	padding-right: 0.85rem;
+}
+
+/* Docs: sidebar, page, table of contents */
+
+.docs {
+	display: grid;
+	grid-template-columns: 17rem minmax(0, 1fr) 15rem;
+	align-items: start;
+}
+
+.sidebar {
+	position: sticky;
+	top: var(--header);
+	height: calc(100vh - var(--header));
+	overflow-y: auto;
+	padding: 1.25rem 1rem 2rem;
+	background: var(--panel);
+	border-right: var(--border);
+}
+
+.sidebar ul,
+.toc ul,
+.toc-inline ul {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.sidebar a {
+	display: block;
+	padding: 0.3rem 0.6rem;
+	color: var(--ink);
+	border: 3px solid transparent;
+	text-decoration: none;
+}
+
+.sidebar a:hover {
+	text-decoration: underline;
+}
+
+.sidebar a[aria-current='page'] {
+	background: var(--ochre);
+	color: var(--on-accent);
+	border-color: var(--ink);
+	font-weight: 700;
+}
+
+.main {
+	min-width: 0;
+	max-width: 50rem;
+	padding: 2.5rem 2.5rem 4rem;
+}
+
+.main h1 {
+	margin: 0 0 1.5rem;
+	font-size: clamp(2rem, 4vw, 2.75rem);
+	line-height: 1.15;
+}
+
+.toc {
+	position: sticky;
+	top: var(--header);
+	max-height: calc(100vh - var(--header));
+	overflow-y: auto;
+	padding: 2.5rem 1rem 2rem 0.5rem;
+	font-size: 0.9rem;
+}
+
+.toc h2,
+.toc-inline summary {
+	margin: 0 0 0.5rem;
+	font-size: 0.85rem;
+	font-weight: 700;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+}
+
+.toc li,
+.toc-inline li {
+	padding: 0.15rem 0;
+}
+
+.toc .sub,
+.toc-inline .sub {
+	padding-left: 1rem;
+}
+
+.toc a,
+.toc-inline a {
+	color: var(--ink);
+	text-decoration: none;
+}
+
+.toc a:hover,
+.toc-inline a:hover {
+	text-decoration: underline;
+}
+
+.toc-inline {
+	display: none;
+	margin: 0 0 2rem;
+	padding: 0.75rem 1rem;
+	background: var(--panel);
+	border: var(--border);
+}
+
+.toc-inline summary {
+	margin: 0;
+	cursor: pointer;
+}
+
+.toc-inline[open] summary {
+	margin-bottom: 0.5rem;
+}
+
+.page-footer {
+	margin-top: 3.5rem;
+	padding-top: 1.5rem;
+	border-top: var(--border);
+}
+
+.pager {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 1rem;
+	margin-top: 1.25rem;
+}
+
+.pager a {
+	display: flex;
+	flex-direction: column;
+	padding: 0.75rem 1rem;
+	background: var(--panel);
+	color: var(--ink);
+	border: var(--border);
+	box-shadow: var(--shadow-small);
+	font-weight: 700;
+	text-decoration: none;
+}
+
+.pager a:hover {
+	background: var(--cached);
+}
+
+.pager .muted {
+	font-size: 0.85rem;
+	font-weight: 500;
+}
+
+.pager .next {
+	grid-column: 2;
+	text-align: right;
+}
+
+/* Compiled Markdown */
+
+.prose > :first-child {
+	margin-top: 0;
+}
+
+.prose p,
+.prose ul,
+.prose ol {
+	margin: 0.9rem 0;
+}
+
+.prose li + li {
+	margin-top: 0.3rem;
+}
+
+.prose .heading {
+	display: flex;
+	align-items: baseline;
+	gap: 0.5rem;
+	margin: 2.5rem 0 0.75rem;
+}
+
+.prose .heading > h2,
+.prose .heading > h3,
+.prose .heading > h4,
+.prose .heading > h5,
+.prose .heading > h6 {
+	margin: 0;
+	line-height: 1.25;
+}
+
+.prose h2 {
+	font-size: 1.6rem;
+}
+
+.prose h3 {
+	font-size: 1.25rem;
+}
+
+.prose h4 {
+	font-size: 1.05rem;
+}
+
+.prose [id] {
+	scroll-margin-top: calc(var(--header) + 1rem);
+}
+
+.prose .anchor {
+	color: var(--muted);
+	font-weight: 700;
+	text-decoration: none;
+	opacity: 0;
+}
+
+.prose .heading:hover .anchor,
+.prose .anchor:focus-visible {
+	opacity: 1;
+}
+
+.prose :not(pre) > code {
+	padding: 0.05em 0.3em;
+	background: var(--cached);
+	border: 2px solid var(--ink);
+	font-size: 0.88em;
+	overflow-wrap: break-word;
+	-webkit-box-decoration-break: clone;
+	box-decoration-break: clone;
+}
+
+.prose blockquote {
+	margin: 1.25rem 0;
+	padding: 0.25rem 1rem;
+	background: var(--panel);
+	border: var(--border);
+	border-left-width: 10px;
+}
+
+.prose img {
+	max-width: 100%;
+}
+
+.prose hr {
+	border: 0;
+	border-top: var(--border);
+	margin: 2rem 0;
+}
+
+.prose .table {
+	margin: 1.25rem 0;
+	overflow-x: auto;
+	border: var(--border);
+	background: var(--panel);
+}
+
+.prose table {
+	width: 100%;
+	border-collapse: collapse;
+	font-size: 0.95rem;
+}
+
+.prose th,
+.prose td {
+	padding: 0.45rem 0.7rem;
+	border-bottom: 2px solid var(--ink);
+	text-align: left;
+	vertical-align: top;
+}
+
+.prose th + th,
+.prose td + td {
+	border-left: 2px solid var(--ink);
+}
+
+.prose th {
+	background: var(--cached);
+}
+
+.prose tr:last-child td {
+	border-bottom: 0;
+}
+
+/* Code blocks: Shiki writes both themes' colors as variables (plugins/markdown.ts). */
+
+.code {
+	position: relative;
+	margin: 1.25rem 0;
+}
+
+.shiki {
+	margin: 0;
+	padding: 1rem 1.1rem;
+	overflow-x: auto;
+	background: var(--panel);
+	border: var(--border);
+	box-shadow: var(--shadow-small);
+	font-size: 0.88rem;
+	line-height: 1.6;
+}
+
+.shiki,
+.shiki span {
+	color: light-dark(var(--shiki-light), var(--shiki-dark));
+}
+
+.copy {
+	position: absolute;
+	top: 0.5rem;
+	right: 0.5rem;
+	display: none;
+	padding: 0.1rem 0.5rem;
+	background: var(--panel);
+	color: var(--ink);
+	border: 2px solid var(--ink);
+	font: inherit;
+	font-size: 0.8rem;
+	font-weight: 700;
+	cursor: pointer;
+}
+
+.js .copy {
+	display: block;
+	opacity: 0;
+}
+
+.js .code:hover .copy,
+.js .copy:focus-visible {
+	opacity: 1;
+}
+
+@media (hover: none) {
+	.js .copy {
+		opacity: 1;
+	}
+}
+
+/* Landing page */
+
+.home {
+	max-width: 64rem;
+	margin: 0 auto;
+	padding: 3.5rem 1.5rem 5rem;
+}
+
+.hero h1 {
+	margin: 0;
+	font-size: clamp(3rem, 9vw, 5.5rem);
+	line-height: 1;
+	letter-spacing: -0.02em;
+}
+
+.tagline {
+	max-width: 42rem;
+	font-size: 1.3rem;
+}
+
+.status {
+	display: inline-block;
+	padding: 0.15em 0.6em;
+	background: var(--ochre);
+	color: var(--on-accent);
+	border: var(--border);
+	box-shadow: 3px 3px 0 var(--ink);
+	font-family: var(--mono);
+	font-size: 0.85rem;
+	font-weight: 700;
+	letter-spacing: 0.02em;
+	text-transform: uppercase;
+}
+
+.actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 1rem;
+	margin-top: 1.75rem;
+}
+
+.callout {
+	margin: 3rem 0;
+	padding: 1rem 1.25rem;
+	background: var(--panel);
+	border: var(--border);
+	box-shadow: var(--shadow);
+}
+
+.callout.caution {
+	border-left-width: 12px;
+}
+
+.callout-title {
+	margin: 0 0 0.5rem;
+	font-weight: 700;
+	text-transform: uppercase;
+}
+
+.callout p:last-child {
+	margin-bottom: 0;
+}
+
+.callout code,
+.card code {
+	padding: 0.05em 0.3em;
+	background: var(--cached);
+	border: 2px solid var(--ink);
+	font-size: 0.88em;
+}
+
+.home h2 {
+	font-size: 1.75rem;
+}
+
+.cards {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 1.5rem;
+}
+
+.card {
+	padding: 1.25rem;
+	background: var(--panel);
+	border: var(--border);
+	box-shadow: var(--shadow);
+}
+
+.card h3 {
+	display: flex;
+	align-items: center;
+	gap: 0.75rem;
+	margin: 0 0 0.75rem;
+	font-size: 1.2rem;
+}
+
+.card p {
+	margin: 0;
+}
+
+.card-icon {
+	display: inline-flex;
+	padding: 0.3rem;
+	background: var(--ochre);
+	color: var(--on-accent);
+	border: var(--border);
+}
+
+.not-found {
+	max-width: 40rem;
+	margin: 4rem auto;
+	padding: 0 1.5rem;
+}
+
+.noscript {
+	padding: 2rem;
+}
+
+/* Search */
+
+.search {
+	width: min(42rem, calc(100vw - 2rem));
+	max-height: 80vh;
+	margin: 10vh auto auto;
+	padding: 0;
+	background: var(--panel);
+	color: var(--ink);
+	border: var(--border);
+	box-shadow: var(--shadow);
+}
+
+.search::backdrop {
+	background: rgb(17 17 17 / 0.55);
+}
+
+.search-panel {
+	padding: 1rem;
+}
+
+.search-bar {
+	display: flex;
+	gap: 0.75rem;
+}
+
+.search-bar input {
+	flex: 1;
+	min-width: 0;
+	padding: 0.45rem 0.75rem;
+	background: var(--bg);
+	color: var(--ink);
+	border: var(--border);
+	border-radius: 0;
+	font: inherit;
+}
+
+.search-results {
+	max-height: calc(80vh - 6rem);
+	margin: 1rem 0 0;
+	padding: 0;
+	overflow-y: auto;
+	list-style: none;
+}
+
+.search-results > li {
+	padding: 0.75rem 0;
+	border-top: 2px solid var(--ink);
+}
+
+.search-results p {
+	margin: 0.25rem 0;
+	font-size: 0.92rem;
+}
+
+.search-results ul {
+	margin: 0.25rem 0 0;
+	padding-left: 1rem;
+	font-size: 0.9rem;
+}
+
+.search-title {
+	font-size: 1.05rem;
+	font-weight: 700;
+}
+
+.search mark {
+	background: var(--ochre);
+	color: var(--on-accent);
+}
+
+/* Narrower screens: the table of contents moves into the page, then the sidebar behind a menu button. */
+
+@media (max-width: 72rem) {
+	.docs {
+		grid-template-columns: 17rem minmax(0, 1fr);
+	}
+
+	.toc {
+		display: none;
+	}
+
+	.toc-inline {
+		display: block;
+	}
+}
+
+@media (max-width: 50rem) {
+	.docs {
+		display: block;
+	}
+
+	.main {
+		padding: 1.75rem 1rem 3rem;
+	}
+
+	.header {
+		gap: 0.6rem;
+		padding: 0 0.75rem;
+	}
+
+	.brand {
+		font-size: 1.2rem;
+	}
+
+	.search-button {
+		min-width: 0;
+	}
+
+	.search-button kbd,
+	.header-end .button {
+		display: none;
+	}
+
+	.cards {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	/* Without JavaScript there is no menu button, so the sidebar stays in the page. */
+	.sidebar {
+		position: static;
+		height: auto;
+		border-right: 0;
+		border-bottom: var(--border);
+	}
+
+	.js .sidebar {
+		display: none;
+	}
+
+	.js .sidebar[data-open='true'] {
+		position: fixed;
+		inset: var(--header) 0 0 0;
+		z-index: 9;
+		display: block;
+		height: auto;
+	}
+
+	.pager {
+		grid-template-columns: 1fr;
+	}
+
+	.pager .next {
+		grid-column: 1;
+	}
+}
+
+/* The smallest phones keep the logo and drop the name beside it. */
+@media (max-width: 26rem) {
+	.brand-name {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		overflow: hidden;
+		clip-path: inset(50%);
+		white-space: nowrap;
+	}
+}
+
+@media (min-width: 50.01rem) {
+	.js .menu-button {
+		display: none !important;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.button,
+	.search-button {
+		transition: none;
+	}
+}

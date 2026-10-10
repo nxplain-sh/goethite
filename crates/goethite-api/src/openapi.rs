@@ -15,7 +15,7 @@ use crate::{cluster, handlers};
             only answers on loopback. Changes are validated, audit-logged and applied at \
             once. Resources have a revision: send it back in `If-Match` to make an update \
             fail if someone else changed the resource in the meantime.",
-        license(name = "MIT OR Apache-2.0", identifier = "MIT OR Apache-2.0"),
+        license(name = "AGPL-3.0-only", identifier = "AGPL-3.0-only"),
     ),
     paths(
         handlers::health,

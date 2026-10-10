@@ -107,6 +107,7 @@ pub fn router(shared: Arc<RaftShared>) -> Router {
         .with_state(shared)
 }
 
+#[tracing::instrument(level = "debug", name = "raft.append", skip_all)]
 async fn append(
     State(shared): State<Arc<RaftShared>>,
     Json(request): Json<RaftRequest<AppendEntriesRequest<TypeConfig>>>,
@@ -122,6 +123,7 @@ async fn append(
     Json(answer).into_response()
 }
 
+#[tracing::instrument(level = "debug", name = "raft.vote", skip_all)]
 async fn vote(
     State(shared): State<Arc<RaftShared>>,
     Json(request): Json<RaftRequest<VoteRequest<RaftId>>>,
@@ -132,6 +134,7 @@ async fn vote(
     }
 }
 
+#[tracing::instrument(level = "debug", name = "raft.snapshot", skip_all)]
 async fn snapshot(
     State(shared): State<Arc<RaftShared>>,
     Json(request): Json<RaftRequest<InstallSnapshotRequest<TypeConfig>>>,

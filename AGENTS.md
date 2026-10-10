@@ -11,11 +11,11 @@ In scope for 1.0:
 - DNS filtering, caching, forwarding, encrypted DNS (DoH / DoT / DoQ / ODoH)
 - Per-client groups, schedules, full AdGuard/uBlock DNS filter syntax, CNAME uncloaking, safe search
 - Clustering with HA: replicated config, floating IP (VRRP), zero-downtime reload and upgrade
-- Interfaces: REST API, TUI (`goethite tui`), embedded web UI, Terraform provider
+- Interfaces: REST API, TUI (`goethite tui`), embedded web UI
 - Project website + docs on GitHub Pages, with a Scalar API reference built from the OpenAPI spec
-- Recursive resolution with full DNSSEC validation (later phase)
+- Recursive resolution with full DNSSEC validation
 
-Out of scope for 1.0: hosted cloud service, developer features like Numa's `.numa` proxy/mDNS, Windows as a server platform. Linux (amd64 + arm64) is first-class; macOS is for development only.
+Out of scope for 1.0: hosted cloud service, a Terraform provider (a possible later feature), developer features like Numa's `.numa` proxy/mDNS, Windows as a server platform. Linux (amd64 + arm64) is first-class; macOS is for development only.
 
 ## Architecture principles
 
@@ -23,7 +23,7 @@ Out of scope for 1.0: hosted cloud service, developer features like Numa's `.num
 - **Resolution pipeline (in order):** client identification → policy/group lookup → local rewrites → filter check (incl. CNAME uncloaking) → cache → upstream (forward or recursive) → DNSSEC validation → response.
 - **Fail-open option:** if filtering fails, keep resolving rather than take the network down.
 - **Hot paths never block:** compiled filter lists and config are swapped atomically (`arc-swap`).
-- **One source of truth for config:** the replicated config store is authoritative. TOML is for bootstrap. Resources created via Terraform carry `managed_by = "terraform"` and are read-only in the UI and TUI.
+- **One source of truth for config:** the replicated config store is authoritative. TOML is for bootstrap.
 
 ## Workspace layout
 
@@ -40,26 +40,25 @@ crates/
   goethite-migrate/   reads Pi-hole / AdGuard Home API answers and plans the same in goethite
   goethite/           the binary: CLI (clap), wiring, systemd integration
 xtask/                repository automation: `cargo xtask ci` runs what CI runs
-web/                  Vite + React + TanStack Router SPA (embedded into the binary)
-site/                 project website + docs (Astro Starlight), deployed to GitHub Pages
+web/                  React + TanStack Router SPA built with Vite+ (embedded into the binary)
+site/                 project website + docs (TanStack Start, prerendered), deployed to GitHub Pages
 fuzz/                 cargo-fuzz targets (own nightly workspace)
 bench/                dnsperf script + recorded results; criterion benches live in crates/*/benches/
 tests/chaos/          chaos lab: two nodes, a witness and a client in network namespaces
 tests/packages/       installs the .deb and .rpm on each supported distribution
 deploy/               hardened systemd units, server config, package and container image definitions
 config/               example config
-docs/                 architecture, threat model, ADRs
+docs/                 architecture, threat model, branching and releases, ADRs
 ```
 
 The layout follows the [standard Rust project layout](https://github.com/miguelmartens/standard-rust-project-layout); [ADR 0025](docs/adr/0025-standard-rust-project-layout.md) records where goethite deviates and why. Read it before adding a crate, a top-level directory or a workspace lint.
 
-The Terraform provider lives in a separate repo (`terraform-provider-goethite`, Go, terraform-plugin-framework) and is built from the OpenAPI spec. Do not start it before Phase 3.5.
-
 ## Tech stack
 
 - Rust stable, edition 2024, MSRV pinned in `rust-toolchain.toml` and `Cargo.toml`
-- tokio (multi-thread), hickory-proto, axum, utoipa, rustls, arc-swap, fst, redb, serde + toml, tracing, clap, ratatui, thiserror (libraries) / anyhow (binary only)
-- Web: Vite, React, TypeScript (strict), TanStack Router (SPA, NOT TanStack Start), TanStack Query, TanStack Table + Virtual; typed API client generated from the OpenAPI spec; served from the binary via rust-embed with an SPA fallback route
+- tokio (multi-thread), hickory-proto, axum, utoipa, rustls, arc-swap, fst, redb, serde + toml, tracing, OpenTelemetry (metrics; `/metrics` through its Prometheus reader, [ADR 0034](docs/adr/0034-opentelemetry.md)), clap, ratatui, thiserror (libraries) / anyhow (binary only)
+- Web: Vite+ (`vp`: Vite, Vitest, Oxlint, Oxfmt), React, TypeScript (strict), TanStack Router (SPA, NOT TanStack Start: the strict CSP forbids its inline scripts), TanStack Query, TanStack Table + Virtual; typed API client generated from the OpenAPI spec; served from the binary via rust-embed with an SPA fallback route
+- Site: TanStack Start on Vite+, prerendered to static HTML; Markdown compiled at build time; Pagefind search
 
 ## Security rules (non-negotiable)
 
@@ -80,7 +79,7 @@ The Terraform provider lives in a separate repo (`terraform-provider-goethite`, 
 
 ## Code conventions
 
-- `cargo xtask ci` must pass: it runs every check CI runs.
+- `cargo xtask ci` must pass: it runs every Rust check CI runs. `web/` and `site/` are checked by their own npm scripts (`npm run check` is `vp check`: format, lint, type-check).
 - Modules with children use `foo.rs` beside `foo/`; only shared integration-test helpers live in `tests/<name>/mod.rs`. File names in `tests/`, `benches/` and `examples/` are kebab-case: they are target names.
 - Errors: `thiserror` in libraries, `anyhow` only in the binary. Log with `tracing`, never `println!`.
 - Public items get doc comments. Architectural decisions get a short ADR in `docs/adr/`.
@@ -89,8 +88,8 @@ The Terraform provider lives in a separate repo (`terraform-provider-goethite`, 
 
 ## Website and API docs
 
-- `site/` is an Astro Starlight site, deployed to GitHub Pages by a GitHub Actions workflow ([`nxplain-sh.github.io/goethite`](https://nxplain-sh.github.io/goethite/) unless a custom domain is set). Same neobrutalist look as the app; self-hosted fonts.
-- Content: landing page, install + quick start, config reference, filter syntax, HA guide, Terraform guide, security (threat model, verifying signed releases), benchmarks, changelog.
+- `site/` is a TanStack Start site prerendered to static HTML, deployed to GitHub Pages by a GitHub Actions workflow ([`nxplain-sh.github.io/goethite`](https://nxplain-sh.github.io/goethite/) unless a custom domain is set). Same neobrutalist look as the app; self-hosted fonts.
+- Content: landing page, install + quick start, config reference, filter syntax, HA guide, security (threat model, verifying signed releases), benchmarks, changelog.
 - API reference: Scalar, rendered from `openapi.json`, which CI generates from the Rust code (utoipa) and commits as an artifact for the site. CI fails on breaking API changes to `/api/v1` (e.g. with oasdiff) unless the change is marked intentional.
 - In the binary, `/api/docs` (Scalar) is OFF by default, loopback-only when enabled, and serves bundled assets — never a CDN — so the strict CSP still holds.
 - Docs ship with features: a feature is not done until its docs page is updated.
@@ -105,23 +104,11 @@ Shared by the web UI and (where possible) the TUI.
 - The web UI has one theme, light. Palette (dark), for the website only: bg `#15120E`, panel `#211C16`, ink `#F2ECE1`, rust `#E06A4B`, teal `#5CC2B0`.
 - Accessibility: 4.5:1 text contrast, visible focus states, never rely on color alone (blocked/allowed always carry a text label).
 
-## Roadmap (respect the order)
-
-- **Phase 0 — Foundation:** workspace, CI, security tooling, fuzz harness, threat model, site skeleton deployed to GitHub Pages, a server answering a hardcoded query.
-- **Phase 1 — v0.1 core blocker:** listeners, forwarding (plain/DoH/DoT) with failover, sharded TTL cache, filter engine (hosts, domain lists, core AdGuard syntax) compiled to FST + Bloom with hot swap, scheduled list updates, hardened systemd unit.
-- **Phase 2 — v0.2 control:** Scalar API reference on the site + breaking-change check, client groups + schedules, CNAME uncloaking, safe search, query log
-  - stats, Prometheus metrics, `/api/v1` + OpenAPI, audit log, TUI, web app skeleton + design tokens.
-- **Phase 3 — v0.3 HA:** two-node config sync over mTLS, VRRP floating IP, graceful reload via socket handoff, cluster-wide stats, fail-open, chaos tests.
-- **Phase 3.5 — Terraform provider** (separate repo).
-- **Phase 4 — v0.4:** full web UI, DoH/DoT/DoQ server, ODoH, recursion + DNSSEC.
-- **Phase 5 — v0.5:** Raft clustering (openraft, with a vote-only witness), reproducible signed builds, SBOM, packaging (.deb, .rpm, container image), fuzzing out of public CI (local runs before each release), Landlock + seccomp sandboxing, client access control, local DNS records, importers from Pi-hole and AdGuard Home, external security review.
-- **1.0:** not scheduled yet; it follows v0.5.
-
 ## How to work in this repo
 
 - Plan before coding: for any non-trivial task, outline the approach and files to touch first.
-- Branch from and target `development`; `main` takes pull requests from `development` only ([Branches](CONTRIBUTING.md#branches)).
-- Stay inside the current phase. If something belongs to a later phase, note it in [`docs/BACKLOG.md`](docs/BACKLOG.md) instead of building it.
+- Branch from `development` as `<kind>/<what>` (`feature/`, `fix/`, `refactor/`, `chore/`, `docs/`) and target `development`; rename a tool-generated branch before its first push. Only releases target `main`. Names, merging and hotfixes: [`docs/branching.md`](docs/branching.md); cutting a release: [`docs/releases.md`](docs/releases.md).
+- Keep each change to its task. Note other work you notice in [`docs/BACKLOG.md`](docs/BACKLOG.md) instead of building it.
 - Ask before adding a dependency, changing the public API, or changing anything in the security rules above.
-- Before saying a task is done: `cargo xtask ci` and (for parser changes) a short fuzz run pass. Summarize what changed and what is left.
+- Before saying a task is done: `cargo xtask ci`, `npm run check` in `web/` or `site/` when they changed, and (for parser changes) a short fuzz run pass. Summarize what changed and what is left.
 - Development binds to port `15353` by default so it runs without root; production uses `53`. (Not `5353`: that is the multicast DNS port, held by mDNSResponder on macOS and often by Avahi on Linux.)

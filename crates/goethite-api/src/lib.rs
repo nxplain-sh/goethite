@@ -57,7 +57,10 @@ pub use cluster::{
 pub use docs::{EmbeddedDocs, SCALAR as DOCS_SCALAR};
 pub use error::{ApiError, ErrorBody, ErrorDetail};
 pub use openapi::{openapi, openapi_json};
-pub use serve::{ApiListeners, MAX_CONNECTIONS, PeerCertificate, Serving, serve, serve_router};
+pub use serve::{
+    ApiListeners, HANDSHAKE_TIMEOUT, MAX_CONNECTIONS, MAX_CONNECTIONS_PER_PEER, PeerCertificate,
+    Serving, serve, serve_router,
+};
 pub use web::{EmbeddedWeb, WebAssets};
 
 /// The checks made on every request's `Host`, `Origin` and path, for the
@@ -88,7 +91,10 @@ pub struct ApiConfig {
 /// What changed in the store, so the data plane knows what to recompile.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Change {
-    /// Lists or custom rules: the filter must be recompiled.
+    /// Filter lists: the filter must be recompiled, and the lists fetched
+    /// now rather than at the next scheduled refresh.
+    Lists,
+    /// Custom rules: the filter must be recompiled.
     Filter,
     /// Groups, clients, schedules, local records or settings: only the
     /// policy.
@@ -450,6 +456,26 @@ pub fn router(api: &Arc<Api>) -> Router {
         .layer(middleware::from_fn_with_state(Arc::clone(api), auth::guard))
         .layer(middleware::from_fn(limit_time))
         .layer(middleware::from_fn(security_headers))
+        .layer(middleware::from_fn(span))
+}
+
+/// A span for each request, for traces: its method, the route it matched
+/// (never the path itself, which may name a client) and its status.
+async fn span(request: Request<axum::body::Body>, next: Next) -> Response {
+    let route = request
+        .extensions()
+        .get::<axum::extract::MatchedPath>()
+        .map_or("unmatched", |path| path.as_str())
+        .to_owned();
+    let span = tracing::debug_span!(
+        "api",
+        method = %request.method(),
+        %route,
+        status = tracing::field::Empty,
+    );
+    let response = tracing::Instrument::instrument(next.run(request), span.clone()).await;
+    span.record("status", response.status().as_u16());
+    response
 }
 
 /// Gives up on requests that take too long.

@@ -1,10 +1,21 @@
 name: CI
 
+# No `push` trigger. Changes reach development and main through pull
+# requests (docs/branching.md), and a pull request's run already tests the
+# merge result (refs/pull/N/merge), so a run on the push that merges it would
+# test the same tree a second time.
 on:
-  push:
-    branches: [main, development]
+  # Documentation and the website cannot break the build, so a pull request
+  # that only changes them starts nothing. A pull request into main always
+  # runs: it is a release, which bumps the version in Cargo.toml. One that
+  # does not is no release, and its required checks stay pending.
   pull_request:
-  # Weekly, so new advisories against unchanged dependencies are noticed.
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+      - "site/**"
+  # Weekly, so new advisories against unchanged dependencies are noticed. It
+  # runs on main, and every branch can restore main's caches.
   schedule:
     - cron: "17 4 * * 1"
   workflow_dispatch:
@@ -22,22 +33,57 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  # Work lands on development; main only takes pull requests from it. A
-  # required check, since a ruleset cannot restrict a pull request's source.
+  # main holds the latest release: it takes a release from development or a
+  # hotfix/ branch, with a new version and nothing left under [Unreleased].
+  # Other branches of this repository are named <kind>/<what>. See
+  # docs/branching.md. A required check, since a ruleset cannot restrict a
+  # pull request's source.
   source-branch:
     name: source branch
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     steps:
-      - name: Only development merges into main
+      - name: Check the branch names
         env:
           BASE_REF: ${{ github.base_ref }}
           HEAD_REF: ${{ github.head_ref }}
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           REPO: ${{ github.repository }}
         run: |
-          if [ "$BASE_REF" = main ] && { [ "$HEAD_REF" != development ] || [ "$HEAD_REPO" != "$REPO" ]; }; then
-            echo "::error::Pull requests into main come from development. Retarget this one to development."
+          if [ "$BASE_REF" = main ]; then
+            case "$HEAD_REPO:$HEAD_REF" in
+              "$REPO:development" | "$REPO:hotfix/"?*) ;;
+              *)
+                echo "::error::Pull requests into main come from development or a hotfix/ branch (docs/branching.md). Retarget this one to development."
+                exit 1
+                ;;
+            esac
+          elif [ "$HEAD_REPO" = "$REPO" ]; then
+            case "$HEAD_REF" in
+              feature/?* | fix/?* | refactor/?* | chore/?* | docs/?* | renovate/?*) ;;
+              *)
+                echo "::error::Branches are named <kind>/<what>, with feature/, fix/, refactor/, chore/ or docs/ (docs/branching.md). Rename this one (git branch -m), push it and open the pull request again."
+                exit 1
+                ;;
+            esac
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: github.base_ref == 'main'
+        with:
+          persist-credentials: false
+      - name: Only releases merge into main
+        if: github.base_ref == 'main'
+        run: |
+          unreleased=$(awk '/^## \[Unreleased\]/ { on = 1; next } /^## / { on = 0 } on && NF' CHANGELOG.md)
+          if [ -n "$unreleased" ]; then
+            echo "::error::CHANGELOG.md has entries under [Unreleased]. main takes releases only: prepare the release first (docs/releases.md)."
+            exit 1
+          fi
+          git fetch --no-tags --depth=1 origin main
+          released=$(git show FETCH_HEAD:Cargo.toml | sed -n 's/^version = "\(.*\)"$/\1/p' | head -n 1)
+          proposed=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+          if [ "${proposed:?}" = "${released:?}" ]; then
+            echo "::error::The version is still $released, main's. main takes releases only: prepare the release first (docs/releases.md)."
             exit 1
           fi
 
@@ -195,7 +241,10 @@ jobs:
             echo "::error::web/src/api/schema.d.ts is out of date: run 'npm run api' in web/ and commit it"
             exit 1
           fi
-      - name: Type-check, build and check the size budget
+      - name: Format, lint and type-check (vp check)
+        working-directory: web
+        run: npm run check
+      - name: Build and check the size budget
         working-directory: web
         run: npm run build
       - name: Unit tests
@@ -235,6 +284,8 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  # The pinned toolchain is the MSRV (ADR 0025), so clippy already builds
+  # every target with it. This only checks that the two still agree.
   msrv:
     name: MSRV
     runs-on: ubuntu-24.04
@@ -251,11 +302,6 @@ jobs:
             "$msrv" | "$msrv".*) ;;
             *) echo "::error::rust-toolchain.toml ($pinned) does not match rust-version ($msrv)"; exit 1 ;;
           esac
-          echo "MSRV=$msrv" >> "$GITHUB_ENV"
-      - name: Install the MSRV toolchain
-        run: rustup toolchain install "$MSRV" --profile minimal
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - run: cargo +"$MSRV" check --workspace --all-targets --all-features --locked
 
   deny:
     name: cargo-deny

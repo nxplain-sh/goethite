@@ -13,5 +13,12 @@
   "lockFileMaintenance": {
     "enabled": true
   },
-  "osvVulnerabilityAlerts": true
+  "osvVulnerabilityAlerts": true,
+  "packageRules": [
+    {
+      "description": "vite-plus and the vite it aliases (npm:@voidzero-dev/vite-plus-core, in devDependencies and overrides) must stay on the same version",
+      "matchPackageNames": ["vite-plus", "@voidzero-dev/vite-plus-core"],
+      "groupName": "Vite+"
+    }
+  ]
 }

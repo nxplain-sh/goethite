@@ -7,6 +7,83 @@ configuration format.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-10
+
+### Added
+
+- **Sending metrics, logs and traces to an OpenTelemetry collector** over OTLP/HTTP, with a new
+  `[telemetry]` table: `endpoint`, a `headers_file` for an API key, a `ca_file` for a private CA,
+  `metrics`, `logs`, `traces`, `trace_sample_ratio`, `query_details` and `interval`.
+  - Nothing is sent without an endpoint, and `/metrics` stays as it was.
+  - Log records are the lines at `INFO` and above. They also still go to standard error,
+    unchanged.
+  - Traces are off by default. With them on, a sampled share (5% by default) of the slow paths
+    is traced: queries that missed the cache, with each upstream attempt or each query to an
+    authoritative server and DNSSEC validation; list downloads; filter builds; Raft calls; API
+    requests. Cache hits, blocks and local answers open no span. Names looked up are on spans
+    only with `query_details = true`.
+  - goethite sends the requests with its own HTTP client: rustls with ring, names resolved
+    through its own upstreams.
+  - Exports never touch the DNS path. Failures are counted in
+    `goethite_telemetry_export_failures_total` and logged once per outage.
+
+  See [Metrics and telemetry](https://nxplain-sh.github.io/goethite/observability/).
+
+- **A Cluster page in the web UI**, on nodes in a cluster: the cluster's health in a word, the
+  voters it can lose, a card per member (up or down, leader, voter, witness, version, how many
+  changes behind the leader), how this node follows the leader, and the recovery steps where they
+  apply: take the cluster over, join another cluster, remove a member that is down, each after a
+  second click. The dashboard's Cluster panel and the header's cluster badges lead to it. See
+  [Web UI](https://nxplain-sh.github.io/goethite/web-ui/#the-cluster-page).
+- **Compose files** for Docker Compose and Podman Compose, on the minor version's tag, with a
+  read-only root file system and no way to gain privileges.
+  `deploy/container/compose.yaml` runs one node as an unprivileged user from the start, with no
+  capabilities ([Install](https://nxplain-sh.github.io/goethite/install/#in-a-container)).
+  `deploy/container/cluster/` runs a cluster, one machine per member: goethite and the floating
+  IP's `goethite vrrp` on each DNS node, the witness unprivileged on a third, with example config
+  files for each ([High availability](https://nxplain-sh.github.io/goethite/ha/#in-containers)).
+  See [ADR 0036](docs/adr/0036-compose-files.md).
+
+### Changed
+
+- **Metrics are kept by the OpenTelemetry SDK** ([ADR 0034](docs/adr/0034-opentelemetry.md)),
+  the first step towards OpenTelemetry for metrics, logs and traces. `/metrics` serves the same
+  families, labels, help and types as before, through the SDK's Prometheus reader, so scrapes and
+  dashboards keep working. Small differences:
+  - the upstream metrics list their labels in another order (`protocol` first), which Prometheus
+    ignores;
+  - `goethite_query_duration_seconds_sum` is a sum of seconds rather than of whole microseconds.
+
+  The per-query counters are bound instruments, about 11 ns per query (see
+  [`bench/`](bench/README.md#query-metrics)). An OpenTelemetry Collector can read `/metrics` with
+  its `prometheus` receiver ([API docs](https://nxplain-sh.github.io/goethite/api/#metrics)).
+- goethite is now licensed under the GNU Affero General Public License, version 3 only
+  (`AGPL-3.0-only`), instead of MIT OR Apache-2.0. Releases up to and including v0.5.0 keep MIT OR
+  Apache-2.0. Contributions come in under Apache-2.0
+  ([ADR 0033](docs/adr/0033-agpl-license.md)).
+- **The website is built with TanStack Start** instead of Astro Starlight: every page is still
+  static HTML at the same address, with the same docs, search, light and dark themes and API
+  reference. The web UI and the site build with [Vite+](https://viteplus.dev), which adds a
+  formatter, a linter and type-aware lint checks (`npm run check`) to both
+  ([ADR 0035](docs/adr/0035-site-on-tanstack-start-and-vite-plus.md)).
+- The container image is built on Debian 13 (`gcr.io/distroless/cc-debian13`): the Debian 12
+  images it was built on were deprecated on 1 September 2026 and no longer get security fixes. It
+  also carries the standard OCI labels (version, commit, documentation), on the multi-architecture
+  image's index too, where ghcr.io looks for its description.
+
+### Removed
+
+- **The Terraform provider.** Its repository is gone, and `managed_by` no longer has a `terraform`
+  value: resources that had it read as `api`, so the web UI and the TUI no longer show anything
+  read-only, and a request that sends `terraform` gets `api`
+  ([ADR 0034](docs/adr/0034-drop-the-terraform-provider.md)). A provider may come back later.
+
+### Fixed
+
+- Deleting a filter list in the web UI no longer fails with a conflict when a group started using
+  it after the page loaded, such as the default group just after the list was created: the UI
+  checks which groups use the list at the moment it deletes it.
+
 ## [0.5.0] - 2026-10-09
 
 Phase 5, v0.5: Raft clustering with a witness, a Landlock and seccomp sandbox, reproducible and
@@ -399,7 +476,8 @@ production on Linux. It is pre-alpha software: try it, but do not rely on it yet
   criterion benchmarks, a dnsperf script, and CI with clippy, tests on amd64 and arm64,
   cargo-deny and cargo-audit.
 
-[Unreleased]: https://github.com/nxplain-sh/goethite/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/nxplain-sh/goethite/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/nxplain-sh/goethite/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/nxplain-sh/goethite/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/nxplain-sh/goethite/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/nxplain-sh/goethite/compare/v0.2.0...v0.3.0

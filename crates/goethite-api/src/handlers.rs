@@ -232,7 +232,7 @@ macro_rules! resource_handlers {
 resource_handlers!(
     List,
     ListSpec,
-    Change::Filter,
+    Change::Lists,
     "lists",
     "/api/v1/lists",
     "/api/v1/lists/{id}",

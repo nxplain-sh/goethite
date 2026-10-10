@@ -113,9 +113,9 @@ export function RecommendedLists({
 		<section className="panel" aria-label="Recommended lists">
 			<h2>Recommended lists</h2>
 			<p className="muted">
-				Each checked to download and read cleanly. Sizes are what each list says it has, or what goethite
-				read once it is added; lines a DNS server cannot apply, such as cosmetic or path rules, are skipped
-				and counted. Looking for something else?{' '}
+				Each checked to download and read cleanly. Sizes are what each list says it has, or what goethite read
+				once it is added; lines a DNS server cannot apply, such as cosmetic or path rules, are skipped and
+				counted. Looking for something else?{' '}
 				<Link to="/lists/find">Find lists in the FilterLists directory</Link>.
 			</p>
 			<ErrorNotice error={recommended.error ?? groups.error} />
@@ -124,8 +124,8 @@ export function RecommendedLists({
 			)}
 			{base.length > 1 ? (
 				<div className="notice" role="status">
-					Overlap: {base.map((item) => item.name).join(' and ')} are all on. Base lists overlap a lot, so one is
-					enough; turn the others off, or use a preset.
+					Overlap: {base.map((item) => item.name).join(' and ')} are all on. Base lists overlap a lot, so one
+					is enough; turn the others off, or use a preset.
 				</div>
 			) : null}
 			<Category title="Base list" hint="Pick one: base lists overlap a lot, so a second adds little.">
@@ -197,12 +197,8 @@ function RecommendedRow({
 	const list = nodeList(lists, item)
 	const on = list !== undefined && list.spec.enabled !== false
 	const excluded = excludedInUse(catalog, item, lists)
-	const fallback = groups.find((group) => group.id === DEFAULT_GROUP && group.spec.managed_by !== 'terraform')
+	const fallback = groups.find((group) => group.id === DEFAULT_GROUP)
 	const plan = planSwitch(catalog, item, lists, groups, fallback)
-	const terraform =
-		plan.groups.some((change) => change.group.spec.managed_by === 'terraform') ||
-		plan.disable.some((other) => other.spec.managed_by === 'terraform') ||
-		list?.spec.managed_by === 'terraform'
 	const skipped = (state?.unsupported ?? 0) + (state?.invalid ?? 0)
 	const size =
 		state?.rules != null
@@ -210,7 +206,14 @@ function RecommendedRow({
 			: stated === undefined
 				? null
 				: `about ${count(stated)} entries`
-	const action = excluded.length > 0 ? `Switch from ${excluded.map((other) => other.spec.name).join(', ')}` : on ? null : list === undefined ? 'Add' : 'Turn on'
+	const action =
+		excluded.length > 0
+			? `Switch from ${excluded.map((other) => other.spec.name).join(', ')}`
+			: on
+				? null
+				: list === undefined
+					? 'Add'
+					: 'Turn on'
 
 	return (
 		<>
@@ -234,10 +237,8 @@ function RecommendedRow({
 					<ErrorNotice error={apply.error} />
 				</td>
 				<td className="actions-cell">
-					{on && excluded.length === 0 ? (
+					{action === null ? (
 						<span className="badge ok">ADDED</span>
-					) : action === null || terraform ? (
-						<span className="badge">TERRAFORM</span>
 					) : (
 						<button
 							type="button"
@@ -389,25 +390,28 @@ function ApplyPreset({
 }) {
 	const id = useId()
 	const apply = useApply()
-	const editable = groups.filter((group) => group.spec.managed_by !== 'terraform')
 	const [groupId, setGroupId] = useState(
-		editable.some((group) => group.id === DEFAULT_GROUP) ? DEFAULT_GROUP : (editable[0]?.id ?? ''),
+		groups.some((group) => group.id === DEFAULT_GROUP) ? DEFAULT_GROUP : (groups[0]?.id ?? ''),
 	)
-	const group = editable.find((candidate) => candidate.id === groupId)
+	const group = groups.find((candidate) => candidate.id === groupId)
 	const plan = group === undefined ? undefined : planPreset(catalog, preset, lists, group, groups)
 	return (
 		<div className="subform apply-preset">
 			<div className="field">
 				<label htmlFor={`${id}-group`}>Use {preset.name} for</label>
-				<select id={`${id}-group`} className="select" value={groupId} onChange={(event) => setGroupId(event.target.value)}>
-					{editable.map((candidate) => (
+				<select
+					id={`${id}-group`}
+					className="select"
+					value={groupId}
+					onChange={(event) => setGroupId(event.target.value)}
+				>
+					{groups.map((candidate) => (
 						<option key={candidate.id} value={candidate.id}>
 							{candidate.spec.name}
 						</option>
 					))}
 				</select>
 			</div>
-			{editable.length === 0 ? <p className="muted">Terraform manages every group: change them there.</p> : null}
 			<ErrorNotice error={apply.error} />
 			{plan === undefined ? null : plan.summary.length === 0 ? (
 				<p className="muted">This group already uses exactly these lists.</p>

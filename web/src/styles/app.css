@@ -139,7 +139,6 @@ code,
 	margin-top: var(--space-5);
 }
 
-
 .topbar {
 	display: flex;
 	flex-wrap: wrap;
@@ -212,7 +211,9 @@ code,
 	font: inherit;
 	font-weight: 700;
 	cursor: pointer;
-	transition: transform 60ms, box-shadow 60ms;
+	transition:
+		transform 60ms,
+		box-shadow 60ms;
 }
 
 .button:hover {
@@ -1054,4 +1055,230 @@ a.button {
 	width: 18px;
 	height: 18px;
 	accent-color: var(--ink);
+}
+
+/* The cluster: its health, a card per member, and recovery. */
+
+.cluster-badges {
+	display: inline-flex;
+	gap: var(--space-3);
+	text-decoration: none;
+}
+
+.cluster-badges:hover .badge {
+	box-shadow: 2px 2px 0 var(--ink);
+}
+
+.cluster-badges:focus-visible {
+	outline: none;
+	box-shadow: var(--focus);
+}
+
+.panel-link {
+	justify-self: start;
+}
+
+.health {
+	display: grid;
+	gap: var(--space-2);
+	padding: var(--space-4);
+	border: var(--border);
+	box-shadow: var(--shadow);
+	background: var(--panel);
+}
+
+.health.ok {
+	background: var(--ok);
+	color: var(--on-ok);
+}
+
+.health.accent {
+	background: var(--accent);
+	color: var(--on-accent);
+}
+
+.health.blocked {
+	background: var(--blocked);
+	color: var(--on-blocked);
+}
+
+.health-label {
+	font-family: var(--font-mono);
+	font-size: 1.9rem;
+	font-weight: 700;
+	line-height: 1.1;
+}
+
+.health p {
+	margin: 0;
+	max-width: 80ch;
+	font-weight: 700;
+}
+
+.health-facts {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--space-2) var(--space-5);
+	margin: 0;
+}
+
+.health-facts div {
+	display: flex;
+	align-items: baseline;
+	gap: var(--space-2);
+}
+
+.health-facts dt {
+	font-size: 0.8rem;
+	font-weight: 700;
+	text-transform: uppercase;
+	letter-spacing: 0.06em;
+}
+
+.health-facts dd {
+	margin: 0;
+	font-family: var(--font-mono);
+	font-weight: 700;
+}
+
+.members {
+	display: grid;
+	gap: var(--space-5);
+	grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+}
+
+.member {
+	display: grid;
+	gap: var(--space-3);
+	align-content: start;
+	min-width: 0;
+	padding: 0 var(--space-4) var(--space-4);
+	background: var(--panel);
+	border: var(--border);
+	box-shadow: var(--shadow);
+}
+
+.member header {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: var(--space-2);
+	margin: 0 calc(-1 * var(--space-4));
+	padding: var(--space-2) var(--space-4);
+	border-bottom: var(--border);
+}
+
+.member h2 {
+	font-family: var(--font-mono);
+	font-size: 1.2rem;
+	text-transform: none;
+	letter-spacing: 0;
+	overflow-wrap: anywhere;
+}
+
+.member .this-node {
+	margin-left: auto;
+	font-size: 0.8rem;
+	font-weight: 700;
+	text-transform: uppercase;
+	letter-spacing: 0.06em;
+}
+
+/* The leader stands out in ochre, a follower in ink, a witness in grey (it
+   only votes); a member that is down sinks back. Its badges say it in words too. */
+.member.follower:not(.leader) header {
+	background: var(--ink);
+	color: var(--bg);
+}
+
+.member.witness:not(.leader) header {
+	background: color-mix(in srgb, var(--ink) 25%, var(--panel));
+	color: var(--ink);
+}
+
+.member.leader header {
+	background: var(--accent);
+	color: var(--on-accent);
+}
+
+.member.down {
+	border-style: dashed;
+	background: var(--bg);
+	box-shadow: var(--shadow-small);
+}
+
+.member .badges {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--space-2);
+}
+
+.facts {
+	display: grid;
+	grid-template-columns: max-content minmax(0, 1fr);
+	gap: var(--space-1) var(--space-3);
+	margin: 0;
+	font-size: 0.92rem;
+}
+
+.facts dt {
+	font-weight: 700;
+}
+
+.facts dd {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--space-2);
+	margin: 0;
+	overflow-wrap: anywhere;
+}
+
+.member-error {
+	margin: 0;
+	padding: var(--space-2);
+	border: 2px solid var(--blocked);
+	background: var(--panel);
+	font-family: var(--font-mono);
+	font-size: 0.85rem;
+	overflow-wrap: anywhere;
+}
+
+.member-remove {
+	border-top: 1px solid var(--muted);
+	padding-top: var(--space-3);
+}
+
+.recovery-action {
+	display: grid;
+	gap: var(--space-2);
+}
+
+.recovery-action + .recovery-action {
+	border-top: 1px solid var(--muted);
+	padding-top: var(--space-3);
+}
+
+.recovery-action h3 {
+	font-size: 1rem;
+}
+
+.recovery-action p {
+	margin: 0;
+	max-width: 70ch;
+}
+
+.guarded {
+	display: grid;
+	gap: var(--space-2);
+	justify-items: start;
+}
+
+.guarded .hint,
+.guarded .check {
+	margin: 0;
+}
+
+.guarded .confirm {
+	flex-wrap: wrap;
 }

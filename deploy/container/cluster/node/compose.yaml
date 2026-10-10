@@ -1,0 +1,73 @@
+# One DNS node of a goethite cluster, with Docker Compose or Podman Compose:
+# goethite, and `goethite vrrp` beside it to move the floating IP between the
+# two nodes. Run it on both DNS machines, and ../witness/compose.yaml on a
+# third. On each node, beside this file:
+#
+#   goethite.toml   dns1.toml or dns2.toml from this directory, with your
+#                   addresses, interface and upstreams
+#   cluster/        ca.crt, and this node's certificate and key, which must
+#                   belong to root, group 65532, mode 0640
+#
+#   docker compose up -d
+#
+# The HA guide explains the certificates and the cluster:
+# https://nxplain-sh.github.io/goethite/ha/#in-containers
+#
+# Both services use the host's network: the floating IP is added to the
+# host's interface, VRRP and ARP must reach the other node directly, and the
+# members reach each other on their hosts' own addresses. A process there
+# needs root to bind port 53 and to hold the floating IP, and Docker gives a
+# user other than root no capabilities, so both start as root with only what
+# they need: goethite switches to 65532 and gives up its capabilities before
+# it reads a packet, and goethite vrrp keeps only CAP_NET_ADMIN once its
+# sockets are open.
+
+name: goethite
+
+services:
+  goethite:
+    # The newest release of this minor version. `cargo xtask versions`
+    # checks that it is the repository's. Upgrade one node at a time.
+    image: ghcr.io/nxplain-sh/goethite:0.6
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      # The store, the cluster's log and the downloaded lists.
+      - data:/var/lib/goethite
+      - ./goethite.toml:/etc/goethite/goethite.toml:ro,z
+      - ./cluster:/etc/goethite/cluster:ro,z
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE, SETUID, SETGID]
+    security_opt:
+      - no-new-privileges:true
+    # goethite writes only to /var/lib/goethite.
+    read_only: true
+    # Every UDP query in flight forwards over its own socket; the systemd unit
+    # allows as many.
+    ulimits:
+      nofile: 65536
+
+  vrrp:
+    image: ghcr.io/nxplain-sh/goethite:0.6
+    command: ["vrrp", "--config", "/etc/goethite/goethite.toml"]
+    restart: unless-stopped
+    network_mode: host
+    # Stopped and started again with goethite, as the systemd units are:
+    # stopping hands the floating IP to the other node at once.
+    depends_on:
+      goethite:
+        condition: service_started
+        restart: true
+    volumes:
+      - ./goethite.toml:/etc/goethite/goethite.toml:ro,z
+    # CAP_NET_RAW for its raw sockets, given up once they are open, and
+    # CAP_NET_ADMIN to add and remove the floating IP. It warns that it runs
+    # as root: root with nothing more than that.
+    cap_drop: [ALL]
+    cap_add: [NET_ADMIN, NET_RAW]
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+
+volumes:
+  data:

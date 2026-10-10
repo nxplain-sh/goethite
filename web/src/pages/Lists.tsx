@@ -2,14 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { useState } from 'react'
 
-import {
-	api,
-	call,
-	type Group,
-	ifMatch,
-	type List,
-	type ListStatus,
-} from '../api/client'
+import { api, call, type Group, ifMatch, type List, type ListStatus } from '../api/client'
 import { listsQuery, statusQuery } from '../api/queries'
 import {
 	deleteList,
@@ -168,24 +161,24 @@ function ListFields({
 		...(draft?.comment === undefined ? {} : { comment: draft.comment }),
 	}))
 	const [useInDefault, setUseInDefault] = useState(true)
-	// Terraform's default group is left to Terraform.
+	const queryClient = useQueryClient()
 	const defaultGroup = useQuery({ ...groupQuery(DEFAULT_GROUP), enabled: stored === undefined })
-	const canUseDefault =
-		defaultGroup.data !== undefined && defaultGroup.data.spec.managed_by !== 'terraform'
+	const canUseDefault = defaultGroup.data !== undefined
 	// goethite refuses to delete a list a group uses: deleting takes it out of
-	// them first, unless Terraform manages one of them.
+	// them first.
 	const groups = useQuery({ ...groupsQuery, enabled: stored !== undefined })
-	const users = (groups.data ?? []).filter((group) =>
-		(group.spec.lists ?? []).some((entry) => entry.list === stored?.id),
-	)
-	const terraformUser = users.find((group) => group.spec.managed_by === 'terraform')
+	const users = usersOf(groups.data ?? [], stored?.id)
 	const remove =
-		stored === undefined || terraformUser !== undefined || groups.data === undefined
+		stored === undefined || groups.data === undefined
 			? undefined
 			: async () => {
-					for (const group of users) {
+					// The groups as they are now: the ones shown can be older than a
+					// change, such as this list joining the default group.
+					const current = usersOf(await queryClient.fetchQuery({ ...groupsQuery, staleTime: 0 }), stored.id)
+					for (const group of current) {
 						await withoutList(group, stored.id)
 					}
+					await queryClient.invalidateQueries({ queryKey: ['groups'] })
 					await deleteList(stored)
 				}
 	const set =
@@ -198,6 +191,7 @@ function ListFields({
 		const saved = await saveList(stored, spec)
 		if (stored === undefined && useInDefault && canUseDefault) {
 			await addToDefaultGroup(saved.id)
+			await queryClient.invalidateQueries({ queryKey: ['groups'] })
 		}
 		return saved
 	}
@@ -217,10 +211,7 @@ function ListFields({
 		>
 			{users.length === 0 ? null : (
 				<p className="muted">
-					Used by {users.map((group) => group.spec.name).join(', ')}.{' '}
-					{terraformUser === undefined
-						? 'Deleting it takes it out of them.'
-						: `Terraform manages ${terraformUser.spec.name}: take the list out of it there before deleting it.`}
+					Used by {users.map((group) => group.spec.name).join(', ')}. Deleting it takes it out of them.
 				</p>
 			)}
 			<TextField label="Name" value={form.name} onChange={set('name')} mono={false} required />
@@ -266,6 +257,11 @@ function ListFields({
 	)
 }
 
+/** The groups that use a list. */
+function usersOf(groups: readonly Group[], list: string | undefined) {
+	return groups.filter((group) => (group.spec.lists ?? []).some((entry) => entry.list === list))
+}
+
 /** Takes a list out of a group. */
 async function withoutList(group: Group, list: string) {
 	await call(
@@ -281,9 +277,7 @@ async function withoutList(group: Group, list: string) {
 
 /** Adds a new list to the default group, so it filters at once. */
 async function addToDefaultGroup(list: string) {
-	const group = await call(
-		api.GET('/api/v1/groups/{id}', { params: { path: { id: DEFAULT_GROUP } } }),
-	)
+	const group = await call(api.GET('/api/v1/groups/{id}', { params: { path: { id: DEFAULT_GROUP } } }))
 	await call(
 		api.PUT('/api/v1/groups/{id}', {
 			params: { path: { id: DEFAULT_GROUP }, header: ifMatch(group.revision) },

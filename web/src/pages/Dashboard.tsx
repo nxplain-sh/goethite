@@ -5,6 +5,7 @@ import { Suspense, lazy, useMemo, useState } from 'react'
 import type { ClusterStatus, Status } from '../api/client'
 import { type LogSearch, clientsQuery, listsQuery, statsQuery, statusQuery } from '../api/queries'
 import { saveRule } from '../api/resources'
+import { HEALTH, health } from '../cluster/health'
 import { ErrorBoundary } from '../components/ErrorBoundary'
 import { type Bucket, buckets } from '../dashboard/buckets'
 import { ErrorNotice, Panel, Stat } from '../components/ui'
@@ -30,7 +31,10 @@ export function Dashboard({ range: rangeId }: { range: RangeId | undefined }) {
 	const totals = stats.data?.totals
 	const from = stats.data?.from
 	// The query log over the same range, narrowed by `filter`.
-	const log = (filter: LogSearch): LogSearch => ({ ...(from === undefined ? {} : { since: from }), ...filter })
+	const log = (filter: LogSearch): LogSearch => ({
+		...(from === undefined ? {} : { since: from }),
+		...filter,
+	})
 	const cluster = (stats.data?.nodes?.length ?? 0) > 1 ? ', cluster' : ''
 	// Kept between renders: the chart redraws when its data changes.
 	const report = stats.data
@@ -156,7 +160,15 @@ function host(name: string): string {
 const QueriesChart = lazy(() => import('../components/QueriesChart'))
 
 /** The chart, with a summary for screen readers and a hint for everyone. */
-function TimeChart({ data, range, onOpen }: { data: Bucket[]; range: string; onOpen: (bucket: Bucket) => void }) {
+function TimeChart({
+	data,
+	range,
+	onOpen,
+}: {
+	data: Bucket[]
+	range: string
+	onOpen: (bucket: Bucket) => void
+}) {
 	const busiest = data.reduce<Bucket | undefined>(
 		(best, bucket) => (best === undefined || bucket.queries > best.queries ? bucket : best),
 		undefined,
@@ -432,15 +444,20 @@ function Filter({ status, names }: { status: Status; names: Map<string, string> 
 }
 
 function ClusterPanel({ cluster }: { cluster: ClusterStatus }) {
+	const { label, tone } = HEALTH[health(cluster)]
 	return (
 		<Panel title="Cluster">
 			<table className="table">
 				<tbody>
 					<tr>
-						<td>Leader</td>
-						<td className="name">
-							{cluster.leader ?? <span className="badge blocked">NONE</span>}
+						<td>Health</td>
+						<td>
+							<span className={`badge ${tone}`}>{label}</span>
 						</td>
+					</tr>
+					<tr>
+						<td>Leader</td>
+						<td className="name">{cluster.leader ?? <span className="badge blocked">NONE</span>}</td>
 					</tr>
 					<tr>
 						<td>Changes</td>
@@ -481,6 +498,9 @@ function ClusterPanel({ cluster }: { cluster: ClusterStatus }) {
 					) : null}
 				</tbody>
 			</table>
+			<Link to="/cluster" className="button small panel-link">
+				Open the cluster
+			</Link>
 		</Panel>
 	)
 }

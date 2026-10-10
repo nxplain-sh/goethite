@@ -14,13 +14,14 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use goethite_api::leak::{Arrival, LeakTests};
 use goethite_api::{
     Api, ApiConfig, ApiError, ApiListeners, BoxFuture, BoxResult, Change, ClusterRole,
-    ClusterStatus, Control, DOCS_SCALAR, FilterStatus, Forwarded, ForwardedAnswer, MemberState,
-    MemberStats, PeerStatus, QueryLogStatus, Status, WebAssets, Writes, generate_token,
+    ClusterStatus, Control, DOCS_SCALAR, FilterStatus, Forwarded, ForwardedAnswer,
+    MAX_CONNECTIONS_PER_PEER, MemberState, MemberStats, PeerStatus, QueryLogStatus, Serving,
+    Status, WebAssets, Writes, generate_token, serve_router,
 };
 use goethite_proto::{Name, RecordType};
 use goethite_store::Protocol;
@@ -34,8 +35,10 @@ use hyper::{Method, Request, StatusCode};
 use hyper_util::rt::TokioIo;
 use jiff::Timestamp;
 use serde_json::{Value, json};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::oneshot;
+use tokio::time::timeout;
 
 /// A data plane that records what it is asked to do.
 #[derive(Default)]
@@ -470,15 +473,11 @@ async fn resources_round_trip_with_revisions_and_references() {
         .await;
     assert_eq!(default_group.status, StatusCode::CONFLICT);
 
-    // Changes reached the data plane: filter for lists, policy for the rest.
+    // Changes reached the data plane: lists refresh and filter, the rest
+    // rebuilds the policy.
     assert_eq!(
         *server.control.applied.lock().unwrap(),
-        [
-            Change::Filter,
-            Change::Filter,
-            Change::Policy,
-            Change::Policy
-        ]
+        [Change::Lists, Change::Lists, Change::Policy, Change::Policy]
     );
 
     // The audit log names the actor.
@@ -1258,4 +1257,70 @@ async fn leak_tests_record_their_names_only() {
         "img-src 'self' data: http://*.leak.goethite.test https://*.leak.goethite.test;"
     ));
     assert!(csp.contains("connect-src 'self';"));
+}
+
+/// A connection that never sends a request is closed within its deadline,
+/// so silent connections can only hold a slot for a moment.
+#[tokio::test]
+async fn a_silent_connection_is_closed() {
+    let router = axum::Router::new().route("/", axum::routing::get(|| async { "ok" }));
+    let listeners = ApiListeners::bind(&["127.0.0.1:0".parse().unwrap()]).unwrap();
+    let addr = listeners.local_addrs().unwrap()[0];
+    let (stop, stopped) = oneshot::channel::<()>();
+    tokio::spawn(serve_router(
+        listeners,
+        Serving {
+            name: "test",
+            router,
+            tls: None,
+            max_connections: 8,
+            first_request_timeout: Duration::from_millis(250),
+        },
+        async {
+            let _ = stopped.await;
+        },
+    ));
+    let mut stream = TcpStream::connect(addr).await.unwrap();
+    let mut byte = [0_u8; 1];
+    let read = timeout(Duration::from_secs(5), stream.read(&mut byte))
+        .await
+        .expect("the connection was not closed in time");
+    assert_eq!(read.unwrap(), 0, "closed before any request");
+    let _ = stop.send(());
+}
+
+/// One peer cannot hold every connection: beyond a small cap per address,
+/// further connections are closed at once.
+#[tokio::test]
+async fn connections_from_one_peer_are_capped() {
+    let server = start(false);
+    let mut held = Vec::new();
+    for _ in 0..MAX_CONNECTIONS_PER_PEER {
+        let mut stream = TcpStream::connect(server.addr).await.unwrap();
+        stream
+            .write_all(b"GET /api/v1/status HTTP/1.1\r\nhost: localhost\r\n\r\n")
+            .await
+            .unwrap();
+        let mut buf = [0_u8; 16];
+        let read = timeout(Duration::from_secs(5), stream.read(&mut buf))
+            .await
+            .expect("a held connection was not served")
+            .unwrap();
+        assert!(read > 0, "no reply on a held connection");
+        held.push(stream);
+    }
+    // The next one is closed instead of served.
+    let mut extra = TcpStream::connect(server.addr).await.unwrap();
+    let _ = extra
+        .write_all(b"GET /api/v1/status HTTP/1.1\r\nhost: localhost\r\n\r\n")
+        .await;
+    let mut byte = [0_u8; 1];
+    let read = timeout(Duration::from_secs(5), extra.read(&mut byte))
+        .await
+        .expect("the extra connection was not closed");
+    assert!(
+        matches!(read, Ok(0) | Err(_)),
+        "closed instead of served: {read:?}"
+    );
+    drop(held);
 }

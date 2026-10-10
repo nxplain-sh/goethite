@@ -37,7 +37,7 @@ use serde::{Deserialize, Deserializer};
 const MAX_CONFIG_LEN: usize = 1024 * 1024;
 
 /// The whole configuration file.
-#[derive(Debug, Default, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Default, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Config {
     /// The `[server]` table.
@@ -68,6 +68,10 @@ pub(crate) struct Config {
     /// The `[api]` table.
     #[serde(default)]
     pub api: ApiSection,
+    /// The `[telemetry]` table: sending telemetry to an OpenTelemetry
+    /// collector.
+    #[serde(default)]
+    pub telemetry: TelemetrySection,
     /// The `[cluster]` table; absent for a node on its own.
     #[serde(default)]
     pub cluster: Option<ClusterSection>,
@@ -392,6 +396,117 @@ impl ApiSection {
 
     fn resolve_paths(&mut self, base: &Path) {
         for path in [&mut self.tls_cert, &mut self.tls_key]
+            .into_iter()
+            .flatten()
+        {
+            if path.is_relative() {
+                *path = base.join(&*path);
+            }
+        }
+    }
+}
+
+/// Seconds between metric exports: at least and at most.
+const TELEMETRY_INTERVAL: (u64, u64) = (10, 3600);
+
+/// The `[telemetry]` table: sending telemetry to an OpenTelemetry collector
+/// over OTLP/HTTP (ADR 0034). Nothing is sent without an endpoint.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent on/off switches in the config file"
+)]
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields, default)]
+pub(crate) struct TelemetrySection {
+    /// The collector's OTLP/HTTP base URL, such as
+    /// `https://collector.example:4318`.
+    pub endpoint: Option<String>,
+    /// A file of `Name: value` lines, sent as headers with every export:
+    /// an API key, for example.
+    pub headers_file: Option<PathBuf>,
+    /// CA certificates (PEM) to verify the collector with, instead of the
+    /// public roots.
+    pub ca_file: Option<PathBuf>,
+    /// Whether metrics are sent.
+    pub metrics: bool,
+    /// Whether log records (`INFO` and above) are sent.
+    pub logs: bool,
+    /// Whether traces of the slow paths are sent.
+    pub traces: bool,
+    /// The share of traces kept, 0 to 1.
+    pub trace_sample_ratio: f64,
+    /// Whether spans name the names looked up and the servers asked.
+    pub query_details: bool,
+    /// Seconds between metric exports.
+    pub interval: u64,
+}
+
+impl Default for TelemetrySection {
+    fn default() -> Self {
+        Self {
+            endpoint: None,
+            headers_file: None,
+            ca_file: None,
+            metrics: true,
+            logs: true,
+            traces: false,
+            trace_sample_ratio: 0.05,
+            query_details: false,
+            interval: 60,
+        }
+    }
+}
+
+impl TelemetrySection {
+    /// The endpoint, if one is configured.
+    ///
+    /// # Errors
+    ///
+    /// If it is not an `http://` or `https://` URL with a host and without
+    /// a query.
+    pub(crate) fn endpoint(&self) -> Result<Option<hyper::Uri>> {
+        let Some(endpoint) = &self.endpoint else {
+            return Ok(None);
+        };
+        let uri: hyper::Uri = endpoint
+            .parse()
+            .with_context(|| format!("telemetry.endpoint {endpoint:?} is not a URL"))?;
+        if !matches!(uri.scheme_str(), Some("http" | "https")) {
+            bail!("telemetry.endpoint {endpoint:?} is not an http:// or https:// URL");
+        }
+        if uri.host().is_none_or(str::is_empty) {
+            bail!("telemetry.endpoint {endpoint:?} has no host");
+        }
+        if uri.query().is_some() {
+            bail!("telemetry.endpoint {endpoint:?} has a query; give the base URL");
+        }
+        Ok(Some(uri))
+    }
+
+    /// Where `signal` (`metrics`, `logs` or `traces`) is sent: the
+    /// endpoint with `/v1/<signal>` appended, as OTLP/HTTP defines.
+    pub(crate) fn signal_url(&self, signal: &str) -> Option<String> {
+        let endpoint = self.endpoint.as_deref()?;
+        Some(format!("{}/v1/{signal}", endpoint.trim_end_matches('/')))
+    }
+
+    fn validate(&self) -> Result<()> {
+        let endpoint = self.endpoint()?;
+        if endpoint.is_none() && (self.headers_file.is_some() || self.ca_file.is_some()) {
+            bail!("telemetry.headers_file and telemetry.ca_file need telemetry.endpoint");
+        }
+        let (min, max) = TELEMETRY_INTERVAL;
+        if !(min..=max).contains(&self.interval) {
+            bail!("telemetry.interval must be between {min} and {max} seconds");
+        }
+        if !(0.0..=1.0).contains(&self.trace_sample_ratio) {
+            bail!("telemetry.trace_sample_ratio must be between 0 and 1");
+        }
+        Ok(())
+    }
+
+    fn resolve_paths(&mut self, base: &Path) {
+        for path in [&mut self.headers_file, &mut self.ca_file]
             .into_iter()
             .flatten()
         {
@@ -1416,6 +1531,7 @@ impl Config {
             .and_then(|()| config.cache.validate())
             .and_then(|()| config.querylog.validate())
             .and_then(|()| config.api.validate())
+            .and_then(|()| config.telemetry.validate())
             .and_then(|()| config.filter.validate())
             .and_then(|()| {
                 config
@@ -1442,6 +1558,7 @@ impl Config {
         let dir = config.dir.clone();
         config.filter.resolve_paths(&dir);
         config.api.resolve_paths(&dir);
+        config.telemetry.resolve_paths(&dir);
         if let Some(tls) = &mut config.server.tls {
             tls.resolve_paths(&dir);
         }
@@ -1842,6 +1959,56 @@ mod tests {
         }
         let off = Config::parse("[api]\nenabled = false\nlisten = \"0.0.0.0:1\"").unwrap();
         assert!(off.api.validate().is_ok());
+    }
+
+    #[test]
+    fn telemetry_settings() {
+        let default = Config::parse("").unwrap().telemetry;
+        assert_eq!(default.endpoint().unwrap(), None);
+        assert!(default.metrics && default.logs);
+        assert!(!default.traces && !default.query_details);
+        assert_eq!(default.signal_url("metrics"), None);
+        assert!(default.validate().is_ok());
+
+        let set = Config::parse(
+            "[telemetry]\nendpoint = \"https://collector.example:4318/\"\ninterval = 10",
+        )
+        .unwrap()
+        .telemetry;
+        assert!(set.validate().is_ok());
+        assert_eq!(
+            set.signal_url("metrics").as_deref(),
+            Some("https://collector.example:4318/v1/metrics")
+        );
+        let prefixed = Config::parse("[telemetry]\nendpoint = \"http://127.0.0.1:4318/otlp\"")
+            .unwrap()
+            .telemetry;
+        assert_eq!(
+            prefixed.signal_url("metrics").as_deref(),
+            Some("http://127.0.0.1:4318/otlp/v1/metrics")
+        );
+
+        for (bad, expected) in [
+            (
+                "endpoint = \"collector:4318\"",
+                "not an http:// or https:// URL",
+            ),
+            (
+                "endpoint = \"ftp://collector\"",
+                "not an http:// or https:// URL",
+            ),
+            ("endpoint = \"https://c.example/?a=b\"", "has a query"),
+            ("headers_file = \"otlp-headers\"", "need telemetry.endpoint"),
+            (
+                "endpoint = \"https://c.example\"\ninterval = 5",
+                "between 10 and 3600",
+            ),
+            ("trace_sample_ratio = 1.5", "between 0 and 1"),
+        ] {
+            let config = Config::parse(&format!("[telemetry]\n{bad}")).unwrap();
+            let err = config.telemetry.validate().unwrap_err().to_string();
+            assert!(err.contains(expected), "{bad}: {err}");
+        }
     }
 
     #[test]

@@ -1,5 +1,6 @@
 //! Keys and certificates read from files: the API's TLS certificate, the
-//! one for DNS over TLS and HTTPS, and the cluster's.
+//! one for DNS over TLS and HTTPS, the cluster's, and what goethite sends
+//! telemetry with (the collector's headers and CA).
 //!
 //! They are read before privileges are dropped, so the files may be
 //! readable by root only, and kept in memory: on an upgrade, the new
@@ -43,7 +44,16 @@ pub(crate) struct Secrets {
     pub dns_tls: Option<CertAndKey>,
     /// The cluster's certificates, if the node is in a cluster.
     pub cluster: Option<ClusterPem>,
+    /// The headers sent to the telemetry collector (`telemetry.headers_file`).
+    #[serde(default)]
+    pub telemetry_headers: Option<String>,
+    /// The CA certificates for the telemetry collector (`telemetry.ca_file`).
+    #[serde(default)]
+    pub telemetry_ca: Option<String>,
 }
+
+/// Larger telemetry header files are refused: they hold a few short lines.
+const MAX_HEADERS_FILE_LEN: usize = 8 * 1024;
 
 impl std::fmt::Debug for Secrets {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -51,6 +61,8 @@ impl std::fmt::Debug for Secrets {
             .field("api_tls", &self.api_tls.is_some())
             .field("dns_tls", &self.dns_tls.is_some())
             .field("cluster", &self.cluster.is_some())
+            .field("telemetry_headers", &self.telemetry_headers.is_some())
+            .field("telemetry_ca", &self.telemetry_ca.is_some())
             .finish()
     }
 }
@@ -90,10 +102,30 @@ impl Secrets {
             }),
             None => None,
         };
+        let telemetry = &config.telemetry;
+        let telemetry_headers = match &telemetry.headers_file {
+            Some(path) if telemetry.endpoint.is_some() => {
+                let text = read(path, "the telemetry headers")?;
+                if text.len() > MAX_HEADERS_FILE_LEN {
+                    anyhow::bail!(
+                        "{} is larger than {MAX_HEADERS_FILE_LEN} bytes",
+                        path.display()
+                    );
+                }
+                Some(text)
+            }
+            _ => None,
+        };
+        let telemetry_ca = match &telemetry.ca_file {
+            Some(path) if telemetry.endpoint.is_some() => Some(read(path, "the telemetry CA")?),
+            _ => None,
+        };
         Ok(Self {
             api_tls,
             dns_tls,
             cluster,
+            telemetry_headers,
+            telemetry_ca,
         })
     }
 

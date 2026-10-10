@@ -28,7 +28,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use goethite_filter::{Action, Match, Sources, Verdict};
-use tracing::{debug, error};
+use tracing::{Instrument as _, debug, debug_span, error, field};
 
 use goethite_proto::{
     Edns, Name, NameError, Query, Question, Record, RecordClass, RecordType, Response, ResponseCode,
@@ -36,7 +36,10 @@ use goethite_proto::{
 
 pub use access::{Access, AccessList, MAX_ACCESS_ENTRIES};
 pub use blocking::BlockResponse;
-pub use cache::{Cache, CacheConfig, CacheStats, MAX_CACHED_RECORDS, MAX_CNAME_CHAIN, MAX_ENTRIES};
+pub use cache::{
+    Cache, CacheConfig, CacheStats, MAX_CACHED_RECORDS, MAX_CNAME_CHAIN, MAX_ENTRIES,
+    MAX_ENTRY_BYTES,
+};
 pub use cidr::{Cidr, CidrError};
 pub use forward::{
     Forwarder, ForwarderConfig, ForwarderError, MAX_UPSTREAMS, Transport, UpstreamConfig,
@@ -198,6 +201,8 @@ pub struct Resolver {
     recursor: Option<Recursor>,
     fail_mode: FailMode,
     filter_failures: AtomicU64,
+    /// Whether spans name the names looked up and the servers asked.
+    span_details: bool,
 }
 
 impl std::fmt::Debug for Resolver {
@@ -227,7 +232,21 @@ impl Resolver {
             recursor: None,
             fail_mode: FailMode::Open,
             filter_failures: AtomicU64::new(0),
+            span_details: false,
         }
+    }
+
+    /// Whether the spans of forwarded and recursive queries name the name
+    /// looked up and the servers asked (off by default). Spans go only to a
+    /// subscriber that wants them, such as the OpenTelemetry export.
+    #[must_use]
+    pub fn with_span_details(mut self, on: bool) -> Self {
+        self.span_details = on;
+        self.recursor = self
+            .recursor
+            .take()
+            .map(|recursor| recursor.with_span_details(on));
+        self
     }
 
     /// What to do with a query when filtering it fails (open by default).
@@ -316,7 +335,7 @@ impl Resolver {
     /// down with `recursor`, instead of forwarding.
     #[must_use]
     pub fn with_recursor(mut self, recursor: Recursor) -> Self {
-        self.recursor = Some(recursor);
+        self.recursor = Some(recursor.with_span_details(self.span_details));
         self
     }
 
@@ -510,7 +529,7 @@ impl Resolver {
                 match guard::guarded(|| policy.services().check(&question.name, &asker.services)) {
                     Some(Some((service, matched))) => {
                         debug!(name = %question.name, qtype = %question.qtype, "blocked service");
-                        return blocked_service(query, policy, service, matched);
+                        return blocked_service(query, policy, service, matched, None);
                     }
                     Some(None) => {}
                     None => {
@@ -550,8 +569,32 @@ impl Resolver {
         }
         let (response, outcome) = self.cached_or_forwarded(query).await;
         if let (true, None, Some(policy)) = (asker.filtering, &exception, &asker.policy) {
-            let targets = response.answers.iter().filter_map(Record::cname_target);
-            for target in targets.take(MAX_CNAME_CHAIN) {
+            // Walk the whole chain from the question name: a chain longer
+            // than the limit fails closed, rather than passing unchecked.
+            let mut at = question.name.clone();
+            for step in 0..=MAX_CNAME_CHAIN {
+                let Some(target) = response.answers.iter().find_map(|record| {
+                    (record.record_type() == RecordType::CNAME && record.name() == &at)
+                        .then(|| record.cname_target())
+                        .flatten()
+                }) else {
+                    break;
+                };
+                if step >= MAX_CNAME_CHAIN {
+                    debug!(name = %question.name, "CNAME chain too long to uncloak");
+                    return (
+                        Response::for_query(query, ResponseCode::SERV_FAIL),
+                        Outcome::Failed,
+                        None,
+                    );
+                }
+                if !asker.services.is_empty()
+                    && let Some(Some((service, matched))) =
+                        guard::guarded(|| policy.services().check(&target, &asker.services))
+                {
+                    debug!(name = %question.name, cname = %target, "blocked service through a CNAME");
+                    return blocked_service(query, policy, service, matched, Some(target));
+                }
                 match Self::check(policy, &target, asker.sources) {
                     Some(Verdict::Blocked(matched)) => {
                         debug!(name = %question.name, cname = %target, "blocked through a CNAME");
@@ -564,6 +607,7 @@ impl Resolver {
                         }
                     }
                 }
+                at = target;
             }
         }
         (response, outcome, exception)
@@ -581,21 +625,40 @@ impl Resolver {
         if let Some(response) = self.cache.as_ref().and_then(|cache| cache.get(query)) {
             return (response, Outcome::Cached);
         }
-        let (mut response, outcome) = if let Some(recursor) = &self.recursor {
-            let (response, server) = recursor.resolve(query).await;
-            (response, server.map_or(Outcome::Failed, Outcome::Recursive))
-        } else if let Some(forwarder) = &self.forwarder {
-            let (response, upstream) = forwarder.forward_from(query).await;
-            (
-                response,
-                upstream.map_or(Outcome::Failed, Outcome::Upstream),
-            )
-        } else {
-            return (
-                Response::for_query(query, ResponseCode::REFUSED),
-                Outcome::Rejected,
-            );
-        };
+        // The slow path, and the only one with a span: cache hits, blocks
+        // and local answers never get here.
+        let span = debug_span!(
+            "resolve",
+            qtype = %query.question.qtype,
+            name = field::Empty,
+            rcode = field::Empty,
+        );
+        if self.span_details {
+            span.record("name", field::display(&query.question.name));
+        }
+        let (mut response, outcome) = async {
+            if let Some(recursor) = &self.recursor {
+                let (response, server) = recursor.resolve(query).await;
+                (response, server.map_or(Outcome::Failed, Outcome::Recursive))
+            } else if let Some(forwarder) = &self.forwarder {
+                let (response, upstream) = forwarder.forward_from(query).await;
+                (
+                    response,
+                    upstream.map_or(Outcome::Failed, Outcome::Upstream),
+                )
+            } else {
+                (
+                    Response::for_query(query, ResponseCode::REFUSED),
+                    Outcome::Rejected,
+                )
+            }
+        }
+        .instrument(span.clone())
+        .await;
+        span.record("rcode", field::display(response.rcode));
+        if outcome == Outcome::Rejected {
+            return (response, outcome);
+        }
         if let Some(protection) = &self.rebinding {
             let removed = protection.apply(&query.question.name, &mut response);
             if removed > 0 {
@@ -719,13 +782,14 @@ fn blocked_service(
     policy: &Policy,
     service: usize,
     matched: Match,
+    cname: Option<Name>,
 ) -> (Response, Outcome, Option<FilterHit>) {
     let response = blocking::blocked_response(query, policy.block_response(), policy.blocked_ttl());
     let hit = FilterHit {
         action: Action::Block,
         matched,
         source: policy.services().source_id(service).cloned(),
-        cname: None,
+        cname,
     };
     (response, Outcome::Blocked, Some(hit))
 }

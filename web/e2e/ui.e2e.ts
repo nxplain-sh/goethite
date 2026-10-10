@@ -4,13 +4,13 @@ import { createSocket } from 'node:dgram'
 
 import { type APIRequestContext, expect, type Page, test } from '@playwright/test'
 
-import { DNS_PORT, DOH_PORT, DOQ_PORT, DOT_PORT, TOKEN } from './settings.mjs'
+import { ABSENT_PORT, DNS_PORT, DOH_PORT, DOQ_PORT, DOT_PORT, MEMBER_API_PORT, TOKEN } from './settings.mjs'
 
 const auth = { Authorization: `Bearer ${TOKEN}` }
 
-/** Signs in with the admin token, as a person would. */
-async function signIn(page: Page) {
-	await page.goto('/login')
+/** Signs in with the admin token, as a person would; to the node at `base`, or the usual one. */
+async function signIn(page: Page, base = '') {
+	await page.goto(`${base}/login`)
 	await page.getByLabel('Admin token').fill(TOKEN)
 	await page.getByRole('button', { name: 'Sign in' }).click()
 	await expect(page.getByRole('navigation', { name: 'Pages' })).toBeVisible()
@@ -67,6 +67,27 @@ test('creates, edits and deletes a filter list, used by the default group', asyn
 	await page.getByRole('button', { name: 'Delete this list' }).click()
 	await expect(page).toHaveURL(/\/lists$/)
 	await expect(page.getByRole('row').filter({ hasText: 'E2E ads' })).toHaveCount(0)
+})
+
+test('deletes a list that a group started using after the page showed it', async ({ page, request }) => {
+	const list = await apiCall(request, 'POST', '/api/v1/lists', {
+		name: 'E2E late',
+		url: 'https://lists.example/e2e-late.txt',
+	})
+	await page.goto(`/lists/${list.id}`)
+	await expect(page.getByRole('button', { name: 'Delete', exact: true })).toBeVisible()
+	// The default group starts using it behind the page's back.
+	const group = await apiCall(request, 'GET', '/api/v1/groups/default')
+	await apiCall(request, 'PUT', '/api/v1/groups/default', {
+		...group.spec,
+		lists: [...group.spec.lists, { list: list.id, schedule: null }],
+	})
+
+	await page.getByRole('button', { name: 'Delete', exact: true }).click()
+	await page.getByRole('button', { name: 'Delete this list' }).click()
+	await expect(page).toHaveURL(/\/lists$/)
+	const after = await apiCall(request, 'GET', '/api/v1/groups/default')
+	expect(after.spec.lists.map((entry: { list: string }) => entry.list)).not.toContain(list.id)
 })
 
 test('adds, filters, turns off and deletes custom rules', async ({ page }) => {
@@ -138,9 +159,7 @@ test('puts a client in a group that uses a list during a schedule', async ({ pag
 	await page.getByLabel('From').fill('08:00')
 	await page.getByLabel('Until').fill('15:00')
 	await page.getByRole('button', { name: 'Create' }).click()
-	await expect(page.getByRole('row').filter({ hasText: 'E2E school' })).toContainText(
-		'Mon–Fri 08:00–15:00',
-	)
+	await expect(page.getByRole('row').filter({ hasText: 'E2E school' })).toContainText('Mon–Fri 08:00–15:00')
 
 	await page.getByRole('link', { name: 'Groups', exact: true }).click()
 	await page.getByRole('link', { name: 'New group' }).click()
@@ -208,24 +227,6 @@ test('saves settings, and the audit log shows the change', async ({ page }) => {
 	await expect(page.getByRole('status')).toContainText('Saved')
 })
 
-test('shows what Terraform manages read-only', async ({ page, request }) => {
-	const rule = await apiCall(request, 'POST', '/api/v1/rules', {
-		rule: '||e2e-terraform.example^',
-		managed_by: 'terraform',
-	})
-	await page.getByRole('link', { name: 'Rules', exact: true }).click()
-	const row = page.getByRole('row').filter({ hasText: '||e2e-terraform.example^' })
-	await expect(row).toContainText('TERRAFORM')
-	await expect(row.getByRole('checkbox')).toBeDisabled()
-	await expect(row.getByRole('button', { name: 'Delete' })).toHaveCount(0)
-
-	await row.getByRole('link', { name: '||e2e-terraform.example^' }).click()
-	await expect(page.getByText('Terraform manages this rule')).toBeVisible()
-	await expect(page.getByLabel('Rule')).toBeDisabled()
-	await expect(page.getByRole('button', { name: 'Save' })).toHaveCount(0)
-	await apiCall(request, 'DELETE', `/api/v1/rules/${rule.id}`)
-})
-
 test('refuses to overwrite a change made meanwhile', async ({ page, request }) => {
 	const list = await apiCall(request, 'POST', '/api/v1/lists', {
 		name: 'E2E shared',
@@ -260,9 +261,7 @@ test('serves the API reference under the strict policy', async ({ page }) => {
 	await page.getByRole('link', { name: 'lists', exact: true }).click()
 	await expect(page.getByRole('heading', { name: 'Creates a filter list.' })).toBeVisible()
 	await page.getByRole('button', { name: /Open Search/ }).click()
-	await expect(
-		page.getByRole('dialog').getByRole('option', { name: /Creates a filter list/ }),
-	).toBeVisible()
+	await expect(page.getByRole('dialog').getByRole('option', { name: /Creates a filter list/ })).toBeVisible()
 	expect(problems.filter((problem) => /Content Security Policy|Refused/i.test(problem))).toEqual([])
 	expect(problems).toEqual([])
 })
@@ -469,7 +468,9 @@ async function defaultGroupLists(request: APIRequestContext): Promise<Map<string
 	const group = await apiCall(request, 'GET', '/api/v1/groups/default')
 	const used = new Set(group.spec.lists.map((entry: { list: string }) => entry.list))
 	return new Map(
-		lists.filter((list) => used.has(list.id)).map((list) => [list.spec.url ?? '', list.spec.enabled !== false]),
+		lists
+			.filter((list) => used.has(list.id))
+			.map((list) => [list.spec.url ?? '', list.spec.enabled !== false]),
 	)
 }
 
@@ -478,13 +479,24 @@ const HAGEZI = 'https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adb
 test('recommended lists by category: add, overlap, legacy', async ({ page, request }) => {
 	await page.getByRole('link', { name: 'Lists', exact: true }).click()
 	const recommended = page.getByRole('region', { name: 'Recommended lists' })
-	for (const heading of ['Presets', 'Base list', 'Security', 'Optional', 'Bypass prevention', 'Device trackers', 'Family', 'Hardening']) {
+	for (const heading of [
+		'Presets',
+		'Base list',
+		'Security',
+		'Optional',
+		'Bypass prevention',
+		'Device trackers',
+		'Family',
+		'Hardening',
+	]) {
 		await expect(recommended.getByRole('heading', { name: heading, exact: true })).toBeVisible()
 	}
 	const normal = recommended.getByRole('row').filter({ hasText: 'HaGeZi Multi Normal' })
 	await expect(normal).toContainText('★ RECOMMENDED')
 	await expect(normal).toContainText('DEFAULT')
-	await expect(recommended.getByRole('row').filter({ hasText: 'HaGeZi Multi Ultimate' })).toContainText('STRICT')
+	await expect(recommended.getByRole('row').filter({ hasText: 'HaGeZi Multi Ultimate' })).toContainText(
+		'STRICT',
+	)
 
 	// Legacy lists are tucked away.
 	await expect(recommended.getByRole('row').filter({ hasText: 'AdAway' })).toBeHidden()
@@ -518,10 +530,17 @@ test('presets: preview, apply, swap; switching instead of stacking', async ({ pa
 	await preview.getByRole('button', { name: 'Use Balanced' }).click()
 	await expect(preview).toBeHidden()
 	let used = await defaultGroupLists(request)
-	expect([...used.keys()].sort()).toEqual([`${HAGEZI}fake.txt`, `${HAGEZI}multi.txt`, `${HAGEZI}tif.mini.txt`])
+	expect([...used.keys()].sort()).toEqual([
+		`${HAGEZI}fake.txt`,
+		`${HAGEZI}multi.txt`,
+		`${HAGEZI}tif.mini.txt`,
+	])
 
 	// Another preset: what it does not have leaves, and is turned off.
-	await recommended.getByRole('article', { name: "Preset Don't break anything" }).getByRole('button', { name: 'Use for a group' }).click()
+	await recommended
+		.getByRole('article', { name: "Preset Don't break anything" })
+		.getByRole('button', { name: 'Use for a group' })
+		.click()
 	const minimal = recommended.getByRole('group', { name: "Use Don't break anything" })
 	await expect(minimal).toContainText('no longer uses HaGeZi Multi Normal, HaGeZi Fake')
 	await expect(minimal).toContainText('Turned off, no group uses them: HaGeZi Multi Normal, HaGeZi Fake')
@@ -531,7 +550,10 @@ test('presets: preview, apply, swap; switching instead of stacking', async ({ pa
 	expect([...used.keys()].sort()).toEqual([`${HAGEZI}light.txt`, `${HAGEZI}tif.mini.txt`])
 
 	// TIF replaces TIF Mini: switch, never stack.
-	const tif = recommended.getByRole('row').filter({ hasText: 'HaGeZi Threat Intelligence Feeds' }).filter({ hasText: 'MAX SECURITY' })
+	const tif = recommended
+		.getByRole('row')
+		.filter({ hasText: 'HaGeZi Threat Intelligence Feeds' })
+		.filter({ hasText: 'MAX SECURITY' })
 	await tif.getByRole('button', { name: /^Switch from HaGeZi Threat Intelligence Feeds Mini/ }).click()
 	const swap = recommended.getByRole('group', { name: 'Switch to HaGeZi Threat Intelligence Feeds' })
 	await expect(swap).toContainText('Turned off, no group uses them: HaGeZi Threat Intelligence Feeds Mini')
@@ -539,7 +561,11 @@ test('presets: preview, apply, swap; switching instead of stacking', async ({ pa
 	await expect(swap).toBeHidden()
 	used = await defaultGroupLists(request)
 	expect([...used.keys()].sort()).toEqual([`${HAGEZI}light.txt`, `${HAGEZI}tif.txt`])
-	const lists: { spec: { url?: string; enabled?: boolean } }[] = await apiCall(request, 'GET', '/api/v1/lists')
+	const lists: { spec: { url?: string; enabled?: boolean } }[] = await apiCall(
+		request,
+		'GET',
+		'/api/v1/lists',
+	)
 	expect(lists.find((list) => list.spec.url === `${HAGEZI}tif.mini.txt`)?.spec.enabled).toBe(false)
 	await removeAllLists(request)
 })
@@ -556,8 +582,21 @@ test('finds a list in the FilterLists directory, and adds it after checking', as
 			json: {
 				fetched_at: '2026-10-08T12:00:00Z',
 				lists: [
-					{ id: 77, name: 'E2E Trackers', description: 'Tracking domains.', tags: ['privacy'], syntaxes: ['Domains'], license: 'MIT' },
-					{ id: 78, name: 'E2E Ads', description: 'Ad servers.', tags: ['ads'], syntaxes: ['Hosts (localhost IPv4)'] },
+					{
+						id: 77,
+						name: 'E2E Trackers',
+						description: 'Tracking domains.',
+						tags: ['privacy'],
+						syntaxes: ['Domains'],
+						license: 'MIT',
+					},
+					{
+						id: 78,
+						name: 'E2E Ads',
+						description: 'Ad servers.',
+						tags: ['ads'],
+						syntaxes: ['Hosts (localhost IPv4)'],
+					},
 					{ id: 79, name: 'E2E Two parts', description: 'Big.', tags: ['ads'], syntaxes: ['Domains'] },
 				],
 			},
@@ -612,7 +651,7 @@ test('the leak test sees which lookups reach goethite', async ({ page }) => {
 	// the device's resolver: it sends the lookups it chooses to goethite, then
 	// fails the image as an unknown name would.
 	const leakNames = /^https?:\/\/[^/]+\.leak\.goethite\.test\//
-	let reaching = (_: number) => true
+	let reaching: (probe: number) => boolean = () => true
 	let seen = 0
 	await page.route(leakNames, async (route) => {
 		const host = new URL(route.request().url()).hostname
@@ -671,6 +710,68 @@ test('every page links to the docs and the API reference', async ({ page }) => {
 	// Under the sign-in form. Signed out, the node's status is unknown: the
 	// site's reference.
 	await expect(
-		page.getByRole('navigation', { name: 'Documentation' }).getByRole('link', { name: 'API docs', exact: true }),
+		page
+			.getByRole('navigation', { name: 'Documentation' })
+			.getByRole('link', { name: 'API docs', exact: true }),
 	).toHaveAttribute('href', 'https://nxplain-sh.github.io/goethite/api-reference/')
+})
+
+test('a node outside a cluster has no cluster page', async ({ page }) => {
+	// Once the node's status is in, the pages it has are known.
+	await expect(page.getByRole('banner').getByText('FILTERING ON')).toBeVisible()
+	await expect(
+		page.getByRole('navigation', { name: 'Pages' }).getByRole('link', { name: 'Cluster' }),
+	).toHaveCount(0)
+	await page.goto('/cluster')
+	await expect(page.getByText('This node is not in a cluster')).toBeVisible()
+})
+
+test('the cluster page: a member waiting for its cluster starts one', async ({ page }) => {
+	// dns2 lists dns1, which never answers, and waits to be added.
+	await signIn(page, `http://127.0.0.1:${MEMBER_API_PORT}`)
+	await page.getByRole('navigation', { name: 'Pages' }).getByRole('link', { name: 'Cluster' }).click()
+	await expect(page).toHaveURL(/\/cluster$/)
+	const health = page.getByRole('region', { name: 'Health' })
+	await expect(health).toContainText('WAITING TO BE ADDED')
+	await expect(health).toContainText('no voters yet')
+	const members = page.getByRole('region', { name: 'Members' })
+	const self = members.getByRole('article', { name: 'dns2' })
+	await expect(self).toContainText('this node')
+	const absent = members.getByRole('article', { name: 'dns1' })
+	await expect(absent).toContainText('DOWN')
+	await expect(absent).toContainText('NOT ADDED YET')
+	await expect(absent).toContainText(`127.0.0.1:${ABSENT_PORT}`)
+	// Not in the cluster, so nothing to remove.
+	await expect(absent.getByRole('button', { name: 'Remove' })).toHaveCount(0)
+
+	// The way out, after a second click.
+	const recovery = page.getByRole('region', { name: 'Recovery' })
+	await recovery.getByRole('button', { name: 'Start a cluster here' }).click()
+	await recovery.getByRole('button', { name: 'Keep it' }).click()
+	await recovery.getByRole('button', { name: 'Start a cluster here' }).click()
+	await recovery.getByRole('button', { name: 'Start it on dns2' }).click()
+
+	// dns2 leads a cluster of its own; dns1 is still down.
+	await expect(health).toContainText('DEGRADED', { timeout: 15_000 })
+	await expect(health).toContainText('Changes work, but dns1 is down.')
+	await expect(health).toContainText('1 voter, 1 needed: can lose none')
+	await expect(self).toContainText('LEADER')
+	await expect(self).toContainText('VOTER')
+	await expect(recovery).toContainText('Nothing to recover: dns2 leads')
+	await expect(
+		page.getByRole('navigation', { name: 'Pages' }).getByRole('link', { name: 'Cluster' }),
+	).toHaveAttribute('aria-current', 'page')
+	// The header says what this node does, and leads here.
+	await page.goto(`http://127.0.0.1:${MEMBER_API_PORT}/`)
+	await page
+		.getByRole('banner')
+		.getByRole('link', { name: /dns2 · LEADER/ })
+		.click()
+	await expect(page).toHaveURL(/\/cluster$/)
+	// The dashboard's panel says the same, and leads here too.
+	await page.goto(`http://127.0.0.1:${MEMBER_API_PORT}/`)
+	const panel = page.getByRole('region', { name: 'Cluster' })
+	await expect(panel).toContainText('DEGRADED')
+	await panel.getByRole('link', { name: 'Open the cluster' }).click()
+	await expect(page).toHaveURL(/\/cluster$/)
 })

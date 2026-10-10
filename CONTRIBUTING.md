@@ -1,8 +1,14 @@
 # Contributing to goethite
 
 Thanks for your interest. goethite is pre-alpha. Read [`AGENTS.md`](AGENTS.md) first: it
-defines the architecture, security rules, conventions and roadmap, and it binds humans and coding
+defines the architecture, security rules and conventions, and it binds humans and coding
 agents alike.
+
+goethite is licensed under the AGPL-3.0-only, and what you contribute comes in under Apache-2.0
+unless you say otherwise: see [License](README.md#license) and
+[ADR 0033](docs/adr/0033-agpl-license.md). Dependencies stay permissive: `cargo deny` allows only
+the licenses in `deny.toml`, and a copyleft crate or copyleft data needs a decision, not an
+exception.
 
 ## Prerequisites
 
@@ -78,9 +84,11 @@ sudo tests/chaos/chaos.sh target/release/goethite
 
 CI (`.github/workflows/ci.yaml`) runs fmt, clippy and rustdoc with `-D warnings`, shellcheck, the
 tests on linux amd64 (`ubuntu-24.04`) and arm64 (`ubuntu-24.04-arm`), an MSRV check, `cargo deny`
-and `cargo audit`.
-The fuzz and chaos workflows run weekly and on demand. All actions are pinned to commit SHAs. Keep
-it that way when you edit workflows.
+and `cargo audit`. It runs on pull requests, weekly and on demand, but not on pushes: a pull
+request's run already tests the merge result. A pull request that only changes Markdown files,
+`docs/` or `site/` runs no CI at all; the Site workflow (`pages.yaml`) checks and builds `site/`.
+The fuzz targets build on pull requests that change the parsers; the chaos lab runs weekly and on
+demand. All actions are pinned to commit SHAs. Keep it that way when you edit workflows.
 
 ## Fuzzing
 
@@ -167,10 +175,13 @@ change is intended (before 1.0 that is possible, and it goes in the changelog), 
 
 ## Branches
 
-Work lands on `development`: push to it, or open a pull request against it from a topic branch.
-`main` only moves through a pull request from `development`, merged with a merge commit once CI
-passes. Nobody pushes to `main` directly, maintainers included. Renovate opens its pull requests
-against `development` too.
+`main` holds the latest release; `development` is where work lands. Branch from `development` as
+`<kind>/<what>`, with `feature/`, `fix/`, `refactor/`, `chore/` or `docs/`, and open a pull
+request against it (`gh pr create --base development`); it is merged with a merge commit once CI
+passes. `main` moves only for a release: a pull request from `development`, or from a `hotfix/`
+branch cut from `main` for a patch. Nobody pushes to either branch directly, maintainers included.
+Renovate opens its pull requests against `development` too. The whole model, with names, merging
+and hotfixes, is in [`docs/branching.md`](docs/branching.md).
 
 ## Commit conventions
 
@@ -216,19 +227,21 @@ The full list is in [`AGENTS.md`](AGENTS.md). The short version:
 - Architectural decisions get a short ADR in [`docs/adr/`](docs/adr/).
 - New dependencies must pass `cargo deny check` and be justified in the PR description. Prefer
   fewer, well-maintained crates.
-- Stay inside the current phase. Work that belongs to a later phase goes in
+- Keep each change to its task. Other work you notice goes in
   [`docs/BACKLOG.md`](docs/BACKLOG.md).
 - Docs ship with features. A feature is not done until its docs page is updated.
 
 ## Web UI
 
-The web UI lives in `web/` (Vite, React, TypeScript strict, TanStack Router/Query/Table/Virtual);
-see [`web/README.md`](web/README.md). `npm run build` type-checks, builds to `web/dist` and checks
-the size budget. Release builds of goethite embed `web/dist`; debug builds read it from disk.
+The web UI lives in `web/` (React, TypeScript strict, TanStack Router/Query/Table/Virtual), built
+with [Vite+](https://viteplus.dev) (`vp`); see [`web/README.md`](web/README.md). `npm run build`
+builds to `web/dist` and checks the size budget. Release builds of goethite embed `web/dist`; debug
+builds read it from disk.
 
 ```sh
 cd web
 npm ci --ignore-scripts
+npm run check      # vp check: Oxfmt, Oxlint and the type-check; `npm run fmt` fixes the format
 npm run build      # or `npm run dev` against a node on 127.0.0.1:8053
 npm test           # Vitest: the forms' logic
 npx playwright install chromium
@@ -247,60 +260,38 @@ The page runs under a strict CSP: no inline scripts or styles, no `eval`, nothin
 
 ## Website
 
-The project site lives in `site/` (Astro Starlight) and deploys to GitHub Pages from `main` via
-`.github/workflows/pages.yaml`. Deployment needs Pages enabled with source "GitHub Actions" (see
-[Repository settings](#repository-settings-maintainers)).
+The project site lives in `site/` (TanStack Start, prerendered to static HTML, on Vite+); see
+[`site/README.md`](site/README.md). `.github/workflows/pages.yaml` checks and builds it on pull
+requests that change it and deploys it to GitHub Pages from `main`. Deployment needs Pages enabled
+with source "GitHub Actions" (see [Repository settings](#repository-settings-maintainers)).
 
 ```sh
 cd site
 npm ci --ignore-scripts
-npm run dev
+npm run dev        # http://localhost:4321/goethite/
+npm run check      # vp check: Oxfmt, Oxlint and the type-check
+npm run build && npm run preview   # the built site, search included
 ```
 
 ## Releasing (maintainers)
 
-Releases are built by [`.github/workflows/release.yaml`](.github/workflows/release.yaml) with
-`cargo xtask dist`, reproducibly, and attested with Sigstore; see
-[ADR 0026](docs/adr/0026-release-builds.md). `cargo xtask dist` builds the release files for your
-machine's architecture locally, the same way (it needs docker or podman). To release `X.Y.Z`:
-
-1. On `development`, bump the version: `workspace.package.version` and the internal crates in
-   `[workspace.dependencies]` in `Cargo.toml`, and `version` in `web/package.json` and both places
-   in `web/package-lock.json`. `cargo xtask versions` checks they agree. Regenerate the OpenAPI
-   document (`GOETHITE_UPDATE_OPENAPI=1 cargo test -p goethite-api --test openapi`), whose version
-   follows.
-2. In `CHANGELOG.md`, turn `[Unreleased]` into `## [X.Y.Z] - <date>`, add a new empty
-   `[Unreleased]` above it, and update the compare links at the bottom. The release notes are
-   taken from this section.
-3. Fuzz every target: `cargo xtask fuzz` (about 90 minutes, on a machine that does not sleep).
-   A finding is fixed privately first (see [`SECURITY.md`](SECURITY.md)).
-4. Open the pull request from `development` to `main` and merge it once CI passes.
-5. Tag the merge commit on `main` and push the tag:
-
-   ```sh
-   git switch main && git pull
-   git tag -a vX.Y.Z -m "goethite X.Y.Z"
-   git push origin vX.Y.Z
-   ```
-
-6. The workflow builds both architectures twice, fails unless the builds match, refuses a tag
-   that is not on `main` or does not match the version, then attests the files and drafts the
-   GitHub Release. Check the draft (`gh attestation verify` on a downloaded tarball, see
-   [Verifying releases](site/src/content/docs/verify.md)) and publish it.
-7. Publishing runs [`.github/workflows/image.yaml`](.github/workflows/image.yaml), which checks
-   the published tarballs, then builds, pushes and attests `ghcr.io/nxplain-sh/goethite`.
-   `cargo xtask image` builds the same image locally from `target/dist`, as an OCI archive.
+Releases are tags on `main`, cut by hand and built by
+[`.github/workflows/release.yaml`](.github/workflows/release.yaml) with `cargo xtask dist`,
+reproducibly, and attested with Sigstore; see [ADR 0026](docs/adr/0026-release-builds.md). The
+version rules, the steps for a release from `development`, patch releases from `main` and security
+fixes are in [`docs/releases.md`](docs/releases.md).
 
 ## Repository settings (maintainers)
 
 One-time settings on `nxplain-sh/goethite` that the repository cannot set itself:
 
 - **Rulesets** (Settings → Rules → Rulesets), with no bypass list:
-  - `main`: no deletion or force-push; changes only through a pull request (no approval
-    required, merge commits only); every CI job must pass, `source branch` included, which
-    fails pull requests into `main` that do not come from `development`.
-  - `development`: no deletion or force-push.
-  - Tags `v*`: no deletion or update, so a published release's tag cannot move.
+  - `main` and `development`, each: no deletion or force-push; changes only through a pull
+    request (no approval required, merge commits only); every CI job must pass, `source branch`
+    included. On pull requests into `main` that check fails unless they come from `development`
+    or a `hotfix/` branch, change the version and leave `[Unreleased]` empty; on others it fails
+    unless the branch is named as [`docs/branching.md`](docs/branching.md) says.
+  - Tags `v*`: no deletion or update, so a release's tag cannot move.
 - **`api-breaking` label:** marks an intended breaking API change (see
   [Changing the API](#changing-the-api)).
 - **GitHub Pages:** Settings → Pages → Build and deployment → Source: **GitHub Actions**
@@ -314,12 +305,12 @@ One-time settings on `nxplain-sh/goethite` that the repository cannot set itself
 
 ## Pull request checklist
 
-- [ ] The pull request targets `development` (only `development` targets `main`)
+- [ ] The pull request targets `development` from a `<kind>/<what>` branch (only releases target `main`)
 - [ ] `cargo xtask ci` passes, with shellcheck, cargo-deny and cargo-audit installed
 - [ ] Any new dependency is justified in the PR description
 - [ ] Web UI changes: `npm run build` in `web/` passes (type-check, build, size budget)
 - [ ] Parser changes: the fuzz target was run for at least 60 seconds without findings
 - [ ] No new `unwrap`/`expect`/panicking indexing on untrusted data
 - [ ] Public items are documented. User-facing changes update `site/` or the README.
-- [ ] Architectural decisions have an ADR. Later-phase ideas are in `docs/BACKLOG.md`.
+- [ ] Architectural decisions have an ADR. Ideas left for later are in `docs/BACKLOG.md`.
 - [ ] Commits follow the conventions above

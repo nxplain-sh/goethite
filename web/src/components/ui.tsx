@@ -38,19 +38,25 @@ export function ProtectionBadge({ status }: { status: Status }) {
 	)
 }
 
-/** What this node does in its cluster, and how many members are up, in words. */
+/** The color each role stands out with; the words say it either way. */
+const STATE_TONE: Record<string, string> = {
+	leader: 'badge accent',
+	follower: 'badge inverted',
+}
+
+/** What this node does in its cluster, and how many members are up, in words; opens the cluster page. */
 export function ClusterBadges({ cluster }: { cluster: ClusterStatus }) {
 	const others = (cluster.members ?? []).filter((member) => !member.this_node)
 	const up = others.filter((member) => member.reachable).length
 	return (
-		<>
-			<span className="badge">
+		<Link to="/cluster" className="cluster-badges" title="The cluster">
+			<span className={STATE_TONE[cluster.state ?? ''] ?? 'badge'}>
 				{cluster.node} · {(cluster.state ?? 'unknown').toUpperCase()}
 			</span>
 			<span className={up === others.length ? 'badge ok' : 'badge blocked'}>
 				{up}/{others.length} MEMBERS UP
 			</span>
-		</>
+		</Link>
 	)
 }
 

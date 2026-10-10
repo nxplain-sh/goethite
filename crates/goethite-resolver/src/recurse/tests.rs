@@ -10,6 +10,7 @@
 
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -17,7 +18,8 @@ use goethite_proto::{
     Edns, Name, Query, Question, Record, RecordClass, RecordType, Response, ResponseCode,
 };
 
-use super::{Exchanged, Network, Recursor, RecursorConfig};
+use super::infra::MAX_FETCHES_PER_SERVER;
+use super::{Budget, Exchanged, MAX_ADDRESSES_PER_NAME, Network, Recursor, RecursorConfig};
 use crate::exchange::ExchangeError;
 
 fn name(text: &str) -> Name {
@@ -35,6 +37,9 @@ struct Quirks {
     silent: bool,
     /// Truncates every UDP answer.
     truncates: bool,
+    /// Never answers over TCP: pairs with `truncates` to stall the TCP
+    /// fallback.
+    tcp_silent: bool,
     /// Lowercases the question, so 0x20 fails.
     lowercases: bool,
     /// Says NXDOMAIN for names that only have names below them.
@@ -109,6 +114,9 @@ struct Server {
 struct Fake {
     servers: HashMap<IpAddr, Server>,
     log: Mutex<Vec<(IpAddr, String, RecordType, bool)>>,
+    /// Exchanges running right now, and the most seen at once.
+    in_flight: AtomicUsize,
+    max_in_flight: AtomicUsize,
 }
 
 impl Fake {
@@ -135,9 +143,13 @@ impl Fake {
         self.log.lock().unwrap().clone()
     }
 
+    fn max_in_flight(&self) -> usize {
+        self.max_in_flight.load(Ordering::Relaxed)
+    }
+
     fn answer(&self, server: IpAddr, query: &Query, tcp: bool) -> Option<Response> {
         let server = self.servers.get(&server)?;
-        if server.quirks.silent {
+        if server.quirks.silent || (tcp && server.quirks.tcp_silent) {
             return None;
         }
         let qname = &query.question.name;
@@ -328,6 +340,15 @@ impl Fake {
 impl Network for Fake {
     fn exchange<'a>(&'a self, server: SocketAddr, query: &'a Query, tcp: bool) -> Exchanged<'a> {
         Box::pin(async move {
+            struct Running<'a>(&'a AtomicUsize);
+            impl Drop for Running<'_> {
+                fn drop(&mut self) {
+                    self.0.fetch_sub(1, Ordering::Relaxed);
+                }
+            }
+            let running = self.in_flight.fetch_add(1, Ordering::Relaxed) + 1;
+            self.max_in_flight.fetch_max(running, Ordering::Relaxed);
+            let _running = Running(&self.in_flight);
             self.log.lock().unwrap().push((
                 server.ip(),
                 query.question.name.to_string().to_lowercase(),
@@ -483,6 +504,246 @@ fn query(qname: &str, qtype: RecordType) -> Query {
 
 fn addresses(response: &Response) -> Vec<IpAddr> {
     response.answers.iter().filter_map(Record::ip).collect()
+}
+
+#[tokio::test]
+async fn loopback_and_local_addresses_are_never_queried() {
+    // Glue of 127.0.0.1 would make goethite query itself. The fake serves a
+    // good answer there so a query to it could not be mistaken for a
+    // failure.
+    let mut fake = Fake::default();
+    fake.serve(
+        "10.0.0.1",
+        ".",
+        vec![
+            Record::ns(name("example."), 172_800, name("ns.example.")),
+            Record::a(name("ns.example."), 172_800, Ipv4Addr::LOCALHOST),
+        ],
+    )
+    .serve(
+        "127.0.0.1",
+        "example.",
+        vec![Record::a(
+            name("www.example."),
+            300,
+            Ipv4Addr::new(192, 0, 2, 1),
+        )],
+    );
+    let (node, fake) = recursor(fake, config());
+    let (response, _) = node.resolve(&query("www.example.", RecordType::A)).await;
+    assert_eq!(response.rcode, ResponseCode::SERV_FAIL);
+    assert!(
+        fake.asked()
+            .iter()
+            .all(|(address, ..)| *address != ip("127.0.0.1")),
+        "loopback glue is never queried"
+    );
+
+    // The node's own address from the config is refused too.
+    let mut fake = Fake::default();
+    fake.serve(
+        "10.0.0.1",
+        ".",
+        vec![
+            Record::ns(name("example."), 172_800, name("ns.example.")),
+            Record::a(name("ns.example."), 172_800, Ipv4Addr::new(10, 0, 3, 1)),
+        ],
+    )
+    .serve(
+        "10.0.3.1",
+        "example.",
+        vec![Record::a(
+            name("www.example."),
+            300,
+            Ipv4Addr::new(192, 0, 2, 1),
+        )],
+    );
+    let mut config = config();
+    config.local_addresses = vec![ip("10.0.3.1")];
+    let (node, fake) = recursor(fake, config);
+    let (response, _) = node.resolve(&query("www.example.", RecordType::A)).await;
+    assert_eq!(response.rcode, ResponseCode::SERV_FAIL);
+    assert!(
+        fake.asked()
+            .iter()
+            .all(|(address, ..)| *address != ip("10.0.3.1")),
+        "the node's own address is never queried"
+    );
+}
+
+/// A root server that truncates every UDP answer and never answers the TCP
+/// retry: every query to it stalls until its timeout.
+fn stalled_root() -> Fake {
+    let mut fake = Fake::default();
+    fake.serve(
+        "10.0.0.1",
+        ".",
+        vec![
+            Record::ns(Name::root(), 172_800, name("a.root.")),
+            Record::a(name("a.root."), 172_800, Ipv4Addr::new(10, 0, 0, 1)),
+        ],
+    )
+    .quirks(
+        "10.0.0.1",
+        Quirks {
+            truncates: true,
+            tcp_silent: true,
+            ..Quirks::default()
+        },
+    );
+    fake
+}
+
+#[tokio::test]
+async fn fetches_to_one_server_are_capped() {
+    let mut config = config();
+    config.total_timeout = Duration::from_millis(500);
+    let (recursor, fake) = recursor(stalled_root(), config);
+    let recursor = Arc::new(recursor);
+    let mut tasks = Vec::new();
+    for i in 0..64 {
+        let recursor = Arc::clone(&recursor);
+        tasks.push(tokio::spawn(async move {
+            recursor
+                .resolve(&query(&format!("n{i}.example."), RecordType::A))
+                .await
+        }));
+    }
+    for task in tasks {
+        let (response, _) = task.await.unwrap();
+        assert_eq!(response.rcode, ResponseCode::SERV_FAIL);
+    }
+    let peak = fake.max_in_flight();
+    assert!(peak > 0);
+    assert!(
+        peak <= usize::try_from(MAX_FETCHES_PER_SERVER).unwrap(),
+        "a stalling server held {peak} exchanges at once"
+    );
+}
+
+#[tokio::test]
+async fn tcp_fallback_waits_the_server_timeout_not_the_whole_budget() {
+    let mut fake = Fake::default();
+    fake.serve(
+        "10.0.9.9",
+        "example.",
+        vec![Record::a(
+            name("www.example."),
+            300,
+            Ipv4Addr::new(192, 0, 2, 1),
+        )],
+    )
+    .quirks(
+        "10.0.9.9",
+        Quirks {
+            truncates: true,
+            tcp_silent: true,
+            ..Quirks::default()
+        },
+    );
+    let (recursor, _) = recursor(fake, config());
+    let mut budget = Budget::new(Duration::from_secs(10));
+    let started = std::time::Instant::now();
+    let result = recursor
+        .query_unspanned(
+            &name("example."),
+            SocketAddr::new(ip("10.0.9.9"), 53),
+            &name("www.example."),
+            RecordType::A,
+            &mut budget,
+        )
+        .await;
+    assert!(result.is_err());
+    assert!(
+        started.elapsed() < Duration::from_millis(2_500),
+        "TCP waited the whole budget: {:?}",
+        started.elapsed()
+    );
+}
+
+#[tokio::test]
+async fn name_server_addresses_are_capped() {
+    // Twenty A records at the name: a hostile zone would send thousands.
+    let mut records = Vec::new();
+    for last in 1..=20u8 {
+        records.push(Record::a(
+            name("ns.example."),
+            172_800,
+            Ipv4Addr::new(10, 0, 3, last),
+        ));
+    }
+    let mut fake = Fake::default();
+    fake.serve("10.0.0.1", ".", records);
+    let (recursor, _) = recursor(fake, config());
+    let mut budget = Budget::new(Duration::from_secs(3));
+    recursor
+        .find_addresses(&name("ns.example."), &mut budget, 0)
+        .await
+        .unwrap();
+    let kept = recursor
+        .infra
+        .addresses(&name("ns.example."), tokio::time::Instant::now())
+        .unwrap();
+    assert!(
+        kept.len() <= MAX_ADDRESSES_PER_NAME,
+        "kept {} addresses",
+        kept.len()
+    );
+}
+
+#[tokio::test]
+async fn glue_addresses_are_capped() {
+    let mut records = vec![Record::ns(name("example."), 172_800, name("ns.example."))];
+    for last in 1..=20u8 {
+        records.push(Record::a(
+            name("ns.example."),
+            172_800,
+            Ipv4Addr::new(10, 0, 3, last),
+        ));
+    }
+    let mut fake = Fake::default();
+    fake.serve("10.0.0.1", ".", records).serve(
+        "10.0.3.1",
+        "example.",
+        vec![Record::a(
+            name("www.example."),
+            300,
+            Ipv4Addr::new(192, 0, 2, 1),
+        )],
+    );
+    let (recursor, _) = recursor(fake, config());
+    let (response, _) = recursor
+        .resolve(&query("www.example.", RecordType::A))
+        .await;
+    assert_eq!(response.rcode, ResponseCode::NO_ERROR);
+    let kept = recursor
+        .infra
+        .addresses(&name("ns.example."), tokio::time::Instant::now())
+        .unwrap();
+    assert!(
+        kept.len() <= MAX_ADDRESSES_PER_NAME,
+        "kept {} addresses",
+        kept.len()
+    );
+}
+
+#[tokio::test]
+async fn a_cname_chain_longer_than_the_limit_fails() {
+    // A chain of 18 links, spread over three responses of eight.
+    let mut records = vec![Record::cname(name("q.example."), 300, name("m0.example."))];
+    for link in 0..17u8 {
+        let next = if link == 16 {
+            name("end.example.")
+        } else {
+            name(&format!("m{}.example.", link.saturating_add(1)))
+        };
+        records.push(Record::cname(name(&format!("m{link}.example.")), 300, next));
+    }
+    let mut fake = Fake::default();
+    fake.serve("10.0.0.1", ".", records);
+    let (recursor, _) = recursor(fake, config());
+    let (response, _) = recursor.resolve(&query("q.example.", RecordType::A)).await;
+    assert_eq!(response.rcode, ResponseCode::SERV_FAIL);
 }
 
 #[tokio::test]

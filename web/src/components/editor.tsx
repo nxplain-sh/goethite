@@ -3,7 +3,7 @@ import { Link, useNavigate } from '@tanstack/react-router'
 import { type FormEvent, type ReactNode, useState } from 'react'
 
 import { ApiError, type ManagedBy } from '../api/client'
-import { isReadOnly, MANAGED_LABEL } from '../forms/forms'
+import { MANAGED_LABEL } from '../forms/forms'
 import { ErrorNotice } from './ui'
 
 /** The pages an editor goes back to. */
@@ -18,9 +18,8 @@ export interface Stored {
 
 /**
  * The frame of every editor: the title, who manages the resource, the
- * fields, and Save, Cancel and Delete. Resources Terraform manages are shown
- * read-only. After a change, the lists of resources and the status are
- * fetched again and the editor goes back to `back`.
+ * fields, and Save, Cancel and Delete. After a change, the lists of resources
+ * and the status are fetched again and the editor goes back to `back`.
  */
 export function Editor({
 	title,
@@ -57,7 +56,6 @@ export function Editor({
 	const saving = useMutation({ mutationFn: save, onSuccess: done })
 	const deleting = useMutation({ mutationFn: remove ?? (() => Promise.resolve()), onSuccess: done })
 	const managedBy = stored?.spec.managed_by
-	const readOnly = isReadOnly(managedBy)
 	const error = saving.error ?? deleting.error
 	const changedMeanwhile = error instanceof ApiError && error.code === 'revision_mismatch'
 
@@ -78,15 +76,10 @@ export function Editor({
 					{managedBy === undefined ? null : <> · managed by {MANAGED_LABEL[managedBy]}</>}
 				</p>
 			)}
-			{readOnly ? (
-				<div className="notice" role="status">
-					Terraform manages this {what}, so it is read-only here: change it in Terraform.
-				</div>
-			) : null}
 			{managedBy === 'config_file' ? (
 				<div className="notice" role="status">
-					This {what} comes from the config file's [filter] table: the next `goethite import`
-					puts it back as the file says.
+					This {what} comes from the config file's [filter] table: the next `goethite import` puts it back as
+					the file says.
 				</div>
 			) : null}
 			<ErrorNotice error={error} />
@@ -106,22 +99,20 @@ export function Editor({
 				</p>
 			) : null}
 			<form className="panel form" onSubmit={submit}>
-				<fieldset className="fields" disabled={readOnly || saving.isPending || deleting.isPending}>
+				<fieldset className="fields" disabled={saving.isPending || deleting.isPending}>
 					{children}
 				</fieldset>
-				{readOnly ? null : (
-					<div className="actions">
-						<button type="submit" className="button primary" disabled={!canSave || saving.isPending}>
-							{stored === undefined ? 'Create' : 'Save'}
-						</button>
-						<Link to={back} className="button">
-							Cancel
-						</Link>
-						{stored === undefined || remove === undefined ? null : (
-							<DeleteButton what={what} pending={deleting.isPending} onDelete={() => deleting.mutate()} />
-						)}
-					</div>
-				)}
+				<div className="actions">
+					<button type="submit" className="button primary" disabled={!canSave || saving.isPending}>
+						{stored === undefined ? 'Create' : 'Save'}
+					</button>
+					<Link to={back} className="button">
+						Cancel
+					</Link>
+					{stored === undefined || remove === undefined ? null : (
+						<DeleteButton what={what} pending={deleting.isPending} onDelete={() => deleting.mutate()} />
+					)}
+				</div>
 			</form>
 		</div>
 	)
@@ -160,16 +151,12 @@ export function DeleteButton({
 	)
 }
 
-/** Who manages a resource, as a badge; Terraform's are read-only. */
+/** Who manages a resource, as a badge. */
 export function ManagedBadge({ managedBy }: { managedBy: ManagedBy | undefined }) {
 	if (managedBy === undefined || managedBy === 'api') {
 		return null
 	}
-	return (
-		<span className={managedBy === 'terraform' ? 'badge inverted' : 'badge'}>
-			{managedBy === 'terraform' ? 'TERRAFORM' : 'CONFIG FILE'}
-		</span>
-	)
+	return <span className="badge">CONFIG FILE</span>
 }
 
 /** The editor's loading and error states, before there is a form. */

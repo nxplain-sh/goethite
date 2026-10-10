@@ -225,6 +225,7 @@ pub(crate) async fn download(url: &str, lists: &ListStore, downloader: &Download
 
 /// Downloads `url` into `lists` if it changed, keeping it only if `check`
 /// accepts it; `check` says how many rules or entries it holds.
+#[tracing::instrument(level = "debug", name = "list.download", skip_all, fields(%url))]
 pub(crate) async fn download_checked(
     url: &str,
     lists: &ListStore,

@@ -40,7 +40,9 @@ export function buckets(report: StatsReport, hours: number, each: number): Bucke
 		const end = shifted(start, each)
 		const label = each === 1 ? time(start) : each < 24 ? `${weekday(start)} ${time(start)}` : day(start)
 		const title =
-			each < 24 ? `${weekday(start)} ${day(start)}, ${time(start)}–${time(end)}` : `${weekday(start)} ${day(start)}`
+			each < 24
+				? `${weekday(start)} ${day(start)}, ${time(start)}–${time(end)}`
+				: `${weekday(start)} ${day(start)}`
 		result.push({ id: start.toISOString(), start, end, label, title, queries: 0, blocked: 0 })
 	}
 	for (const point of report.hours) {

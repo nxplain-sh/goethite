@@ -93,7 +93,11 @@ export function GroupEditor({ id }: { id: string }) {
 		return <Loading error={query.error} what="group" />
 	}
 	return (
-		<GroupFields key={query.data?.revision ?? 'new'} stored={query.data} reload={() => void query.refetch()} />
+		<GroupFields
+			key={query.data?.revision ?? 'new'}
+			stored={query.data}
+			reload={() => void query.refetch()}
+		/>
 	)
 }
 
@@ -133,8 +137,8 @@ function GroupFields({ stored, reload }: { stored: Group | undefined; reload: ()
 		>
 			{members === 0 || isDefault ? null : (
 				<p className="muted">
-					{count(members)} {members === 1 ? 'client is' : 'clients are'} in this group: move them to
-					another group before deleting it.
+					{count(members)} {members === 1 ? 'client is' : 'clients are'} in this group: move them to another
+					group before deleting it.
 				</p>
 			)}
 			{isDefault ? (

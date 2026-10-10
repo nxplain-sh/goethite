@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
-use goethite_api::{ApiListeners, Serving, serve_router};
+use goethite_api::{ApiListeners, HANDSHAKE_TIMEOUT, Serving, serve_router};
 use goethite_cluster::certs::{self, Pem};
 use goethite_cluster::raft::node::RaftNode;
 use goethite_cluster::raft::raft_id;
@@ -124,6 +124,7 @@ impl Node {
             router: server::router(shared),
             tls: Some(identity.server_config(peers).unwrap()),
             max_connections: 16,
+            first_request_timeout: HANDSHAKE_TIMEOUT,
         };
         let (stop, stopped) = oneshot::channel::<()>();
         tokio::spawn(serve_router(listeners, serving, async {

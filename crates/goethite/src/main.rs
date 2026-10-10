@@ -3,13 +3,13 @@
 mod certs;
 mod cluster;
 mod config;
+mod connect;
 mod control;
 mod download;
 mod filterlists;
 mod filters;
 mod handoff;
 mod lists;
-mod metrics;
 mod migrate;
 mod node;
 mod notify;
@@ -21,11 +21,13 @@ mod secrets;
 mod services;
 mod sizes;
 mod sockets;
+mod telemetry;
 mod vrrp;
 mod witness;
 
 use std::future::Future;
 use std::io::IsTerminal;
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -47,7 +49,10 @@ use jiff::Timestamp;
 use tokio::sync::watch;
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::Layer as _;
 use tracing_subscriber::filter::LevelFilter;
+use tracing_subscriber::layer::SubscriberExt as _;
+use tracing_subscriber::util::SubscriberInitExt as _;
 
 use crate::config::Config;
 use crate::control::Control;
@@ -269,9 +274,7 @@ fn init_logging() {
             filter = filter.add_directive(quiet);
         }
     }
-    // Only fails if a global subscriber is already set, which never happens here.
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(filter)
+    let stderr = tracing_subscriber::fmt::layer()
         .with_writer(std::io::stderr)
         .with_ansi(std::io::stderr().is_terminal())
         // Otherwise a log line that cannot be written (nothing reads standard
@@ -279,6 +282,12 @@ fn init_logging() {
         // process dies, or the task that logged does, such as the one that
         // stops goethite on SIGTERM. A lost log line must cost nothing more.
         .log_internal_errors(false)
+        .with_filter(filter);
+    // Only fails if a global subscriber is already set, which never happens here.
+    let _ = tracing_subscriber::registry()
+        .with(stderr)
+        .with(telemetry::logs::LogExport.with_filter(telemetry::logs::filter()))
+        .with(telemetry::traces::layer())
         .try_init();
 }
 
@@ -407,7 +416,14 @@ fn resolver(config: &Config, state: &Arc<PolicyState>) -> Result<Resolver> {
     info!(max_entries = config.cache.max_entries, "cache");
     let mut resolver = Resolver::new(vec![test_record()?, health_record()?]).with_cache(cache);
     if config.recursion.enabled {
-        let recursion = config.recursion.to_recursor_config(has_ipv6_route);
+        let mut recursion = config.recursion.to_recursor_config(has_ipv6_route);
+        recursion.local_addresses = config
+            .server
+            .listen
+            .iter()
+            .map(SocketAddr::ip)
+            .filter(|ip| !ip.is_unspecified())
+            .collect();
         info!(
             qname_minimisation = recursion.qname_minimisation,
             ipv6 = recursion.ipv6,
@@ -420,7 +436,8 @@ fn resolver(config: &Config, state: &Arc<PolicyState>) -> Result<Resolver> {
     }
     let mut resolver = resolver
         .with_policy(Arc::clone(state))
-        .with_fail_mode(config.filter.on_failure.mode());
+        .with_fail_mode(config.filter.on_failure.mode())
+        .with_span_details(config.telemetry.query_details);
     if let Some(protection) = config.security.rebinding_protection()? {
         resolver = resolver.with_rebinding_protection(protection);
     } else {
@@ -472,7 +489,7 @@ async fn serve(
     let mut upgrades = upgrade_signal()?;
     let state = Arc::new(PolicyState::new(Policy::none()));
     let resolver = Arc::new(resolver(config, &state)?);
-    let metrics = Arc::new(metrics::Metrics::default());
+    let telemetry = telemetry::Telemetry::from_config(config, secrets, &resolver)?;
     let observer_log = Arc::new(ArcSwapOption::empty());
     let leak = Arc::new(LeakTests::new());
     let mut server = Server::new(
@@ -482,7 +499,7 @@ async fn serve(
     )?
     .with_observer(Arc::new(observe::Observer::new(
         Arc::clone(&observer_log),
-        Arc::clone(&metrics),
+        telemetry.queries(),
         Arc::clone(&leak),
     )?));
     let dns_cert = match (&config.server.tls, &secrets.dns_tls) {
@@ -496,19 +513,20 @@ async fn serve(
         (Some(_), None) => anyhow::bail!("the DNS certificate is missing"),
         (None, _) => None,
     };
+    telemetry.observe(&resolver, &server.stats());
     let data = plane::DataPlane {
         resolver,
         state,
-        metrics,
-        server: server.stats(),
+        telemetry: Arc::new(telemetry),
         log: observer_log,
         dns_cert,
         started: Timestamp::now(),
         leak,
     };
-    let mut plane = Some(
-        plane::ControlPlane::start(config, config_path, &sockets, secrets, &data, true).await?,
-    );
+    // The control plane may fail to start (a certificate that is not valid
+    // yet, a store that cannot be used): the node then answers without it
+    // rather than not at all.
+    let mut plane = start_control_plane(config, config_path, &sockets, secrets, &data).await?;
     let mut dns = tokio::spawn(server.run(until(stopped.clone())));
     for (name, fd) in sockets.named() {
         notify::store(name, fd);
@@ -555,10 +573,33 @@ async fn serve(
     if !handed_over {
         notify::stopping();
     }
+    // A last export, while the control plane's metrics are still there. It
+    // waits on a task on this runtime.
+    tokio::task::block_in_place(|| data.telemetry.shutdown());
     if let Some(plane) = plane {
         plane.stop().await?;
     }
     Ok(())
+}
+
+/// Starts the control plane. Under fail-closed filtering a failure is the
+/// operator's choice not to run unfiltered, so it is returned; any other
+/// failure is logged and the node answers without the control plane.
+async fn start_control_plane(
+    config: &Config,
+    config_path: &Path,
+    sockets: &Sockets,
+    secrets: &Secrets,
+    data: &plane::DataPlane,
+) -> Result<Option<plane::ControlPlane>> {
+    match plane::ControlPlane::start(config, config_path, sockets, secrets, data, true).await {
+        Ok(plane) => Ok(Some(plane)),
+        Err(err) if config.filter.on_failure == config::OnFailure::Closed => Err(err),
+        Err(err) => {
+            error!("cannot start the control plane: {err:#}; answering queries without it");
+            Ok(None)
+        }
+    }
 }
 
 /// Where the upgrade's private socket goes: systemd's runtime directory
@@ -676,7 +717,7 @@ fn api(
     config: &Config,
     control: &Arc<Control>,
     log: &Arc<goethite_store::QueryLog>,
-    node: node::Node,
+    node: Arc<node::Node>,
     tls: Option<Arc<rustls::ServerConfig>>,
 ) -> Arc<Api> {
     let token = config.api.token().ok().flatten();
@@ -713,7 +754,7 @@ fn api(
     Arc::new(Api {
         store: Arc::clone(control.store()),
         log: Arc::clone(log),
-        control: Arc::new(node),
+        control: node,
         config: ApiConfig {
             token,
             tls,
@@ -852,6 +893,10 @@ fn check_config(config_path: &Path) -> Result<()> {
     if let Some(pem) = &secrets.dns_tls {
         certs::Served::new("DNS certificate", pem, None)?;
     }
+    if let Some(text) = &secrets.telemetry_headers {
+        telemetry::otlp::headers(text)?;
+    }
+    telemetry::otlp::roots(secrets.telemetry_ca.as_deref())?;
     info!(config = %config_path.display(), "configuration is valid");
     Ok(())
 }
@@ -944,9 +989,8 @@ fn seed(store: &Store, config: &Config, config_path: &Path) -> Result<()> {
 }
 
 /// Adds goethite's default lists (the default preset's) to a new store,
-/// used by the default group. They are ordinary lists: the API, the UIs or
-/// Terraform may change or remove them, and `goethite import` leaves them
-/// alone.
+/// used by the default group. They are ordinary lists: the API or the UIs
+/// may change or remove them, and `goethite import` leaves them alone.
 fn add_default_lists(store: &Store) -> Result<()> {
     let actor = Actor::system();
     let mut ids = Vec::new();
@@ -993,7 +1037,7 @@ fn import(config_path: &Path) -> Result<()> {
     if store.cluster_value("id")?.is_some() {
         bail!(
             "this node is in a cluster, whose configuration every member keeps alike: change it \
-             through the API of any member (or Terraform), not with goethite import"
+             through the API of any member, not with goethite import"
         );
     }
     let import = config.filter.to_import();

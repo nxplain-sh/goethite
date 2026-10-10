@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vite-plus/test'
 
 import {
 	clientForm,
@@ -14,7 +14,6 @@ import {
 	describeWindows,
 	groupForm,
 	groupSpec,
-	isReadOnly,
 	listForm,
 	listSpec,
 	parseAddresses,
@@ -218,11 +217,4 @@ describe('schedules', () => {
 		expect(describeDays(['sun', 'sat', 'fri', 'thu', 'wed', 'tue', 'mon'])).toBe('Every day')
 		expect(describeWindows([{ days: ['sat'], start: '10:00', end: '12:00' }])).toBe('Sat 10:00–12:00')
 	})
-})
-
-it('treats only Terraform as read-only', () => {
-	expect(isReadOnly('terraform')).toBe(true)
-	expect(isReadOnly('config_file')).toBe(false)
-	expect(isReadOnly('api')).toBe(false)
-	expect(isReadOnly(undefined)).toBe(false)
 })

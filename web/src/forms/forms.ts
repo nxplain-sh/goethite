@@ -18,13 +18,7 @@ import type {
 /** Who manages a resource, for people. */
 export const MANAGED_LABEL: Record<ManagedBy, string> = {
 	api: 'API',
-	terraform: 'Terraform',
 	config_file: 'Config file',
-}
-
-/** Resources Terraform manages are read-only here: change them there. */
-export function isReadOnly(managedBy: ManagedBy | undefined): boolean {
-	return managedBy === 'terraform'
 }
 
 // Saving keeps who manages a resource: editing a list from the config file
@@ -376,7 +370,5 @@ export function describeDays(days: readonly Weekday[]): string {
 
 /** Windows for people: "Mon–Fri 08:00–15:00; Sat 10:00–12:00". */
 export function describeWindows(windows: readonly Window[]): string {
-	return windows
-		.map((window) => `${describeDays(window.days)} ${window.start}–${window.end}`)
-		.join('; ')
+	return windows.map((window) => `${describeDays(window.days)} ${window.start}–${window.end}`).join('; ')
 }

@@ -796,6 +796,66 @@ async fn cname_uncloaking() {
     assert_eq!(paused.outcome, Outcome::Cached);
 }
 
+/// Answers every query with a CNAME chain of `links` records from the
+/// question name to `target`, and an A record at the end.
+fn cname_chain(links: usize, target: &'static str) -> Script {
+    script(move |q| {
+        let mut reply = answer(q, Ipv4Addr::new(192, 0, 2, 90));
+        let mut owner = q.queries[0].name().clone();
+        for link in 0..links {
+            let next = if link.saturating_add(1) == links {
+                rr::Name::from_ascii(target).unwrap()
+            } else {
+                rr::Name::from_ascii(format!("c{link}.chain.example.")).unwrap()
+            };
+            reply.answers.push(rr::Record::from_rdata(
+                owner,
+                300,
+                RData::CNAME(rdata::CNAME(next.clone())),
+            ));
+            owner = next;
+        }
+        reply.answers.push(rr::Record::from_rdata(
+            owner,
+            300,
+            RData::A(rdata::A(Ipv4Addr::new(192, 0, 2, 90))),
+        ));
+        vec![reply]
+    })
+}
+
+/// A resolver blocking `tracker.example`, with an upstream that answers a
+/// chain of `links` from the question name to it.
+async fn chain_resolver(links: usize) -> Resolver {
+    let upstream = fake(cname_chain(links, "collect.tracker.example."), silent()).await;
+    let state = Arc::new(PolicyState::new(simple(filter("||tracker.example^\n"))));
+    Resolver::new(Vec::new())
+        .with_policy(Arc::clone(&state))
+        .with_forwarder(forwarder(vec![UpstreamConfig::udp(upstream.addr)]))
+}
+
+#[tokio::test]
+async fn a_long_cname_chain_cannot_hide_a_blocked_target() {
+    // At the limit the chain is still uncloaked...
+    let blocked = chain_resolver(16)
+        .await
+        .resolve(&query("metrics.shop.example."), CLIENT)
+        .await;
+    assert_eq!(blocked.outcome, Outcome::Blocked);
+    assert_eq!(
+        blocked.filter.unwrap().cname.unwrap().to_string(),
+        "collect.tracker.example."
+    );
+
+    // ... past it nothing passes unchecked.
+    let escaped = chain_resolver(17)
+        .await
+        .resolve(&query("metrics.shop.example."), CLIENT)
+        .await;
+    assert_eq!(escaped.outcome, Outcome::Failed);
+    assert_eq!(escaped.response.rcode, ResponseCode::SERV_FAIL);
+}
+
 #[tokio::test]
 async fn safe_search_sends_search_hosts_to_their_safe_endpoint() {
     let upstream = fake(always(Ipv4Addr::new(216, 239, 38, 120)), silent()).await;
@@ -976,4 +1036,109 @@ async fn local_records_answer_first_and_lead_to_upstream_answers() {
     let tracker = resolver.resolve(&query("tracker.lan."), CLIENT).await;
     assert_eq!(tracker.outcome, Outcome::Blocked);
     assert_eq!(tracker.response.rcode, ResponseCode::NX_DOMAIN);
+}
+
+/// Records the spans opened on the thread that claims it, and the `name`
+/// fields recorded on them. Spans other tests open are ignored.
+///
+/// The subscriber is installed process-wide (once) because a scoped one
+/// races with the other tests in this binary: the first thread to touch a
+/// callsite fills in the process-wide interest cache for it, and a thread
+/// with no subscriber disables it for everyone.
+struct Spans {
+    thread: std::sync::OnceLock<std::thread::ThreadId>,
+    log: Mutex<(Vec<String>, Vec<String>)>,
+}
+
+static SPANS: Spans = Spans {
+    thread: std::sync::OnceLock::new(),
+    log: Mutex::new((Vec::new(), Vec::new())),
+};
+
+struct SpansLayer;
+
+impl Spans {
+    fn claimed_by_this_thread(&self) -> bool {
+        self.thread.get() == Some(&std::thread::current().id())
+    }
+}
+
+impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for SpansLayer {
+    fn on_new_span(
+        &self,
+        attrs: &tracing::span::Attributes<'_>,
+        _: &tracing::span::Id,
+        _: tracing_subscriber::layer::Context<'_, S>,
+    ) {
+        if !SPANS.claimed_by_this_thread() {
+            return;
+        }
+        SPANS
+            .log
+            .lock()
+            .unwrap()
+            .0
+            .push(attrs.metadata().name().to_owned());
+    }
+
+    fn on_record(
+        &self,
+        _: &tracing::span::Id,
+        values: &tracing::span::Record<'_>,
+        _: tracing_subscriber::layer::Context<'_, S>,
+    ) {
+        struct Names<'a>(&'a mut Vec<String>);
+        impl tracing::field::Visit for Names<'_> {
+            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+                if field.name() == "name" {
+                    self.0.push(format!("{value:?}"));
+                }
+            }
+        }
+        if !SPANS.claimed_by_this_thread() {
+            return;
+        }
+        values.record(&mut Names(&mut SPANS.log.lock().unwrap().1));
+    }
+}
+
+/// Spans are opened on the slow path only: a forwarded query opens a
+/// `resolve` span with an `upstream` span inside, a cache hit opens none.
+/// The name looked up is on the span only with span details on.
+#[tokio::test]
+async fn spans_only_on_the_slow_path() {
+    use tracing_subscriber::layer::SubscriberExt as _;
+
+    static INSTALL: std::sync::Once = std::sync::Once::new();
+    SPANS.thread.get_or_init(|| std::thread::current().id());
+    INSTALL.call_once(|| {
+        tracing::subscriber::set_global_default(tracing_subscriber::registry().with(SpansLayer))
+            .unwrap();
+    });
+
+    let upstream = fake(always(Ipv4Addr::new(192, 0, 2, 7)), silent()).await;
+    let resolver = Resolver::new(Vec::new())
+        .with_cache(Cache::new(CacheConfig::default()))
+        .with_forwarder(forwarder(vec![UpstreamConfig::udp(upstream.addr)]));
+
+    let first = resolver.resolve(&query("example.com."), CLIENT).await;
+    assert_eq!(first.outcome, Outcome::Upstream(0));
+    assert_eq!(SPANS.log.lock().unwrap().0, ["resolve", "upstream"]);
+    let again = resolver.resolve(&query("example.com."), CLIENT).await;
+    assert_eq!(again.outcome, Outcome::Cached);
+    assert_eq!(
+        SPANS.log.lock().unwrap().0.len(),
+        2,
+        "a cache hit opens no span"
+    );
+    assert!(
+        SPANS.log.lock().unwrap().1.is_empty(),
+        "no names by default"
+    );
+
+    let detailed = Resolver::new(Vec::new())
+        .with_forwarder(forwarder(vec![UpstreamConfig::udp(upstream.addr)]))
+        .with_span_details(true);
+    detailed.resolve(&query("named.example."), CLIENT).await;
+    assert_eq!(SPANS.log.lock().unwrap().1, ["named.example."]);
 }

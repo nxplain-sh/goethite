@@ -7,7 +7,7 @@ import { deleteRule, ruleQuery, rulesQuery, saveRule } from '../api/resources'
 import { DeleteButton, Editor, Loading, ManagedBadge } from '../components/editor'
 import { CheckField, TextField } from '../components/form'
 import { ErrorNotice } from '../components/ui'
-import { isReadOnly, ruleForm, type RuleForm, ruleSpec } from '../forms/forms'
+import { ruleForm, type RuleForm, ruleSpec } from '../forms/forms'
 import { count } from '../format'
 
 /** How many rules the table shows at once; the filter narrows them. */
@@ -29,8 +29,8 @@ export function Rules() {
 		<div className="grid-page">
 			<h1>Custom rules</h1>
 			<p className="muted">
-				They apply to every client while filtering is on, in any group. Any syntax the filter lists
-				use works: <span className="mono">||ads.example^</span> blocks a domain and its subdomains,{' '}
+				They apply to every client while filtering is on, in any group. Any syntax the filter lists use works:{' '}
+				<span className="mono">||ads.example^</span> blocks a domain and its subdomains,{' '}
 				<span className="mono">@@||good.example^</span> allows one.
 			</p>
 			<AddRule />
@@ -112,7 +112,6 @@ function AddRule() {
 function RuleRow({ rule }: { rule: Rule }) {
 	const queryClient = useQueryClient()
 	const refresh = () => queryClient.invalidateQueries({ queryKey: ['rules'] })
-	const readOnly = isReadOnly(rule.spec.managed_by)
 	const enabled = rule.spec.enabled ?? true
 	// The new state, shown at once while it is saved; what goethite stores
 	// afterwards, whether it took the change or not.
@@ -140,7 +139,7 @@ function RuleRow({ rule }: { rule: Rule }) {
 					type="checkbox"
 					aria-label={`Use ${rule.spec.rule}`}
 					checked={pending ?? enabled}
-					disabled={readOnly || toggle.isPending}
+					disabled={toggle.isPending}
 					onChange={() => {
 						setPending(!enabled)
 						toggle.mutate()
@@ -148,9 +147,7 @@ function RuleRow({ rule }: { rule: Rule }) {
 				/>
 			</td>
 			<td className="actions-cell">
-				{readOnly ? null : (
-					<DeleteButton what="rule" small pending={remove.isPending} onDelete={() => remove.mutate()} />
-				)}
+				<DeleteButton what="rule" small pending={remove.isPending} onDelete={() => remove.mutate()} />
 			</td>
 		</tr>
 	)

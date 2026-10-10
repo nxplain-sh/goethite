@@ -12,8 +12,7 @@ export const statsQuery = (hours: number) =>
 	queryOptions({
 		queryKey: ['stats', hours],
 		// A cluster's, added up; a node on its own answers with its own.
-		queryFn: () =>
-			call(api.GET('/api/v1/stats', { params: { query: { hours, scope: 'cluster' } } })),
+		queryFn: () => call(api.GET('/api/v1/stats', { params: { query: { hours, scope: 'cluster' } } })),
 		refetchInterval: 10_000,
 	})
 
@@ -51,8 +50,7 @@ export const directoryQuery = queryOptions({
 export const directoryListQuery = (id: number) =>
 	queryOptions({
 		queryKey: ['directory', id],
-		queryFn: () =>
-			call(api.GET('/api/v1/lists/directory/{id}', { params: { path: { id } } })),
+		queryFn: () => call(api.GET('/api/v1/lists/directory/{id}', { params: { path: { id } } })),
 		staleTime: 3_600_000,
 		retry: false,
 	})

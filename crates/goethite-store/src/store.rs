@@ -927,10 +927,10 @@ impl Store {
     }
 
     /// Makes the lists and rules managed by the config file, and the
-    /// settings, match `import`. Lists and rules from the API or Terraform
-    /// stay, and so do the access lists, which the config file does not
-    /// hold. New lists are added to the default group; removed ones are
-    /// removed from every group.
+    /// settings, match `import`. Lists and rules from the API stay, and so
+    /// do the access lists, which the config file does not hold. New lists
+    /// are added to the default group; removed ones are removed from every
+    /// group.
     ///
     /// # Errors
     ///
@@ -1843,7 +1843,7 @@ mod tests {
                     }],
                     blocked_services: Vec::new(),
                     comment: String::new(),
-                    managed_by: ManagedBy::Terraform,
+                    managed_by: ManagedBy::ConfigFile,
                 },
                 &api(),
             )
@@ -1873,7 +1873,7 @@ mod tests {
         assert_eq!(config.clients, vec![tablet.clone()]);
         assert_eq!(
             store.get::<Group>(&kids.id).unwrap().spec.managed_by,
-            ManagedBy::Terraform
+            ManagedBy::ConfigFile
         );
 
         // Audit entries, newest first.

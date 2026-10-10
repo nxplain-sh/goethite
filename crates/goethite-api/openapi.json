@@ -7,10 +7,10 @@
       "name": "goethite contributors"
     },
     "license": {
-      "name": "MIT OR Apache-2.0",
-      "identifier": "MIT OR Apache-2.0"
+      "name": "AGPL-3.0-only",
+      "identifier": "AGPL-3.0-only"
     },
-    "version": "0.5.0"
+    "version": "0.6.0"
   },
   "paths": {
     "/api/v1/audit": {
@@ -3990,10 +3990,9 @@
       },
       "ManagedBy": {
         "type": "string",
-        "description": "Who manages a resource. Resources managed by Terraform are read-only in\nthe web UI and the TUI, so they do not drift from their definition.",
+        "description": "Who manages a resource.",
         "enum": [
           "api",
-          "terraform",
           "config_file"
         ]
       },

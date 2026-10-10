@@ -81,6 +81,7 @@ export function Shell() {
 				<Link to="/querylog" activeOptions={{ includeSearch: false }}>
 					Query log
 				</Link>
+				{status.data?.cluster ? <Link to="/cluster">Cluster</Link> : null}
 				<Link to="/lists">Lists</Link>
 				<Link to="/rules">Rules</Link>
 				<Link to="/records">Records</Link>

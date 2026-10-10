@@ -15,7 +15,6 @@ use arc_swap::ArcSwapOption;
 use goethite_api::Api;
 use goethite_api::leak::LeakTests;
 use goethite_resolver::{PolicyState, Resolver, TlsRoots, tls_client_config};
-use goethite_server::ServerStats;
 use goethite_store::{QueryLog, Store};
 use jiff::Timestamp;
 use tokio::sync::watch;
@@ -28,10 +27,10 @@ use crate::config::{Config, OnFailure};
 use crate::control::Control;
 use crate::filterlists::FilterLists;
 use crate::lists::ListStore;
-use crate::metrics::Metrics;
 use crate::secrets::Secrets;
 use crate::sizes::ListSizes;
 use crate::sockets::Sockets;
+use crate::telemetry::Telemetry;
 use crate::{download, filters, node};
 
 /// How long stopping may take before giving up on the store.
@@ -43,10 +42,8 @@ pub(crate) struct DataPlane {
     pub resolver: Arc<Resolver>,
     /// The policy the resolver filters with.
     pub state: Arc<PolicyState>,
-    /// Per-query counters.
-    pub metrics: Arc<Metrics>,
-    /// What the DNS listeners turned away.
-    pub server: Arc<ServerStats>,
+    /// The metrics.
+    pub telemetry: Arc<Telemetry>,
     /// The query log the DNS server writes to, while there is one.
     pub log: Arc<ArcSwapOption<QueryLog>>,
     /// The certificate for DNS over TLS and HTTPS, if they are served.
@@ -64,6 +61,8 @@ pub(crate) struct ControlPlane {
     store: Weak<Store>,
     log: Arc<QueryLog>,
     observer_log: Arc<ArcSwapOption<QueryLog>>,
+    /// Where the metrics read the node from.
+    metrics_node: Arc<ArcSwapOption<node::Node>>,
     cluster: Option<Arc<Cluster>>,
     /// Kept so they go away on stop, with their references to the store.
     holders: (Arc<Control>, Arc<Api>),
@@ -149,11 +148,10 @@ impl ControlPlane {
         let downloader =
             download::Downloader::new(Arc::clone(&data.resolver), tls, filters::MAX_LIST_LEN);
         control.spawn(downloader, &mut tasks, &stopped);
-        let node = node::Node {
+        let node = Arc::new(node::Node {
             control: Arc::clone(&control),
             resolver: Arc::clone(&data.resolver),
-            server: Arc::clone(&data.server),
-            metrics: Arc::clone(&data.metrics),
+            metrics: data.telemetry.registry(),
             log: Arc::clone(&log),
             querylog_enabled: config.querylog.enabled,
             started: data.started,
@@ -163,24 +161,29 @@ impl ControlPlane {
             filterlists,
             sizes,
             leak: Arc::clone(&data.leak),
-        };
+        });
+        let metrics_node = data.telemetry.node();
         let api_tls = api_cert
             .as_ref()
             .map(|cert| cert.server_config(&[b"h2", b"http/1.1"]))
             .transpose()?;
         // The API exists even when it is not served: the leader runs the
         // other members' forwarded changes through it.
-        let api = crate::api(config, &control, &log, node, api_tls);
+        let api = crate::api(config, &control, &log, Arc::clone(&node), api_tls);
         if let Some(cluster) = &cluster {
             cluster.set_api(Arc::clone(&api));
         }
         serve_api(sockets, &api, &mut tasks, &stopped)?;
+        // Last, once nothing can fail: a start that fails must not leave the
+        // metrics holding its store.
+        metrics_node.store(Some(node));
         Ok(Self {
             stop,
             tasks,
             store: Arc::downgrade(&store),
             log,
             observer_log: Arc::clone(&data.log),
+            metrics_node,
             cluster,
             holders: (control, api),
         })
@@ -199,6 +202,7 @@ impl ControlPlane {
             store,
             log,
             observer_log,
+            metrics_node,
             cluster,
             holders,
         } = self;
@@ -216,6 +220,7 @@ impl ControlPlane {
             tasks.shutdown().await;
         }
         observer_log.store(None);
+        metrics_node.store(None);
         drop((holders, cluster));
         tokio::task::spawn_blocking(move || log.close())
             .await

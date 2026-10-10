@@ -3,13 +3,7 @@ import { Link } from '@tanstack/react-router'
 import { useId, useState } from 'react'
 
 import type { Schedule } from '../api/client'
-import {
-	deleteSchedule,
-	groupsQuery,
-	saveSchedule,
-	scheduleQuery,
-	schedulesQuery,
-} from '../api/resources'
+import { deleteSchedule, groupsQuery, saveSchedule, scheduleQuery, schedulesQuery } from '../api/resources'
 import { Editor, Loading, ManagedBadge } from '../components/editor'
 import { TextField } from '../components/form'
 import { ErrorNotice } from '../components/ui'
@@ -37,8 +31,8 @@ export function Schedules() {
 				</Link>
 			</div>
 			<p className="muted">
-				Weekly windows in a time zone. A group can apply a list only during a schedule, such as social
-				media blocked during school hours.
+				Weekly windows in a time zone. A group can apply a list only during a schedule, such as social media
+				blocked during school hours.
 			</p>
 			<ErrorNotice error={schedules.error} />
 			<div className="panel">

@@ -2,7 +2,7 @@
 
 use goethite_api::Status;
 use goethite_api::leak::LeakTest;
-use goethite_store::{Client, Group, List, ManagedBy, QueryEntry, QueryOutcome, StatsReport};
+use goethite_store::{Client, Group, List, QueryEntry, QueryOutcome, StatsReport};
 use jiff::Timestamp;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
@@ -274,23 +274,13 @@ impl App {
         let Some(list) = self.data.lists.get(self.selected) else {
             return Action::None;
         };
-        if list.spec.managed_by == ManagedBy::Terraform {
-            self.message = Some((
-                format!(
-                    "{} is managed by Terraform; change it there",
-                    list.spec.name
-                ),
-                true,
-            ));
-            return Action::None;
-        }
         Action::ToggleList(Box::new(list.clone()))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use goethite_store::ListSpec;
+    use goethite_store::{ListSpec, ManagedBy};
     use ratatui::crossterm::event::KeyEventState;
 
     use super::*;
@@ -304,7 +294,7 @@ mod tests {
         }
     }
 
-    fn list(name: &str, managed_by: ManagedBy) -> List {
+    fn list(name: &str) -> List {
         List {
             id: format!("li_{name}"),
             revision: 3,
@@ -316,7 +306,7 @@ mod tests {
                 path: None,
                 enabled: true,
                 comment: String::new(),
-                managed_by,
+                managed_by: ManagedBy::Api,
             },
         }
     }
@@ -336,15 +326,14 @@ mod tests {
         assert_eq!(app.on_key(key(KeyCode::Char('3'))), Action::Refresh);
         assert_eq!(app.tab, Tab::Lists);
         assert_eq!(app.on_key(key(KeyCode::Char('3'))), Action::None);
-        app.apply(Update::Lists(vec![
-            list("a", ManagedBy::Api),
-            list("b", ManagedBy::Terraform),
-        ]));
+        app.apply(Update::Lists(vec![list("a"), list("b")]));
         app.on_key(key(KeyCode::Down));
         app.on_key(key(KeyCode::Down));
         assert_eq!(app.selected, 1, "stops at the last row");
-        assert_eq!(app.on_key(key(KeyCode::Char(' '))), Action::None);
-        assert!(app.message.as_ref().unwrap().0.contains("Terraform"));
+        assert!(matches!(
+            app.on_key(key(KeyCode::Char(' '))),
+            Action::ToggleList(list) if list.spec.name == "b"
+        ));
         app.on_key(key(KeyCode::Up));
         assert!(matches!(
             app.on_key(key(KeyCode::Char(' '))),
@@ -352,7 +341,7 @@ mod tests {
         ));
         // Fewer rows after a refresh keep the selection in range.
         app.selected = 1;
-        app.apply(Update::Lists(vec![list("a", ManagedBy::Api)]));
+        app.apply(Update::Lists(vec![list("a")]));
         assert_eq!(app.selected, 0);
         assert_eq!(app.on_key(key(KeyCode::Char('q'))), Action::Quit);
     }

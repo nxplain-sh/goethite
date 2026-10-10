@@ -48,7 +48,7 @@ fuzz_target!(|data: &[u8]| {
                     assert!(!records.is_empty());
                     assert!(records.iter().all(|record| record.name().is_within(&zone)));
                 }
-                Kind::NoData { soa } | Kind::NxDomain { soa } => {
+                Kind::NoData { soa } | Kind::NxDomain { soa, .. } => {
                     if let Some(soa) = soa {
                         assert!(soa.name().is_within(&zone) && asked.is_within(soa.name()));
                     }

@@ -1,7 +1,7 @@
 # External security review: scope for v0.5.0
 
-This is the brief for the external security review planned for v0.5 (see the
-[roadmap](../AGENTS.md#roadmap-respect-the-order)). It says what goethite is, where its trust
+This is the brief for the external security review of v0.5 (see the
+[changelog](../CHANGELOG.md#050---2026-10-09)). It says what goethite is, where its trust
 boundaries are, what to look at first, how to build and test it, and which risks are known and
 accepted. The [threat model](THREAT_MODEL.md) is the companion document: every boundary (B1 to B8)
 and control named here is described there, with the ADR behind it.
@@ -16,9 +16,8 @@ reproducibly and attested ([ADR 0026](adr/0026-release-builds.md)); `cargo xtask
 them bit for bit, and a release's commit is the tag `v0.5.0` on `main`.
 
 In scope: everything in this repository that ships in the binary, the packages or the image, the
-release and CI workflows, and the systemd units. Out of scope: the website (`site/`), the
-Terraform provider (its own repository), macOS and Windows (development only), and denial of
-service by traffic volume beyond the documented bounds.
+release and CI workflows, and the systemd units. Out of scope: the website (`site/`), macOS and
+Windows (development only), and denial of service by traffic volume beyond the documented bounds.
 
 ## Where to look first
 

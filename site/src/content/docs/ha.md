@@ -186,7 +186,8 @@ for scripts written against it: the leader is the `primary`.
 
 Members check on each other every 5 seconds. `problems` lists, in words, anything that needs a
 person: no leader, a member that is unreachable, runs another version or is in another cluster,
-or two voters. The web UI and the TUI show the cluster on their dashboards.
+or two voters. The TUI shows the cluster on its dashboard; the web UI on its dashboard and on a
+[Cluster page](../web-ui/#the-cluster-page) of its own, which also offers the steps below.
 
 ## Statistics
 
@@ -205,7 +206,8 @@ want the configuration frozen, take the cluster over on a member that is left:
 curl -X POST http://127.0.0.1:8053/api/v1/cluster/promote
 ```
 
-It leaves its cluster and starts a new one, as its only voter, with its own configuration.
+In the web UI, this node's Cluster page offers it as **Take the cluster over** while there is no
+leader. It leaves its cluster and starts a new one, as its only voter, with its own configuration.
 goethite refuses while a leader of the cluster answers, since there is nothing to take over (pass
 `{"force": true}` to do it anyway). The new cluster has a new ID; its leader adds the members in
 its config file as they join.
@@ -218,7 +220,8 @@ curl -X POST http://dns1:8053/api/v1/cluster/demote
 ```
 
 It leaves its old cluster, and the new cluster's leader adds it, replacing its configuration.
-A demote is refused unless the leader of another cluster answers (`force` overrides).
+A demote is refused unless the leader of another cluster answers (`force` overrides). In the web
+UI, the member's Cluster page offers it as **Join dns2's cluster**, naming the other leader.
 
 ## Removing a member
 
@@ -231,8 +234,8 @@ then:
 curl -X DELETE http://127.0.0.1:8053/api/v1/cluster/members/dns3
 ```
 
-Any member forwards it to the leader. If that leaves two voters, the leader goes back to voting
-alone. Certificates cannot be revoked: to lock a removed member out for good, create a new CA and
+Any member forwards it to the leader. In the web UI, a member that is down has **Remove** on its
+card. If that leaves two voters, the leader goes back to voting alone. Certificates cannot be revoked: to lock a removed member out for good, create a new CA and
 issue new certificates to the remaining members.
 
 ## A floating IP
@@ -329,6 +332,58 @@ network segment (with a TTL of 255), and only for the configured `router_id` and
 host on that segment can still forge an announcement and take the address, just as it could take
 any address there with forged ARP. Run the floating IP on a network you trust, and give it a
 `router_id` no other VRRP pair on the network uses.
+
+## In containers
+
+[`deploy/container/cluster/`](https://github.com/nxplain-sh/goethite/tree/main/deploy/container/cluster)
+in the repository has Compose files, for Docker Compose or Podman Compose, for each kind of member:
+`node/` runs goethite and `goethite vrrp` beside it on each of the two DNS nodes, `witness/` runs
+the witness. Each member still needs a machine of its own: a cluster on one machine goes down with
+it.
+
+First, create the certificates on any machine with Docker or Podman:
+
+```sh
+mkdir cluster
+image=ghcr.io/nxplain-sh/goethite:0.5
+docker run --rm -v "$PWD/cluster:/cluster:z" "$image" cluster init --dir /cluster
+for member in dns1 dns2 witness; do
+  docker run --rm -v "$PWD/cluster:/cluster:z" "$image" cluster cert "$member" --dir /cluster
+done
+```
+
+Then, on each member, make a directory holding:
+
+- that member's `compose.yaml`;
+- its config file as `goethite.toml`: `node/dns1.toml`, `node/dns2.toml` or
+  `witness/witness.toml` from the repository, with your addresses, network interface and
+  upstreams in place of the examples' (the tables are the ones described above);
+- a `cluster/` directory with `ca.crt` and the member's own certificate and key. goethite reads
+  the key as root on the nodes, but without the capability to read other users' files, and as
+  user 65532 on the witness, so give the files to root and the group 65532:
+
+  ```sh
+  sudo chown -R root:65532 cluster
+  sudo chmod 0750 cluster && sudo chmod 0640 cluster/*.key
+  ```
+
+and start it, in any order: `docker compose up -d`. dns1 logs `started the cluster`, and
+`curl http://127.0.0.1:8053/api/v1/cluster` on either node shows the members.
+
+On the nodes, both containers use the host's network: the floating IP goes on the host's
+interface, VRRP and ARP reach the other node directly, and the members reach each other on their
+hosts' own addresses. Docker gives a user other than root no capabilities, so both start as root
+with only what they need: goethite binds port 53, switches to user 65532 and gives up its
+capabilities before it reads a packet; `goethite vrrp` keeps only `CAP_NET_ADMIN` once its
+sockets are open, and warns that it runs as root. The API answers on the host's loopback, as
+without containers. The witness runs as user 65532 from the start, with no capabilities, in a
+network namespace of its own with the cluster port published.
+
+To upgrade a member, change the tag (or `docker compose pull` for a patch release) and run
+`docker compose up -d`, one member at a time. On a node, Compose stops `goethite vrrp` first, which
+hands the floating IP to the other node at once, then recreates both: the node answers nothing for
+a second or two, unlike the in-place upgrade of the packages, while the other node answers on the
+floating IP.
 
 ## Upgrading
 

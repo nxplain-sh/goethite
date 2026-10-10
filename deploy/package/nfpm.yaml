@@ -15,7 +15,7 @@ priority: optional
 maintainer: nxplain.sh <hello@nxplain.sh>
 vendor: nxplain.sh
 homepage: https://nxplain-sh.github.io/goethite/
-license: MIT OR Apache-2.0
+license: AGPL-3.0-only
 description: |-
   Self-hosted, clustered, security-hardened DNS filtering resolver
   goethite blocks ads, trackers and malware for a whole network. It filters with
@@ -75,17 +75,11 @@ contents:
   - src: deploy/package/copyright
     dst: /usr/share/doc/goethite/copyright
     packager: deb
-  - src: LICENSE-MIT
-    dst: /usr/share/doc/goethite/LICENSE-MIT
+  - src: LICENSE
+    dst: /usr/share/doc/goethite/LICENSE
     packager: deb
-  - src: LICENSE-APACHE
-    dst: /usr/share/doc/goethite/LICENSE-APACHE
-    packager: deb
-  - src: LICENSE-MIT
-    dst: /usr/share/licenses/goethite/LICENSE-MIT
-    packager: rpm
-  - src: LICENSE-APACHE
-    dst: /usr/share/licenses/goethite/LICENSE-APACHE
+  - src: LICENSE
+    dst: /usr/share/licenses/goethite/LICENSE
     packager: rpm
 
   # Owned by the package, so removing it removes them. The unit's
