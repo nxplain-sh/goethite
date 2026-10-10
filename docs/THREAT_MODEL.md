@@ -32,7 +32,7 @@ packages and a container image.
 | B1 | Clients → DNS listeners (UDP/TCP 53, DoT, DoH, DoQ) | untrusted → node | Highest-volume, fully attacker-controlled input; DoT, DoH and DoQ may face the internet |
 | B2 | Resolver → upstream resolvers / authoritative servers | node → untrusted | Responses are untrusted; off-path spoofing is possible over plain DNS |
 | B3 | Filter list downloads                          | untrusted → node   | Large, third-party-controlled content, parsed on the node    |
-| B4 | Admins → REST API / web UI / TUI / Terraform   | semi-trusted → node | Authenticated (Phase 2), can change all behaviour           |
+| B4 | Admins → REST API / web UI / TUI               | semi-trusted → node | Authenticated (Phase 2), can change all behaviour           |
 | B5 | Cluster member ↔ cluster member               | peer ↔ peer        | Raft's log of config changes (Phase 5; replication in Phase 3), and VRRP |
 | B6 | Local OS: config files, storage, other local users | host ↔ process | goethite runs unprivileged after binding (Phase 1)          |
 | B7 | Build and supply chain: crates, npm packages, CI actions, release artifacts | upstream → users | Affects every installation                                  |

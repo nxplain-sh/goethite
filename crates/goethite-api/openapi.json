@@ -3990,10 +3990,9 @@
       },
       "ManagedBy": {
         "type": "string",
-        "description": "Who manages a resource. Resources managed by Terraform are read-only in\nthe web UI and the TUI, so they do not drift from their definition.",
+        "description": "Who manages a resource.",
         "enum": [
           "api",
-          "terraform",
           "config_file"
         ]
       },

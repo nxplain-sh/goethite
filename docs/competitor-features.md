@@ -135,7 +135,7 @@ not cover it.
 | Prometheus metrics | No (#516) | No; JSON metrics | No | Yes |
 | Query log | JSON file, 90 days | SQLite, 91 days | Last 1,000, in memory | 7 days, up to 1,000,000 entries |
 | Authentication | Users with bcrypt hashes, no roles, no 2FA | Password, one app password, TOTP | Token; loopback exempt | One admin token |
-| Backup and restore | No (#1147) | Teleporter archive | No | No file export; Terraform, `goethite migrate` |
+| Backup and restore | No (#1147) | Teleporter archive | No | No file export; `goethite migrate` |
 | Terminal UI | Third-party | PADD | No | `goethite tui` |
 | DHCP server | Yes (v4, v6) | Yes (dnsmasq) | No | No |
 | Home Assistant integration | Yes, maintained by Home Assistant | Yes, a guide over the API | Not checked | No |

@@ -4,7 +4,6 @@
 //! so it has exactly the permissions of the token it is given. It shows a
 //! dashboard, the live query log, filter lists, clients and groups; it can
 //! turn lists on and off, download them now, and pause or resume filtering.
-//! Resources managed by Terraform are read-only here.
 
 #![forbid(unsafe_code)]
 

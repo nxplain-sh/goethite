@@ -944,9 +944,8 @@ fn seed(store: &Store, config: &Config, config_path: &Path) -> Result<()> {
 }
 
 /// Adds goethite's default lists (the default preset's) to a new store,
-/// used by the default group. They are ordinary lists: the API, the UIs or
-/// Terraform may change or remove them, and `goethite import` leaves them
-/// alone.
+/// used by the default group. They are ordinary lists: the API or the UIs
+/// may change or remove them, and `goethite import` leaves them alone.
 fn add_default_lists(store: &Store) -> Result<()> {
     let actor = Actor::system();
     let mut ids = Vec::new();
@@ -993,7 +992,7 @@ fn import(config_path: &Path) -> Result<()> {
     if store.cluster_value("id")?.is_some() {
         bail!(
             "this node is in a cluster, whose configuration every member keeps alike: change it \
-             through the API of any member (or Terraform), not with goethite import"
+             through the API of any member, not with goethite import"
         );
     }
     let import = config.filter.to_import();

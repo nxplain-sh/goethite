@@ -23,6 +23,13 @@ configuration format.
   Apache-2.0. Contributions come in under Apache-2.0
   ([ADR 0033](docs/adr/0033-agpl-license.md)).
 
+### Removed
+
+- **The Terraform provider.** Its repository is gone, and `managed_by` no longer has a `terraform`
+  value: resources that had it read as `api`, so the web UI and the TUI no longer show anything
+  read-only, and a request that sends `terraform` gets `api`
+  ([ADR 0034](docs/adr/0034-drop-the-terraform-provider.md)). A provider may come back later.
+
 ### Fixed
 
 - Deleting a filter list in the web UI no longer fails with a conflict when a group started using

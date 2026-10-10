@@ -18,13 +18,7 @@ import type {
 /** Who manages a resource, for people. */
 export const MANAGED_LABEL: Record<ManagedBy, string> = {
 	api: 'API',
-	terraform: 'Terraform',
 	config_file: 'Config file',
-}
-
-/** Resources Terraform manages are read-only here: change them there. */
-export function isReadOnly(managedBy: ManagedBy | undefined): boolean {
-	return managedBy === 'terraform'
 }
 
 // Saving keeps who manages a resource: editing a list from the config file

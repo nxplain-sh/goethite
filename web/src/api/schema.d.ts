@@ -1233,11 +1233,10 @@ export interface components {
             unsupported?: number | null;
         };
         /**
-         * @description Who manages a resource. Resources managed by Terraform are read-only in
-         *     the web UI and the TUI, so they do not drift from their definition.
+         * @description Who manages a resource.
          * @enum {string}
          */
-        ManagedBy: "api" | "terraform" | "config_file";
+        ManagedBy: "api" | "config_file";
         /**
          * @description What a member does in the cluster right now.
          * @enum {string}

@@ -73,8 +73,7 @@ Phase 1's scope shipped in v0.1.0. These items came up along the way; they are c
 Phase 2's scope shipped in v0.2.0. The `[P2]` items left in this file are candidates for 0.2.x
 releases.
 
-- **[P2] Scoped API tokens:** read-only tokens (for monitoring) and a Terraform token, beside the
-  single admin token.
+- **[P2] Scoped API tokens:** read-only tokens (for monitoring), beside the single admin token.
 - **[P3] Query log writer priority and cost.** The writer thread competes with the DNS workers
   for CPU when the node is saturated. Lower its priority (it needs `setpriority`, which the
   systemd unit's `~@resources` filter refuses), and cut its per-entry allocations (names, IDs and
@@ -144,22 +143,13 @@ Phase 3's scope shipped in v0.3.0. These items came up along the way.
 - **[P4] Reload without `/bin/kill`.** `ExecReload=` runs `/bin/kill`, which minimal systems
   (and the systemd test image) lack. `Type=notify-reload` (systemd 253) with `ReloadSignal=SIGHUP`
   needs goethite to report `RELOADING=1` and `READY=1` around a reload.
-- **[P4] Client IDs in the Terraform provider:** `ids` on `goethite_client`, once 0.4.0 is out.
-  Its acceptance tests start fresh nodes, which now begin with the Balanced preset's three lists
-  in the default group: set `[filter] default_lists = false` in their config when moving them
-  to 0.4.
 - **[later] Presets in the API and TUI:** presets are applied by the web UI, one change at a
   time; an API call would apply one in a single store transaction, for the TUI and scripts.
-- **[P4] Blocked services in the Terraform provider:** `blocked_services` on `goethite_group`,
-  once 0.4.0 is out; its test nodes need `[filter] services = false` (or a `services_file`).
 - **[later] `$dnsrewrite=NXDOMAIN` rules,** which only block: the services catalog's iCloud
   Private Relay uses nothing else, so goethite leaves that service out today.
-- **[P5] Local records in the Terraform provider and the TUI:** a `goethite_record` resource, and a
-  read-only Records tab (ADR 0029).
+- **[P5] Local records in the TUI:** a read-only Records tab (ADR 0029).
 - **[later] More local record types** (TXT, MX, SRV), automatic PTR answers for local `A` and
   `AAAA` records, and local records per group.
-- **[P5] Access lists in the Terraform provider:** `access` (`allowed`, `blocked`) on
-  `goethite_settings`, once 0.5.0 is out.
 - **[later] Per-client rate limits for Oblivious DoH:** its peer is the proxy, so only the
   connection limits bound it; a proxy could be given its own, higher limit.
 - **[P4] Differential fuzzing** of `HickoryCodec` against the fast-path decoder, once it exists.
@@ -216,6 +206,10 @@ Phase 3's scope shipped in v0.3.0. These items came up along the way.
   goethite has users who would feel a regression between releases (ADR 0028).
 - **[later] CI canary job** on `beta` or the latest stable toolchain, to catch upcoming lint and
   compiler changes before an MSRV bump.
+- **[later] A Terraform and OpenTofu provider,** generated from the OpenAPI document, for lists,
+  rules, local records, groups, clients, schedules and settings. The first one was dropped
+  ([ADR 0034](adr/0034-drop-the-terraform-provider.md)); a new one would bring back a `managed_by`
+  value that the web UI and the TUI show read-only, and want a token scoped to it.
 - **[later] Site polish:** OG images, search tuning, a logo, and a richer landing page.
 - **[later] Lint workflows in CI** with actionlint and zizmor.
 - **[later] `multiple-versions = "deny"` in `deny.toml`** once the remaining duplicate

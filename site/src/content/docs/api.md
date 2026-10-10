@@ -6,7 +6,7 @@ description: Configure and observe goethite over HTTP with /api/v1.
 goethite has a REST API at `/api/v1` for everything the config file does not cover: filter lists,
 custom rules, local DNS records, clients, groups, schedules, the filtering settings and access
 lists, pausing, the query log,
-statistics and the audit log. The [terminal UI](../tui/), the web UI and the Terraform provider all use it. The
+statistics and the audit log. The [terminal UI](../tui/) and the web UI both use it. The
 [API reference](../api-reference/) lists every endpoint.
 
 ## Access
@@ -52,8 +52,8 @@ So that web pages cannot use your browser against the API, goethite refuses two 
   (with any port). This stops DNS rebinding, where a hostile site makes its own name resolve to
   127.0.0.1. With a token any name works, since such a page does not have the token.
 - **Requests from other sites.** A request with an `Origin` header must come from the API's own
-  address. Browsers add `Origin` to anything that can change something; curl, scripts, the TUI
-  and Terraform send none and are not affected.
+  address. Browsers add `Origin` to anything that can change something; curl, scripts and the
+  TUI send none and are not affected.
 
 Both are answered with `403 forbidden`.
 
@@ -97,10 +97,6 @@ Specs reject unknown fields. Errors are JSON with a stable code:
 | 412 | `revision_mismatch` | It changed since the revision in `If-Match`. |
 | 413 | | The body is larger than 1 MiB. |
 | 422 | `invalid` | A value is not valid, or a field is unknown. |
-
-Resources with `"managed_by": "terraform"` are read-only in the web UI and the TUI, so they do not
-drift from their Terraform definition (see [Terraform](../terraform/)). The API itself accepts
-changes to them.
 
 ## Pausing filtering
 

@@ -16,9 +16,8 @@ reproducibly and attested ([ADR 0026](adr/0026-release-builds.md)); `cargo xtask
 them bit for bit, and a release's commit is the tag `v0.5.0` on `main`.
 
 In scope: everything in this repository that ships in the binary, the packages or the image, the
-release and CI workflows, and the systemd units. Out of scope: the website (`site/`), the
-Terraform provider (its own repository), macOS and Windows (development only), and denial of
-service by traffic volume beyond the documented bounds.
+release and CI workflows, and the systemd units. Out of scope: the website (`site/`), macOS and
+Windows (development only), and denial of service by traffic volume beyond the documented bounds.
 
 ## Where to look first
 

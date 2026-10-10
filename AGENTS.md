@@ -11,11 +11,11 @@ In scope for 1.0:
 - DNS filtering, caching, forwarding, encrypted DNS (DoH / DoT / DoQ / ODoH)
 - Per-client groups, schedules, full AdGuard/uBlock DNS filter syntax, CNAME uncloaking, safe search
 - Clustering with HA: replicated config, floating IP (VRRP), zero-downtime reload and upgrade
-- Interfaces: REST API, TUI (`goethite tui`), embedded web UI, Terraform provider
+- Interfaces: REST API, TUI (`goethite tui`), embedded web UI
 - Project website + docs on GitHub Pages, with a Scalar API reference built from the OpenAPI spec
 - Recursive resolution with full DNSSEC validation
 
-Out of scope for 1.0: hosted cloud service, developer features like Numa's `.numa` proxy/mDNS, Windows as a server platform. Linux (amd64 + arm64) is first-class; macOS is for development only.
+Out of scope for 1.0: hosted cloud service, a Terraform provider (a possible later feature), developer features like Numa's `.numa` proxy/mDNS, Windows as a server platform. Linux (amd64 + arm64) is first-class; macOS is for development only.
 
 ## Architecture principles
 
@@ -23,7 +23,7 @@ Out of scope for 1.0: hosted cloud service, developer features like Numa's `.num
 - **Resolution pipeline (in order):** client identification → policy/group lookup → local rewrites → filter check (incl. CNAME uncloaking) → cache → upstream (forward or recursive) → DNSSEC validation → response.
 - **Fail-open option:** if filtering fails, keep resolving rather than take the network down.
 - **Hot paths never block:** compiled filter lists and config are swapped atomically (`arc-swap`).
-- **One source of truth for config:** the replicated config store is authoritative. TOML is for bootstrap. Resources created via Terraform carry `managed_by = "terraform"` and are read-only in the UI and TUI.
+- **One source of truth for config:** the replicated config store is authoritative. TOML is for bootstrap.
 
 ## Workspace layout
 
@@ -52,8 +52,6 @@ docs/                 architecture, threat model, branching and releases, ADRs
 ```
 
 The layout follows the [standard Rust project layout](https://github.com/miguelmartens/standard-rust-project-layout); [ADR 0025](docs/adr/0025-standard-rust-project-layout.md) records where goethite deviates and why. Read it before adding a crate, a top-level directory or a workspace lint.
-
-The Terraform provider lives in a separate repo (`terraform-provider-goethite`, Go, terraform-plugin-framework) and is built from the OpenAPI spec.
 
 ## Tech stack
 
@@ -90,7 +88,7 @@ The Terraform provider lives in a separate repo (`terraform-provider-goethite`, 
 ## Website and API docs
 
 - `site/` is an Astro Starlight site, deployed to GitHub Pages by a GitHub Actions workflow ([`nxplain-sh.github.io/goethite`](https://nxplain-sh.github.io/goethite/) unless a custom domain is set). Same neobrutalist look as the app; self-hosted fonts.
-- Content: landing page, install + quick start, config reference, filter syntax, HA guide, Terraform guide, security (threat model, verifying signed releases), benchmarks, changelog.
+- Content: landing page, install + quick start, config reference, filter syntax, HA guide, security (threat model, verifying signed releases), benchmarks, changelog.
 - API reference: Scalar, rendered from `openapi.json`, which CI generates from the Rust code (utoipa) and commits as an artifact for the site. CI fails on breaking API changes to `/api/v1` (e.g. with oasdiff) unless the change is marked intentional.
 - In the binary, `/api/docs` (Scalar) is OFF by default, loopback-only when enabled, and serves bundled assets — never a CDN — so the strict CSP still holds.
 - Docs ship with features: a feature is not done until its docs page is updated.

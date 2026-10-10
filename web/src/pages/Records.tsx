@@ -8,7 +8,6 @@ import { DeleteButton, Editor, Loading, ManagedBadge } from '../components/edito
 import { CheckField, SelectField, TextField } from '../components/form'
 import { ErrorNotice } from '../components/ui'
 import {
-	isReadOnly,
 	isRecordTtl,
 	recordForm,
 	type RecordForm,
@@ -151,7 +150,6 @@ function AddRecord() {
 function RecordRow({ record }: { record: DnsRecord }) {
 	const queryClient = useQueryClient()
 	const refresh = () => queryClient.invalidateQueries({ queryKey: ['records'] })
-	const readOnly = isReadOnly(record.spec.managed_by)
 	const enabled = record.spec.enabled ?? true
 	const [pending, setPending] = useState<boolean | undefined>(undefined)
 	const toggle = useMutation({
@@ -178,7 +176,7 @@ function RecordRow({ record }: { record: DnsRecord }) {
 					type="checkbox"
 					aria-label={`Answer ${record.spec.name} ${record.spec.type}`}
 					checked={pending ?? enabled}
-					disabled={readOnly || toggle.isPending}
+					disabled={toggle.isPending}
 					onChange={() => {
 						setPending(!enabled)
 						toggle.mutate()
@@ -186,9 +184,7 @@ function RecordRow({ record }: { record: DnsRecord }) {
 				/>
 			</td>
 			<td className="actions-cell">
-				{readOnly ? null : (
-					<DeleteButton what="record" small pending={remove.isPending} onDelete={() => remove.mutate()} />
-				)}
+				<DeleteButton what="record" small pending={remove.isPending} onDelete={() => remove.mutate()} />
 			</td>
 		</tr>
 	)
