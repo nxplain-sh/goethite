@@ -2,11 +2,11 @@
 
 A self-hosted, clustered, security-hardened DNS filtering resolver written in Rust.
 
-goethite aims to be a better self-hosted alternative to Pi-hole, AdGuard Home, NextDNS and Numa on
-**security**, **performance** and **high availability**, while matching AdGuard Home on everyday
-filtering features: caching and forwarding, encrypted DNS, per-client groups and schedules,
-AdGuard/uBlock filter syntax, CNAME uncloaking, and a replicated cluster with a floating IP and
-zero-downtime upgrades. It is named after the iron-oxide mineral that is a main component of rust.
+goethite puts **security**, **performance** and **high availability** first, and covers the
+everyday features of a network-wide DNS filter: caching and forwarding, encrypted DNS, per-client
+groups and schedules, AdGuard/uBlock filter syntax, CNAME uncloaking, and a replicated cluster with
+a floating IP and zero-downtime upgrades. It is named after the iron-oxide mineral that is a main
+component of rust.
 
 ## Status
 
