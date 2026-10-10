@@ -2857,6 +2857,52 @@
         ]
       }
     },
+    "/api/v1/update/check": {
+      "post": {
+        "tags": [
+          "node"
+        ],
+        "summary": "Checks the project's releases for a newer goethite. The node asks\nGitHub's release API over its own upstreams; without an answer, nothing\nis reported as available.",
+        "operationId": "check_update",
+        "responses": {
+          "200": {
+            "description": "The newest release and how this node compares",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateCheck"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid admin token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The check could not be made",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "token": []
+          }
+        ]
+      }
+    },
     "/metrics": {
       "get": {
         "tags": [
@@ -5245,6 +5291,42 @@
           "key": {
             "type": "string",
             "description": "The name, client ID or client address."
+          }
+        }
+      },
+      "UpdateCheck": {
+        "type": "object",
+        "description": "The newest published release, next to the version this node runs.",
+        "required": [
+          "current",
+          "latest",
+          "url",
+          "newer"
+        ],
+        "properties": {
+          "current": {
+            "type": "string",
+            "description": "The version this node runs."
+          },
+          "latest": {
+            "type": "string",
+            "description": "The newest release's version, without the tag's `v`."
+          },
+          "newer": {
+            "type": "boolean",
+            "description": "Whether `latest` is newer than `current`."
+          },
+          "published_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was published, if the release says."
+          },
+          "url": {
+            "type": "string",
+            "description": "The release's page."
           }
         }
       },

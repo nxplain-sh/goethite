@@ -40,7 +40,7 @@ use crate::error::{ApiError, ApiJson, ErrorBody};
 use crate::leak::{LeakTest, LeakTestList};
 use crate::recommended::{self, Recommended, RecommendedSizes};
 use crate::services::Services;
-use crate::{Api, Change, Status};
+use crate::{Api, Change, Status, UpdateCheck};
 
 type Shared = State<Arc<Api>>;
 
@@ -748,10 +748,25 @@ pub(crate) async fn get_leak_test(
         .ok_or_else(|| ApiError::not_found("no such leak test; tests are kept for an hour"))
 }
 
+/// Checks the project's releases for a newer goethite. The node asks
+/// GitHub's release API over its own upstreams; without an answer, nothing
+/// is reported as available.
+#[utoipa::path(post, path = "/api/v1/update/check", tag = "node",
+    responses(
+        (status = 200, description = "The newest release and how this node compares", body = UpdateCheck),
+        (status = 401, description = "No valid admin token", body = ErrorBody),
+        (status = 503, description = "The check could not be made", body = ErrorBody),
+    ),
+    security(("token" = [])))]
+pub(crate) async fn check_update(State(api): Shared) -> Result<Json<UpdateCheck>, ApiError> {
+    Ok(Json(api.control.check_update().await?))
+}
+
 /// Every route that needs authentication.
 pub(crate) fn routes() -> Router<Arc<Api>> {
     Router::new()
         .route("/api/v1/status", get(get_status))
+        .route("/api/v1/update/check", post(check_update))
         .route("/api/v1/settings", get(get_settings).put(put_settings))
         .route(
             "/api/v1/pause",

@@ -28,6 +28,7 @@ mod openapi;
 pub mod recommended;
 mod serve;
 pub mod services;
+mod update;
 mod web;
 
 use std::future::Future;
@@ -61,6 +62,7 @@ pub use serve::{
     ApiListeners, HANDSHAKE_TIMEOUT, MAX_CONNECTIONS, MAX_CONNECTIONS_PER_PEER, PeerCertificate,
     Serving, serve, serve_router,
 };
+pub use update::UpdateCheck;
 pub use web::{EmbeddedWeb, WebAssets};
 
 /// The checks made on every request's `Host`, `Origin` and path, for the
@@ -121,6 +123,19 @@ pub trait Control: Send + Sync + 'static {
     fn paused_until(&self) -> Option<SystemTime>;
     /// The metrics in the Prometheus text format.
     fn metrics(&self) -> String;
+
+    /// Checks the project's releases for a newer goethite.
+    ///
+    /// # Errors
+    ///
+    /// When the check cannot be made.
+    fn check_update(&self) -> BoxResult<'_, UpdateCheck> {
+        Box::pin(async {
+            Err(ApiError::unavailable(
+                "this node does not check for updates",
+            ))
+        })
+    }
 
     /// This node's cluster, if it is in one.
     fn cluster(&self) -> Option<ClusterStatus> {

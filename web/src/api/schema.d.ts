@@ -632,6 +632,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/update/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Checks the project's releases for a newer goethite. The node asks
+         *     GitHub's release API over its own upstreams; without an answer, nothing
+         *     is reported as available.
+         */
+        post: operations["check_update"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/metrics": {
         parameters: {
             query?: never;
@@ -1822,6 +1843,22 @@ export interface components {
             count: number;
             /** @description The name, client ID or client address. */
             key: string;
+        };
+        /** @description The newest published release, next to the version this node runs. */
+        UpdateCheck: {
+            /** @description The version this node runs. */
+            current: string;
+            /** @description The newest release's version, without the tag's `v`. */
+            latest: string;
+            /** @description Whether `latest` is newer than `current`. */
+            newer: boolean;
+            /**
+             * Format: date-time
+             * @description When it was published, if the release says.
+             */
+            published_at?: string | null;
+            /** @description The release's page. */
+            url: string;
         };
         /** @description One upstream. */
         UpstreamStatus: {
@@ -3884,6 +3921,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Status"];
+                };
+            };
+        };
+    };
+    check_update: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The newest release and how this node compares */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateCheck"];
+                };
+            };
+            /** @description No valid admin token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The check could not be made */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
                 };
             };
         };
