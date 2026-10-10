@@ -34,10 +34,6 @@ severe come first.
   unvalidated answer cached, and three such lookups mark Quad9 down for 30 s. Count only transport
   errors and timeouts, do not fail over on SERVFAIL from a validating upstream, and cache SERVFAIL
   for a few seconds.
-- **[medium] Rebinding protection misses SVCB and HTTPS hints.** `rebinding.rs` strips A and AAAA
-  records only; `ipv4hint` and `ipv6hint` pass, and clients may connect to hints before A and AAAA
-  arrive (RFC 9460 7.3). The local-use NAT64 prefix `64:ff9b:1::/48` (RFC 8215) is not treated as
-  private either.
 - **[medium] Forwarding sends local names to the upstream.** `Recursor::special` runs only when
   recursing, so `home.arpa`, `local`, `invalid` and the private reverse zones of RFC 6303 go to the
   public upstream when forwarding. Apply the table in both modes, with an opt-out for an upstream
@@ -97,12 +93,6 @@ severe come first.
 
 ### Control plane, API and store
 
-- **[medium] The documented dual-stack API address stops startup on Linux.** The API, cluster and
-  witness listeners bind without `IPV6_V6ONLY` (`bind_tcp` in `sockets.rs`, `ApiListeners::bind`),
-  so `listen = ["0.0.0.0:8053", "[::]:8053"]` from the API docs fails with "address in use" and the
-  node does not start. With `[::]` alone, IPv4 peers arrive as `::ffff:a.b.c.d`, which `/api/docs`
-  refuses as not loopback and the web UI's leak test does not match. Set `only_v6(true)` as
-  `goethite-server/src/bind.rs` does.
 - **[medium] No-token mode trusts a reverse proxy on the same host.** Without a token, a proxy on
   the host forwards every client as loopback with an accepted `Host`, so scripts through it get
   admin access (browsers are still stopped by the `Origin` check). Without a token, refuse requests
@@ -196,11 +186,6 @@ severe come first.
   10 MB) never reaches a new or lagging member, and the retries encode JSON on the DNS workers. Set
   the timeout, take a snapshot right after the Seed, lower `max_payload_entries`, and move Raft
   JSON into `spawn_blocking` (see configurable Raft timeouts under Phase 5).
-- **[medium] seccomp can be bypassed with x32 system calls.** seccompiler checks the architecture
-  only, which x32 calls share with x86-64, and the deny-list's default is to allow: a call number
-  with `0x40000000` set passes every rule. The units set `SystemCallArchitectures=native`;
-  containers and other init systems do not. After the architecture check, return `EPERM` for
-  numbers at or above `0x40000000`.
 - **[medium] In-place upgrades stack sandboxes.** The new goethite starts as a child of the old one
   and adds a Landlock layer to the one it inherits; the kernel allows 16, so about the 16th upgrade
   without a restart fails in `restrict_self`. `postinstall.sh` sends `SIGUSR2` with `|| true` and
@@ -220,18 +205,6 @@ severe come first.
 
 ### Packaging, CI and the web UI
 
-- **[medium] Installs answer everyone.** `deploy/goethite.toml` listens on every address and an
-  empty access list admits every client; the TOML cannot set access, and the Compose file
-  publishes port 53 on every address, past ufw and firewalld. An install on a VPS is an open
-  resolver. Default the allowed list to loopback, private, ULA, link-local and CGNAT addresses
-  until an admin changes it, or accept a first allowed list in the TOML.
-- **[medium] The image check accepts any branch.** The documented `gh attestation verify` for the
-  image (`site/src/content/docs/verify.md`) pins the workflow but not `--source-ref`, the push job
-  in `image.yaml` has no protected environment, and `workflow_dispatch` runs the workflow from any
-  branch. Add `--source-ref refs/tags/vX.Y.Z`, and limit the job to tags.
-- **[medium] `image.yaml` checks out the tag by its short name.** `ref: ${{ env.TAG }}` would take
-  a branch named like the tag. Use `refs/tags/...`, check the tag against a version pattern, and
-  move `latest` only for the newest release.
 - **[low] The image misses base image fixes between releases.** It is built on release only; a
   scheduled rebuild on a new base digest, or a patch release policy for base image CVEs, would pick
   up glibc fixes.
@@ -372,9 +345,9 @@ Phase 3's scope shipped in v0.3.0. These items came up along the way.
   `use-application-dns.net` with NXDOMAIN (Firefox then keeps its DoH off), and a guide for
   redirecting port 53 at the router. Known DoH resolvers are already blocked by the HaGeZi bypass
   list in the Strict and Family presets.
-- **[later] Extended DNS Errors (RFC 8914):** say why an answer is SERVFAIL (DNSSEC bogus,
-  signature expired, no reachable authority) or blocked (filtered), for clients and the query
-  log.
+- **[later] More Extended DNS Errors (RFC 8914):** say why an answer is SERVFAIL (DNSSEC bogus,
+  signature expired, no reachable authority), for clients and the query log. Blocked answers
+  already carry EDE 15.
 - **[later] More DNSSEC controls:** negative trust anchors (RFC 7646) for domains whose DNSSEC
   is broken, configurable trust anchors and RFC 5011 tracking of root key rollovers (the anchors
   are built in today), and the bogus count per domain in the query log.
@@ -418,8 +391,6 @@ Phase 3's scope shipped in v0.3.0. These items came up along the way.
 - **[P4] Scalar's AI SDK advisory.** `npm audit` reports a low-severity resource consumption
   issue (GHSA-866g-f22w-33x8) in `@ai-sdk/provider-utils`, which `@scalar/api-reference` pulls in
   for its chat agent; goethite turns the agent off. Update Scalar once it ships a fixed version.
-- **[P5] The web UI's JS budget is full:** 199.8 of 200 KiB gzipped (every chunk counts, lazy ones
-  too) after the cluster page. The next page needs a deliberate raise or a trim first.
 - **[later] Ask TanStack Charts for a CSP-friendly root.** Its SVG root carries an inline style,
   which goethite strips (ADR 0017); an option to leave it out would remove the workaround.
 
@@ -486,7 +457,6 @@ what "match AdGuard Home on everyday filtering" ([`AGENTS.md`](../AGENTS.md)) st
   friendly names.
 - **[later] Leaving chosen names or clients out of the query log** (AdGuard Home's ignored-host
   list and per-client flag).
-- **[later] Flushing the cache from the API,** and from the web UI.
 - **[later] DHCP: a scope decision for 1.0** (AdGuard Home and Pi-hole both ship a server;
   goethite does not).
 - **[later] Home Assistant: keep the integration outside the project,** as AdGuard Home and

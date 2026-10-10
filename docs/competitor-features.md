@@ -76,7 +76,7 @@ not cover it.
 | Hosts lines with a real address as the answer | Yes | No (address ignored) | No | No (skipped) |
 | CNAME uncloaking | Yes, and answer IPs | Yes | No | Yes |
 | Blocked answer | 5 modes, including a custom IP | 5 modes, including an IP and NODATA | `0.0.0.0` / `::`, fixed | Null IP, NXDOMAIN or REFUSED |
-| Extended DNS Error on blocked answers | No ("not yet") | Yes, EDE 15 by default | Not checked | No |
+| Extended DNS Error on blocked answers | No ("not yet") | Yes, EDE 15 by default | Not checked | Yes, EDE 15 |
 | Safe search | 7 engines | No | No | 7 engines |
 | Blocked services | 142 services | No | No | Yes, AdGuard's catalog |
 | Safe browsing via a cloud lookup | Yes, hash prefixes to AdGuard | No | No | No |
@@ -95,7 +95,7 @@ not cover it.
 | Schedules | Blocked services only, one window a day | No | No | Lists and blocked services, weekly windows |
 | Client identification | IP, CIDR, MAC (with its own DHCP), client ID | IP, CIDR, MAC, hostname, interface, ECS | IP, CIDR | IP, CIDR, client ID |
 | Upstreams per client | Yes | No | No | No |
-| Access control | Allowed and disallowed clients | Listening modes | `allow_from` | Allowed and blocked clients |
+| Access control | Allowed and disallowed clients | Listening modes | `allow_from` | Allowed and blocked clients, local networks by default |
 | Rate limiting | 20 queries/s per /24 or /56, dropped | 1000 per minute per client, REFUSED | No (#378) | Per client, every transport |
 
 ### Resolution
@@ -175,7 +175,6 @@ users ask.
 | --- | --- | --- |
 | Upstreams per domain, while forwarding as well as recursing | All three | Recursing only |
 | Serve stale and prefetch (RFC 8767) | All three serve stale; Numa prefetches | Yes |
-| Extended DNS Errors, at least EDE 15 for blocked answers | Pi-hole | Yes |
 | Firefox canary and iCloud Private Relay answers | Pi-hole | Canary only |
 | DoQ and HTTP/3 upstreams | AdGuard Home | No |
 | Hedged upstream requests (a second query after a delay) | Numa | No |
