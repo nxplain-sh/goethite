@@ -4,13 +4,15 @@
 //! the recursor fetches the records and keeps the chain of trust.
 //!
 //! Everything is bounded against hostile zones (KeyTrap, CVE-2023-50387,
-//! and NSEC3 hash floods): every signature check spends from a budget for
-//! the client's query, at most [`MAX_KEYS_PER_TAG`] keys are tried for one
-//! key tag and [`MAX_SIGS_PER_RRSET`] signatures for one RRset, and NSEC3
-//! proofs with more than [`MAX_NSEC3_ITERATIONS`] iterations count as
-//! insecure (RFC 9276) and are never hashed.
+//! and NSEC3 hash floods): every signature check and every DS digest spends
+//! from a budget for the client's query, at most [`MAX_KEYS_PER_TAG`] keys
+//! are tried for one key tag and [`MAX_SIGS_PER_RRSET`] signatures for one
+//! RRset, keys are matched to DS records by tag and algorithm before any
+//! digest, and NSEC3 proofs with more than [`MAX_NSEC3_ITERATIONS`]
+//! iterations count as insecure (RFC 9276) and are never hashed.
 
 use std::cmp::Ordering;
+use std::collections::HashMap;
 
 use goethite_proto::dnssec::{
     self, Dnskey, Nsec, Nsec3, Rrsig, algorithm_supported, digest_supported,
@@ -133,6 +135,11 @@ pub(super) fn verify_rrset(
     let first = rrset.first()?;
     let owner = first.name();
     let labels = owner.labels().filter(|label| *label != b"*").count();
+    // The key tag of each key is computed once, not per signature.
+    let keys: Vec<(&Record, Dnskey)> = keys
+        .iter()
+        .filter_map(|key| Some((key, key.dnskey()?)))
+        .collect();
     let candidates = sigs.iter().filter_map(|record| {
         let rrsig = record.rrsig()?;
         (record.name() == owner
@@ -145,11 +152,10 @@ pub(super) fn verify_rrset(
         .then_some((record, rrsig))
     });
     for (record, rrsig) in candidates.take(MAX_SIGS_PER_RRSET) {
-        let matching = keys.iter().filter(|key| {
-            key.dnskey()
-                .is_some_and(|k| k.key_tag == rrsig.key_tag && k.algorithm == rrsig.algorithm)
-        });
-        for key in matching.take(MAX_KEYS_PER_TAG) {
+        let matching = keys
+            .iter()
+            .filter(|(_, key)| key.key_tag == rrsig.key_tag && key.algorithm == rrsig.algorithm);
+        for (key, _) in matching.take(MAX_KEYS_PER_TAG) {
             if !checks.spend() {
                 return None;
             }
@@ -187,12 +193,39 @@ pub(super) fn keys_from_ds(
 ) -> Option<(Vec<Record>, u32)> {
     let usable = usable_ds(ds);
     let keys = usable_keys(dnskeys);
-    let anchored: Vec<Record> = keys
-        .iter()
-        .filter(|key| usable.iter().any(|ds| dnssec::ds_matches(ds, key, zone)))
-        .take(MAX_KEYS_PER_TAG)
-        .cloned()
-        .collect();
+    // DS records by the key tag and algorithm they name: a key is hashed
+    // only against DS records that claim it, and each digest spends a check
+    // (KeyTrap, CVE-2023-50387).
+    let mut by_tag: HashMap<(u16, u8), Vec<&Record>> = HashMap::new();
+    for record in &usable {
+        if let Some(ds) = record.ds() {
+            by_tag
+                .entry((ds.key_tag, ds.algorithm))
+                .or_default()
+                .push(record);
+        }
+    }
+    let mut anchored = Vec::new();
+    for key in &keys {
+        if anchored.len() >= MAX_KEYS_PER_TAG {
+            break;
+        }
+        let Some(fields) = key.dnskey() else {
+            continue;
+        };
+        let Some(candidates) = by_tag.get(&(fields.key_tag, fields.algorithm)) else {
+            continue;
+        };
+        for record in candidates {
+            if !checks.spend() {
+                return None;
+            }
+            if dnssec::ds_matches(record, key, zone) {
+                anchored.push(key.clone());
+                break;
+            }
+        }
+    }
     let rrset: Vec<Record> = dnskeys
         .iter()
         .filter(|record| record.record_type() == RecordType::DNSKEY && record.name() == zone)
@@ -839,6 +872,36 @@ mod tests {
         let mut zsk_signed = dnskeys_rrset.clone();
         zsk_signed.push(sign(&zsk, &dnskeys_rrset));
         assert!(keys_from_ds(&zone, &ds, &zsk_signed, NOW, &mut Checks::new(8)).is_none());
+    }
+
+    #[test]
+    fn ds_digests_spend_from_the_budget() {
+        let zone = name("example.");
+        let ksk = Key::generate(&zone);
+        let rrset = vec![ksk.dnskey(3600)];
+        let mut dnskeys = rrset.clone();
+        dnskeys.push(sign(&ksk, &rrset));
+        let ds = vec![ksk.ds(86_400)];
+        let mut checks = Checks::new(8);
+        assert!(keys_from_ds(&zone, &ds, &dnskeys, NOW, &mut checks).is_some());
+        assert_eq!(checks.left(), 6, "one digest and one signature check");
+    }
+
+    #[test]
+    fn ds_digests_stop_at_the_budget() {
+        let zone = name("example.");
+        let ksk = Key::generate(&zone);
+        let rrset = vec![ksk.dnskey(3600)];
+        let mut dnskeys = rrset.clone();
+        dnskeys.push(sign(&ksk, &rrset));
+        let tag = ksk.dnskey(3600).dnskey().unwrap().key_tag;
+        // A DS with the key's tag and algorithm, but a different digest:
+        // only comparing digests tells it apart, which must spend a check.
+        let forged = Record::ds_record(zone.clone(), 86_400, tag, 15, 2, vec![0; 32]);
+        let ds = vec![forged, ksk.ds(86_400)];
+        let mut checks = Checks::new(1);
+        assert!(keys_from_ds(&zone, &ds, &dnskeys, NOW, &mut checks).is_none());
+        assert!(checks.ran_out(), "the second digest needed a check");
     }
 
     fn nsec(owner: &str, next: &str, types: &[RecordType]) -> Record {
