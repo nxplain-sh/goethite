@@ -1,0 +1,85 @@
+# goethite's Helm chart. Every setting is explained here; the install guide
+# has the whole deployment: https://nxplain-sh.github.io/goethite/install/
+
+# Override the names of the chart's resources.
+nameOverride: ""
+fullnameOverride: ""
+
+# The image, ghcr.io/nxplain-sh/goethite, for amd64 and arm64.
+image:
+  repository: ghcr.io/nxplain-sh/goethite
+  # Empty runs the chart's appVersion. `helm upgrade` after a chart release
+  # picks up a new patch release; the next minor needs a new chart.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# Run on the host's network: port 53 on every node, reachable from your whole
+# network, and goethite sees each client's own address, which groups, the
+# query log and the rate limit (300 queries a second per client by default)
+# need. The pod then starts as root, binds port 53, switches to 65532 and
+# drops every capability but the three that let it do that, as the cluster's
+# Compose file does (ADR 0036); the nodes must have port 53 free.
+#
+# With false (the default), the pod runs as 65532 with no capabilities at all
+# and listens on its pod address only, the same shape as compose.yaml beside
+# the Containerfile: in-cluster clients use the Service below.
+hostNetwork: false
+
+service:
+  # ClusterIP suits in-cluster clients. Use LoadBalancer or NodePort to reach
+  # DNS from the rest of your network.
+  type: ClusterIP
+  # With a LoadBalancer, externalTrafficPolicy is Local, so goethite still
+  # sees client addresses instead of the load balancer's.
+  # For a fixed address on bare metal (MetalLB) or a cloud controller:
+  # loadBalancerIP: 192.0.2.10
+  annotations: {}
+
+persistence:
+  # The store (filtering configuration, audit log, query log, statistics) and
+  # the downloaded lists. Without it they live in an emptyDir and go with the
+  # pod.
+  enabled: true
+  # The cluster's default StorageClass. It must let uid 65532 write: the
+  # chart gives the volume that group, which most classes honor.
+  # storageClass: "local-path"
+  size: 1Gi
+
+# Your goethite.toml, mounted over the image's own (Quad9 over DNS over TLS,
+# the recommended filter lists, the store under /var/lib/goethite). Paste the
+# whole file; every setting is in the configuration reference:
+# https://nxplain-sh.github.io/goethite/configuration/
+#
+# config: |
+#   [server]
+#   listen = "0.0.0.0:53"
+#   user = "nonroot"
+#
+#   [[upstream]]
+#   address = "9.9.9.9"
+#   protocol = "tls"
+#   tls_name = "dns.quad9.net"
+#
+#   [filter]
+#   cache_dir = "/var/lib/goethite/lists"
+#
+#   [store]
+#   path = "/var/lib/goethite/goethite.redb"
+#
+#   # `goethite token` prints the hash. Reach the API and the web UI with
+#   # kubectl port-forward (see the notes after install).
+#   [api]
+#   listen = "0.0.0.0:8053"
+#   token_sha256 = "<the printed hash>"
+config: ""
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  # No limit by default: building a large filter list can briefly need more
+  # than a fixed number would allow, and an OOM kill stops resolution.
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

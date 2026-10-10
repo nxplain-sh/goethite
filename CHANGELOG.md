@@ -12,6 +12,13 @@ configuration format.
 - **Safe search for Ecosia, Pixabay and Yandex**, beside Google, YouTube, Bing and DuckDuckGo:
   Ecosia and Pixabay answer with a CNAME to their safe host, and Yandex, which has no such host,
   answers `A` queries with its fixed safe address `213.180.193.56`.
+- **A Helm chart**, in `deploy/helm/goethite`: one node on Kubernetes, DNS on port 53 (UDP and
+  TCP), the store and the downloaded lists on a PersistentVolumeClaim, and the image's own config
+  until you paste a `goethite.toml` into the chart's `config`. By default the pod runs
+  unprivileged (65532, no capabilities) with a pod sysctl to bind port 53; `--set
+  hostNetwork=true` answers on every node's port 53 instead, with real client addresses. CI lints
+  the chart and renders its shapes. See
+  [Install on Linux](https://nxplain-sh.github.io/goethite/install/#on-kubernetes-helm).
 
 ## [0.6.0] - 2026-10-10
 

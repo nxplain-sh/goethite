@@ -1,0 +1,21 @@
+goethite is installed.
+
+{{- if .Values.hostNetwork }}
+It answers DNS on port 53 (UDP and TCP) on every node's address. Point your
+network at any node.
+{{- else }}
+It answers DNS on port 53 (UDP and TCP) on the Service's address. Point
+in-cluster clients at it:
+
+  kubectl get service -n {{ .Release.Namespace }} {{ include "goethite.fullname" . }}
+{{- end }}
+
+The API and the web UI listen inside the pod only. Give the node your own
+config (values.yaml, `config:`) with "[api] listen = \"0.0.0.0:8053\"" and the
+hash `goethite token` prints, then:
+
+  kubectl port-forward -n {{ .Release.Namespace }} deploy/{{ include "goethite.fullname" . }} 8053:8053
+
+Its logs:
+
+  kubectl logs -n {{ .Release.Namespace }} deploy/{{ include "goethite.fullname" . }} -f
