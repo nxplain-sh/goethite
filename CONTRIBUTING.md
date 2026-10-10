@@ -173,10 +173,13 @@ change is intended (before 1.0 that is possible, and it goes in the changelog), 
 
 ## Branches
 
-Work lands on `development`: push to it, or open a pull request against it from a topic branch.
-`main` only moves through a pull request from `development`, merged with a merge commit once CI
-passes. Nobody pushes to `main` directly, maintainers included. Renovate opens its pull requests
-against `development` too.
+`main` holds the latest release; `development` is where work lands. Branch from `development` as
+`<kind>/<what>`, with `feature/`, `fix/`, `refactor/`, `chore/` or `docs/`, and open a pull
+request against it (`gh pr create --base development`); it is merged with a merge commit once CI
+passes. `main` moves only for a release: a pull request from `development`, or from a `hotfix/`
+branch cut from `main` for a patch. Nobody pushes to either branch directly, maintainers included.
+Renovate opens its pull requests against `development` too. The whole model, with names, merging
+and hotfixes, is in [`docs/branching.md`](docs/branching.md).
 
 ## Commit conventions
 
@@ -265,48 +268,23 @@ npm run dev
 
 ## Releasing (maintainers)
 
-Releases are built by [`.github/workflows/release.yaml`](.github/workflows/release.yaml) with
-`cargo xtask dist`, reproducibly, and attested with Sigstore; see
-[ADR 0026](docs/adr/0026-release-builds.md). `cargo xtask dist` builds the release files for your
-machine's architecture locally, the same way (it needs docker or podman). To release `X.Y.Z`:
-
-1. On `development`, bump the version: `workspace.package.version` and the internal crates in
-   `[workspace.dependencies]` in `Cargo.toml`, and `version` in `web/package.json` and both places
-   in `web/package-lock.json`. `cargo xtask versions` checks they agree. Regenerate the OpenAPI
-   document (`GOETHITE_UPDATE_OPENAPI=1 cargo test -p goethite-api --test openapi`), whose version
-   follows.
-2. In `CHANGELOG.md`, turn `[Unreleased]` into `## [X.Y.Z] - <date>`, add a new empty
-   `[Unreleased]` above it, and update the compare links at the bottom. The release notes are
-   taken from this section.
-3. Fuzz every target: `cargo xtask fuzz` (about 90 minutes, on a machine that does not sleep).
-   A finding is fixed privately first (see [`SECURITY.md`](SECURITY.md)).
-4. Open the pull request from `development` to `main` and merge it once CI passes.
-5. Tag the merge commit on `main` and push the tag:
-
-   ```sh
-   git switch main && git pull
-   git tag -a vX.Y.Z -m "goethite X.Y.Z"
-   git push origin vX.Y.Z
-   ```
-
-6. The workflow builds both architectures twice, fails unless the builds match, refuses a tag
-   that is not on `main` or does not match the version, then attests the files and drafts the
-   GitHub Release. Check the draft (`gh attestation verify` on a downloaded tarball, see
-   [Verifying releases](site/src/content/docs/verify.md)) and publish it.
-7. Publishing runs [`.github/workflows/image.yaml`](.github/workflows/image.yaml), which checks
-   the published tarballs, then builds, pushes and attests `ghcr.io/nxplain-sh/goethite`.
-   `cargo xtask image` builds the same image locally from `target/dist`, as an OCI archive.
+Releases are tags on `main`, cut by hand and built by
+[`.github/workflows/release.yaml`](.github/workflows/release.yaml) with `cargo xtask dist`,
+reproducibly, and attested with Sigstore; see [ADR 0026](docs/adr/0026-release-builds.md). The
+version rules, the steps for a release from `development`, patch releases from `main` and security
+fixes are in [`docs/releases.md`](docs/releases.md).
 
 ## Repository settings (maintainers)
 
 One-time settings on `nxplain-sh/goethite` that the repository cannot set itself:
 
 - **Rulesets** (Settings → Rules → Rulesets), with no bypass list:
-  - `main`: no deletion or force-push; changes only through a pull request (no approval
-    required, merge commits only); every CI job must pass, `source branch` included, which
-    fails pull requests into `main` that do not come from `development`.
-  - `development`: no deletion or force-push.
-  - Tags `v*`: no deletion or update, so a published release's tag cannot move.
+  - `main` and `development`, each: no deletion or force-push; changes only through a pull
+    request (no approval required, merge commits only); every CI job must pass, `source branch`
+    included. On pull requests into `main` that check fails unless they come from `development`
+    or a `hotfix/` branch, change the version and leave `[Unreleased]` empty; on others it fails
+    unless the branch is named as [`docs/branching.md`](docs/branching.md) says.
+  - Tags `v*`: no deletion or update, so a release's tag cannot move.
 - **`api-breaking` label:** marks an intended breaking API change (see
   [Changing the API](#changing-the-api)).
 - **GitHub Pages:** Settings → Pages → Build and deployment → Source: **GitHub Actions**
@@ -320,7 +298,7 @@ One-time settings on `nxplain-sh/goethite` that the repository cannot set itself
 
 ## Pull request checklist
 
-- [ ] The pull request targets `development` (only `development` targets `main`)
+- [ ] The pull request targets `development` from a `<kind>/<what>` branch (only releases target `main`)
 - [ ] `cargo xtask ci` passes, with shellcheck, cargo-deny and cargo-audit installed
 - [ ] Any new dependency is justified in the PR description
 - [ ] Web UI changes: `npm run build` in `web/` passes (type-check, build, size budget)
