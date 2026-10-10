@@ -140,14 +140,7 @@ fn build() -> Option<Table> {
     let mut targets = Vec::new();
     let mut add = |source: Source, host: &str| {
         if let Ok(name) = host.parse::<Name>() {
-            builder.add_rule(
-                source,
-                &Rule {
-                    name,
-                    scope: Scope::Exact,
-                    action: Action::Block,
-                },
-            );
+            builder.add_rule(source, &Rule::new(name, Scope::Exact, Action::Block));
         }
     };
     for (index, engine) in ENGINES.iter().enumerate() {

@@ -1,0 +1,5 @@
+||ads.example^$important
+||ads.example^$badfilter
+||ads.example^$important,badfilter
+@@||good.example^$important
+||ads.example^$client=1.2.3.4

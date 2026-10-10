@@ -117,26 +117,34 @@ impl FromIterator<Source> for Sources {
     }
 }
 
-/// Index of a rule's action and scope in an [`Entry`].
-fn slot(action: Action, scope: Scope) -> usize {
-    match (action, scope) {
+/// Index of a rule's action, scope and importance in an [`Entry`].
+fn slot(action: Action, scope: Scope, important: bool) -> usize {
+    let base: usize = match (action, scope) {
         (Action::Block, Scope::Exact) => 0,
         (Action::Block, Scope::Subtree) => 1,
         (Action::Block, Scope::Subdomains) => 2,
         (Action::Allow, Scope::Exact) => 3,
         (Action::Allow, Scope::Subtree) => 4,
         (Action::Allow, Scope::Subdomains) => 5,
+    };
+    if important {
+        base.saturating_add(6)
+    } else {
+        base
     }
 }
 
-/// For one key: which sources have a rule of each action and scope, indexed
-/// by [`slot`].
+/// For one key: which sources have a rule of each action, scope and
+/// importance, indexed by [`slot`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-struct Entry([u64; 6]);
+struct Entry([u64; 12]);
 
 impl Entry {
-    fn get(&self, action: Action, scope: Scope) -> u64 {
-        self.0.get(slot(action, scope)).copied().unwrap_or(0)
+    fn get(&self, action: Action, scope: Scope, important: bool) -> u64 {
+        self.0
+            .get(slot(action, scope, important))
+            .copied()
+            .unwrap_or(0)
     }
 }
 
@@ -189,7 +197,8 @@ impl Match {
 pub enum Verdict {
     /// No rule matches.
     Pass,
-    /// A block rule matches and no exception does.
+    /// A block rule matches and no exception does (an `$important` block
+    /// even over one).
     Blocked(Match),
     /// An exception matches, so the name is never blocked.
     Allowed(Match),
@@ -236,6 +245,8 @@ pub struct FilterError(fst::Error);
 #[derive(Default)]
 pub struct FilterBuilder {
     rules: Vec<(Vec<u8>, Source, u8)>,
+    /// The `$badfilter` rules, by the key and slot of the rule each disables.
+    badfilters: Vec<(Vec<u8>, u8)>,
     stats: ListStats,
 }
 
@@ -243,6 +254,7 @@ impl std::fmt::Debug for FilterBuilder {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("FilterBuilder")
             .field("rules", &self.rules.len())
+            .field("badfilters", &self.badfilters.len())
             .field("stats", &self.stats)
             .finish()
     }
@@ -256,17 +268,22 @@ impl FilterBuilder {
 
     /// Adds one rule from `source`. Returns false, and adds nothing, for a
     /// rule naming the root (which the parser never produces) and once
-    /// [`MAX_RULES`] rules have been added.
+    /// [`MAX_RULES`] rules have been added. A `$badfilter` rule adds no rule
+    /// of its own: it disables the rule it names when the filter is built.
     pub fn add_rule(&mut self, source: Source, rule: &Rule) -> bool {
         if rule.name.is_root() {
             self.stats.invalid = self.stats.invalid.saturating_add(1);
             return false;
         }
-        if self.rules.len() >= MAX_RULES {
+        if self.rules.len().saturating_add(self.badfilters.len()) >= MAX_RULES {
             self.stats.over_limit = self.stats.over_limit.saturating_add(1);
             return false;
         }
-        let slot = u8::try_from(slot(rule.action, rule.scope)).unwrap_or(0);
+        let slot = u8::try_from(slot(rule.action, rule.scope, rule.important)).unwrap_or(0);
+        if rule.badfilter {
+            self.badfilters.push((key(&rule.name), slot));
+            return true;
+        }
         self.rules.push((key(&rule.name), source, slot));
         self.stats.rules = self.stats.rules.saturating_add(1);
         true
@@ -312,6 +329,19 @@ impl FilterBuilder {
     /// Returns [`FilterError`] if the FST cannot be built, which does not
     /// happen for keys this builder produced.
     pub fn build(mut self) -> Result<Filter, FilterError> {
+        // `$badfilter` disables the rule it names, from whatever source or
+        // list it came: drop the rules it points at before compiling.
+        if !self.badfilters.is_empty() {
+            let badfilters = std::mem::take(&mut self.badfilters);
+            let before = self.rules.len();
+            self.rules.retain(|(key, _, slot)| {
+                !badfilters
+                    .iter()
+                    .any(|(bad_key, bad_slot)| bad_key == key && bad_slot == slot)
+            });
+            let removed = before.saturating_sub(self.rules.len());
+            self.stats.rules = self.stats.rules.saturating_sub(removed);
+        }
         self.rules.sort_unstable_by(|a, b| a.0.cmp(&b.0));
         let mut entries: Vec<Entry> = Vec::new();
         let mut index_of: HashMap<Entry, u64> = HashMap::new();
@@ -411,10 +441,11 @@ impl Filter {
 
     /// What the rules from `sources` say about `name`.
     ///
-    /// An exception from any of `sources` wins over every block. Otherwise
-    /// the block rule with the longest name decides; among rules for the same
-    /// name, an exact rule comes before a subtree rule and that before a
-    /// subdomains rule, and then the lowest source.
+    /// An `$important` exception wins over everything, then an `$important`
+    /// block, then an exception, then a block. Within a kind, the block rule
+    /// with the longest name decides; among rules for the same name, an exact
+    /// rule comes before a subtree rule and that before a subdomains rule, and
+    /// then the lowest source.
     pub fn check(&self, name: &Name, sources: Sources) -> Verdict {
         if sources.is_empty() {
             return Verdict::Pass;
@@ -435,7 +466,8 @@ impl Filter {
         self.walk(key, sources)
     }
 
-    /// Walks the FST along `key`, keeping the deepest block and allow match.
+    /// Walks the FST along `key`, keeping the deepest match of each action
+    /// and importance.
     fn walk(&self, key: &[u8], sources: Sources) -> Verdict {
         let fst = self.map.as_fst();
         let mut node = fst.root();
@@ -444,6 +476,8 @@ impl Filter {
         let mut labels = 0_u8;
         let mut block = None;
         let mut allow = None;
+        let mut important_block = None;
+        let mut important_allow = None;
         while let Some(&len) = key.get(position) {
             let label_end = position.saturating_add(1).saturating_add(usize::from(len));
             let Some(label) = key.get(position..label_end) else {
@@ -451,7 +485,7 @@ impl Filter {
             };
             for &byte in label {
                 let Some(index) = node.find_input(byte) else {
-                    return decide(block, allow);
+                    return decide(block, allow, important_block, important_allow);
                 };
                 let transition = node.transition(index);
                 output = output.cat(transition.out);
@@ -474,10 +508,10 @@ impl Filter {
             } else {
                 [Scope::Subtree, Scope::Subdomains]
             };
-            let first = |action| {
+            let first = |action, important| {
                 scopes.into_iter().find_map(|scope| {
                     sources
-                        .first_in(entry.get(action, scope))
+                        .first_in(entry.get(action, scope, important))
                         .map(|source| Match {
                             source,
                             scope,
@@ -485,18 +519,37 @@ impl Filter {
                         })
                 })
             };
-            if let Some(found) = first(Action::Block) {
+            if let Some(found) = first(Action::Block, false) {
                 block = Some(found);
             }
-            if let Some(found) = first(Action::Allow) {
+            if let Some(found) = first(Action::Allow, false) {
                 allow = Some(found);
             }
+            if let Some(found) = first(Action::Block, true) {
+                important_block = Some(found);
+            }
+            if let Some(found) = first(Action::Allow, true) {
+                important_allow = Some(found);
+            }
         }
-        decide(block, allow)
+        decide(block, allow, important_block, important_allow)
     }
 }
 
-fn decide(block: Option<Match>, allow: Option<Match>) -> Verdict {
+/// Which of the four kinds of match wins: an `$important` exception first,
+/// then an `$important` block, then an exception, then a block.
+fn decide(
+    block: Option<Match>,
+    allow: Option<Match>,
+    important_block: Option<Match>,
+    important_allow: Option<Match>,
+) -> Verdict {
+    if let Some(found) = important_allow {
+        return Verdict::Allowed(found);
+    }
+    if let Some(found) = important_block {
+        return Verdict::Blocked(found);
+    }
     match (allow, block) {
         (Some(found), _) => Verdict::Allowed(found),
         (None, Some(found)) => Verdict::Blocked(found),
@@ -562,11 +615,25 @@ pub fn reference_check(rules: &[(Source, Rule)], name: &Name, sources: Sources) 
         Scope::Subtree => 1,
         Scope::Subdomains => 2,
     };
-    let best = |action| {
+    // A `$badfilter` rule disables every rule it names: the same name,
+    // scope, action and importance, from any source.
+    let disabled = |rule: &Rule| {
+        rules.iter().any(|(_, bad)| {
+            bad.badfilter
+                && bad.name == rule.name
+                && bad.scope == rule.scope
+                && bad.action == rule.action
+                && bad.important == rule.important
+        })
+    };
+    let best = |action, important| {
         rules
             .iter()
             .filter(|(source, rule)| {
-                rule.action == action
+                !rule.badfilter
+                    && !disabled(rule)
+                    && rule.action == action
+                    && rule.important == important
                     && sources.contains(*source)
                     && !rule.name.is_root()
                     && rule.matches(name)
@@ -580,7 +647,12 @@ pub fn reference_check(rules: &[(Source, Rule)], name: &Name, sources: Sources) 
             // subdomains, then the lowest source.
             .min_by_key(|found| (std::cmp::Reverse(found.labels), rank(found.scope), found.source))
     };
-    decide(best(Action::Block), best(Action::Allow))
+    decide(
+        best(Action::Block, false),
+        best(Action::Allow, false),
+        best(Action::Block, true),
+        best(Action::Allow, true),
+    )
 }
 
 #[cfg(test)]
@@ -650,6 +722,48 @@ mod tests {
         }
         assert_eq!(filter.rule_count(), 5);
         assert_eq!(filter.name_count(), 5);
+    }
+
+    #[test]
+    fn important_outranks_exceptions_and_blocks() {
+        // An important block beats an exception.
+        let important = filter("||ads.example^\n@@||ads.example^\n||ads.example^$important\n");
+        assert_eq!(kind(&important, "ads.example"), "blocked");
+        // An important exception beats an important block.
+        let both = filter("||ads.example^$important\n@@||ads.example^$important\n");
+        assert_eq!(kind(&both, "ads.example"), "allowed");
+        // A regular exception still beats a regular block.
+        let regular = filter("||ads.example^\n@@||ads.example^\n");
+        assert_eq!(kind(&regular, "ads.example"), "allowed");
+        // Importance belongs to the rule: the exception must carry it too.
+        let one = filter("||ads.example^$important\n@@||ads.example^\n");
+        assert_eq!(kind(&one, "ads.example"), "blocked");
+        // The important rule wins whatever its length.
+        let deep = filter("||ads.example^$important\n@@|x.y.ads.example^\n");
+        assert_eq!(kind(&deep, "x.y.ads.example"), "blocked");
+    }
+
+    #[test]
+    fn badfilter_disables_the_rule_it_names() {
+        // The disabled rule goes away; the line counts no rule of its own.
+        let gone = filter("||ads.example^\n||ads.example^$badfilter\n");
+        assert_eq!(kind(&gone, "ads.example"), "pass");
+        // Neither the disabled rule nor the badfilter itself counts.
+        assert_eq!(gone.rule_count(), 0);
+        // `$badfilter` names the same modifiers too.
+        let important_left = filter("||ads.example^$important\n||ads.example^$badfilter\n");
+        assert_eq!(kind(&important_left, "ads.example"), "blocked");
+        let important_gone = filter("||ads.example^$important\n||ads.example^$important,badfilter\n");
+        assert_eq!(kind(&important_gone, "ads.example"), "pass");
+        // It reaches an exception, across lists.
+        let mut builder = FilterBuilder::new();
+        builder.add_list(source(0), "@@||good.example^\n");
+        builder.add_list(source(1), "@@||good.example^$badfilter\n");
+        let exceptions = builder.build().unwrap();
+        assert_eq!(kind(&exceptions, "good.example"), "pass");
+        // A badfilter for a rule nobody wrote changes nothing.
+        let stray = filter("||ads.example^\n||other.example^$badfilter\n");
+        assert_eq!(kind(&stray, "ads.example"), "blocked");
     }
 
     #[test]
@@ -734,11 +848,7 @@ mod tests {
         let dotted = Name::from_labels([&b"a.b"[..], b"example"]).unwrap();
         builder.add_rule(
             source(0),
-            &Rule {
-                name: dotted.clone(),
-                scope: Scope::Exact,
-                action: Action::Block,
-            },
+            &Rule::new(dotted.clone(), Scope::Exact, Action::Block),
         );
         let filter = builder.build().unwrap();
         let Verdict::Blocked(found) = filter.check(&dotted, Sources::ALL) else {
@@ -755,11 +865,7 @@ mod tests {
         let mut builder = FilterBuilder::new();
         builder.add_rule(
             source(0),
-            &Rule {
-                name: longest.clone(),
-                scope: Scope::Exact,
-                action: Action::Block,
-            },
+            &Rule::new(longest.clone(), Scope::Exact, Action::Block),
         );
         let filter = builder.build().unwrap();
         assert!(filter.check(&longest, Sources::ALL).is_blocked());
@@ -769,11 +875,7 @@ mod tests {
     fn rules_for_the_root_are_refused() {
         // Found by fuzzing (fuzz/artifacts/parse-list): a root rule matched
         // `.` in the reference but not in the compiled filter.
-        let root_rule = Rule {
-            name: Name::root(),
-            scope: Scope::Exact,
-            action: Action::Block,
-        };
+        let root_rule = Rule::new(Name::root(), Scope::Exact, Action::Block);
         let mut builder = FilterBuilder::new();
         assert!(!builder.add_rule(source(0), &root_rule));
         assert_eq!(builder.stats().invalid, 1);

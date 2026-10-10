@@ -170,7 +170,7 @@ fn check_config_rejects_problems() {
         ),
         (
             "check_bad_rule",
-            "[filter]\nrules = [\"||ads.example^$important\"]\n",
+            "[filter]\nrules = [\"||ads.example^$client=1.2.3.4\"]\n",
             "not supported yet",
         ),
         (

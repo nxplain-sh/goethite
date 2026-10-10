@@ -19,17 +19,22 @@ by line, so lists can be mixed freely.
 | `.ads.example^` | blocks every name below `ads.example`, but not `ads.example` itself |
 | `://ads.example^` | blocks exactly `ads.example` (URL-style anchor) |
 | `@@\|\|good.example^` | an exception: `good.example` and the names below it are never blocked |
+| `\|\|ads.example^$important` | a block that outranks exceptions |
+| `@@\|\|good.example^$important` | an exception that outranks `$important` blocks |
+| `\|\|ads.example^$badfilter` | disables the rule it names (`\|\|ads.example^`), from any list |
 
-Exceptions win over blocks, whatever the order of the rules. Matching ignores case. Lines starting
-with `!` or `#`, `[Adblock Plus 2.0]`-style headers and blank lines are ignored, and hosts files
-may end lines with a `# comment`. Hosts entries for `localhost` and similar system names are
-skipped.
+An `$important` exception wins over everything, then an `$important` block, then an exception,
+then a block. Between two rules of the same kind the more specific one decides, so a regular
+exception still beats a regular block whatever the order of the rules. Matching ignores case.
+Lines starting with `!` or `#`, `[Adblock Plus 2.0]`-style headers and blank lines are ignored,
+and hosts files may end lines with a `# comment`. Hosts entries for `localhost` and similar
+system names are skipped.
 
 Not supported yet, so counted and skipped rather than guessed at: regular expressions
-(`/ads[0-9]+/`), modifiers (`||ads.example^$important`), patterns without a `||` or `|` anchor,
-wildcards inside a name, names with non-ASCII characters, and hosts entries with a real address
-(those are rewrites, not blocks). The log shows how many lines of each list were used, unsupported
-and invalid.
+(`/ads[0-9]+/`), modifiers other than `$important` and `$badfilter` (`$client`, `$dnsrewrite`,
+`$denyallow`…), patterns without a `||` or `|` anchor, wildcards inside a name, names with
+non-ASCII characters, and hosts entries with a real address (those are rewrites, not blocks). The
+log shows how many lines of each list were used, unsupported and invalid.
 
 ## Configuration
 

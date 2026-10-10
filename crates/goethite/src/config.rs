@@ -1912,10 +1912,11 @@ mod tests {
 
     #[test]
     fn inline_rules_are_checked() {
-        let ok = "[filter]\nrules = [\"||ads.example^\", \"@@||good.example^\", \"! a comment\"]";
+        let ok = "[filter]\nrules = [\"||ads.example^\", \"@@||good.example^\", \"! a comment\", \
+                  \"||tracker.example^$important\", \"||old.example^$badfilter\"]";
         assert!(Config::parse(ok).unwrap().filter.validate().is_ok());
         for bad in [
-            "rules = [\"||ads.example^$important\"]",
+            "rules = [\"||ads.example^$client=1.2.3.4\"]",
             "rules = [\"/ads[0-9]+/\"]",
             "rules = [\"not a rule!\"]",
             "rules = [\"a.example\\nb.example\"]",
