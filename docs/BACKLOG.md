@@ -547,6 +547,43 @@ Phase 3's scope shipped in v0.3.0. These items came up along the way.
 - **[later] Learners that never vote,** for read-only members in another site, kept as learners
   even when they would make three voters.
 
+## 1.0 competitor parity (2026-10-10)
+
+Gaps the competitor review (AdGuard Home v0.107.79, Pi-hole v6.4.3, Numa v0.24.1) found and that
+no section above covers; the review's other gaps are already items here. Its filtering gaps are
+what "match AdGuard Home on everyday filtering" ([`AGENTS.md`](../AGENTS.md)) still asks for.
+
+- **[later] A custom IP as the blocked answer,** beside the null IP, NXDOMAIN and REFUSED modes.
+- **[later] Answer filtering by IP:** `|10.*`-style and hosts-style rules matching A and AAAA
+  answers, in the response pass CNAME uncloaking already runs.
+- **[later] A rule tester:** which rule blocks a name, for which client, as an API endpoint and a
+  page (AdGuard Home's `check_host`; the TUI could use it too).
+- **[later] `$ctag`, and the rest of `$dnsrewrite`** beyond the `$dnsrewrite=NXDOMAIN` rules noted
+  in Phase 4: answer records and the other RCODEs.
+- **[later] Per-domain upstreams while forwarding,** the counterpart of the recursing item in
+  Phase 4.
+- **[later] Hedged upstream requests:** send a second query after a short delay instead of waiting
+  for the first to time out (as Numa does).
+- **[later] Upstreams per client or group** (AdGuard Home).
+- **[later] AAAA filtering and DNS64** (AdGuard Home; Numa filters AAAA only).
+- **[later] EDNS Client Subnet as the client's identity** for a node behind another forwarder
+  (Pi-hole).
+- **[later] DoQ and HTTP/3 upstreams,** the client side of the transports goethite already serves.
+- **[later] PROXY protocol v2 on listeners** (Numa; requested of AdGuard Home with 95 votes).
+- **[later] Backup and restore of the whole configuration,** as Pi-hole's Teleporter does; today
+  `goethite migrate` is import-only.
+- **[later] Apple configuration profiles** for the DoT and DoH setup (`.mobileconfig`).
+- **[later] Client names from reverse DNS, ARP or the OS hosts file,** like AdGuard Home's
+  friendly names.
+- **[later] Leaving chosen names or clients out of the query log** (AdGuard Home's ignored-host
+  list and per-client flag).
+- **[later] Flushing the cache from the API,** and from the web UI.
+- **[later] Several admin users and TOTP,** beside the scoped API tokens of Phase 2.
+- **[later] DHCP: a scope decision for 1.0** (AdGuard Home and Pi-hole both ship a server;
+  goethite does not).
+- **[later] Home Assistant: keep the integration outside the project,** as AdGuard Home and
+  Pi-hole do; a community integration would use the REST API.
+
 ## OpenTelemetry (ADR 0034)
 
 - **[later] Trace context across processes:** W3C `traceparent` on the cluster's connections, so
