@@ -7,6 +7,12 @@ configuration format.
 
 ## [Unreleased]
 
+### Added
+
+- **Safe search for Ecosia, Pixabay and Yandex**, beside Google, YouTube, Bing and DuckDuckGo:
+  Ecosia and Pixabay answer with a CNAME to their safe host, and Yandex, which has no such host,
+  answers `A` queries with its fixed safe address `213.180.193.56`.
+
 ## [0.6.0] - 2026-10-10
 
 ### Added

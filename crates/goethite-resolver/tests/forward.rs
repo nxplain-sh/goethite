@@ -891,6 +891,24 @@ async fn safe_search_sends_search_hosts_to_their_safe_endpoint() {
         "0x20 changes the case"
     );
 
+    // Yandex's safe endpoint is a pinned address, answered without an
+    // upstream.
+    let yandex = resolver
+        .resolve(&query("yandex.ru."), from("10.0.0.2"))
+        .await;
+    assert_eq!(yandex.outcome, Outcome::SafeSearch);
+    assert_eq!(yandex.response.answers.len(), 1);
+    assert_eq!(
+        yandex.response.answers[0].ip(),
+        Some(Ipv4Addr::new(213, 180, 193, 56).into())
+    );
+
+    // The pinned address answers `A` only; other types resolve normally.
+    let mut aaaa = query("yandex.ru.");
+    aaaa.question.qtype = RecordType::AAAA;
+    let aaaa = resolver.resolve(&aaaa, from("10.0.0.2")).await;
+    assert_eq!(aaaa.outcome, Outcome::Upstream(0));
+
     // The default group has safe search off.
     let others = resolver
         .resolve(&query("www.google.de."), from("10.9.9.9"))

@@ -4,12 +4,14 @@
 //! explicit results. With safe search on, a query for one of their search
 //! hosts is answered with a CNAME to that host, followed by the host's own
 //! records, so the browser talks to the filtered service whatever its
-//! settings say.
+//! settings say. Yandex offers no such host: its safe endpoint is a fixed
+//! address, answered directly.
 
+use std::net::Ipv4Addr;
 use std::sync::OnceLock;
 
 use goethite_filter::{Action, Filter, FilterBuilder, Rule, Scope, Source, Sources, Verdict};
-use goethite_proto::Name;
+use goethite_proto::{Name, RecordType};
 
 /// Google's search domains (`google.<tld>`), from
 /// <https://www.google.com/supported_domains>.
@@ -32,34 +34,100 @@ const GOOGLE_TLDS: &[&str] = &[
     "co.za", "co.zm", "co.zw", "cat",
 ];
 
-/// The engines: their safe host and the hosts that are sent there. Google's
-/// search domains are added from [`GOOGLE_TLDS`] as engine 0.
-const ENGINES: &[(&str, &[&str])] = &[
-    ("forcesafesearch.google.com", &[]),
-    (
-        "restrict.youtube.com",
-        &[
+/// Yandex's search domains (`yandex.<tld>`), from AdGuard Home's safe search
+/// rules; `ya.ru` and `yandex.рф` (`xn--d1acpjx3f.xn--p1ai`) are listed
+/// beside them.
+const YANDEX_TLDS: &[&str] = &[
+    "az", "by", "co.il", "com.am", "com.ge", "com.ru", "com.tr", "com", "de", "ee", "eu", "fi",
+    "fr", "kz", "lt", "lv", "md", "net", "org", "pl", "ru", "tj", "tm", "uz",
+];
+
+/// One engine: the safe target, the search hosts sent to it, and optionally
+/// a family of `{name}.{tld}` hosts (with their `www.` forms) added from a
+/// TLD list. A target that parses as an IPv4 address is answered directly.
+struct Engine {
+    target: &'static str,
+    hosts: &'static [&'static str],
+    family: Option<(&'static str, &'static [&'static str])>,
+}
+
+/// The engines, with Google's and Yandex's search domains added from their
+/// TLD lists.
+const ENGINES: &[Engine] = &[
+    Engine {
+        target: "forcesafesearch.google.com",
+        hosts: &[],
+        family: Some(("google", GOOGLE_TLDS)),
+    },
+    Engine {
+        target: "restrict.youtube.com",
+        hosts: &[
             "www.youtube.com",
             "m.youtube.com",
             "youtubei.googleapis.com",
             "youtube.googleapis.com",
             "www.youtube-nocookie.com",
         ],
-    ),
-    ("strict.bing.com", &["www.bing.com", "bing.com"]),
-    (
-        "safe.duckduckgo.com",
-        &[
+        family: None,
+    },
+    Engine {
+        target: "strict.bing.com",
+        hosts: &["www.bing.com", "bing.com"],
+        family: None,
+    },
+    Engine {
+        target: "safe.duckduckgo.com",
+        hosts: &[
             "duckduckgo.com",
             "www.duckduckgo.com",
             "start.duckduckgo.com",
         ],
-    ),
+        family: None,
+    },
+    Engine {
+        target: "strict-safe-search.ecosia.org",
+        hosts: &["www.ecosia.org"],
+        family: None,
+    },
+    Engine {
+        target: "safesearch.pixabay.com",
+        hosts: &["pixabay.com"],
+        family: None,
+    },
+    Engine {
+        target: "213.180.193.56",
+        hosts: &[
+            "ya.ru",
+            "www.ya.ru",
+            "xn--d1acpjx3f.xn--p1ai",
+            "www.xn--d1acpjx3f.xn--p1ai",
+        ],
+        family: Some(("yandex", YANDEX_TLDS)),
+    },
 ];
+
+/// Where a search host is sent: a name to resolve and CNAME to, or an
+/// address to answer with.
+pub(crate) enum Target {
+    Name(Name),
+    Address(Ipv4Addr),
+}
+
+impl Target {
+    /// Whether the target answers a query of `qtype`. A pinned address is
+    /// answered for its own record type only (Yandex's safe endpoint is
+    /// A-only); a name answers any type through its records.
+    pub(crate) fn covers(&self, qtype: RecordType) -> bool {
+        match self {
+            Self::Name(_) => true,
+            Self::Address(_) => qtype == RecordType::A,
+        }
+    }
+}
 
 struct Table {
     hosts: Filter,
-    targets: Vec<Name>,
+    targets: Vec<Target>,
 }
 
 fn table() -> Option<&'static Table> {
@@ -82,16 +150,16 @@ fn build() -> Option<Table> {
             );
         }
     };
-    for (index, (target, hosts)) in ENGINES.iter().enumerate() {
+    for (index, engine) in ENGINES.iter().enumerate() {
         let source = Source::new(index)?;
-        targets.push(target.parse().ok()?);
-        for host in *hosts {
+        targets.push(target_from(engine.target)?);
+        for host in engine.hosts {
             add(source, host);
         }
-        if index == 0 {
-            for tld in GOOGLE_TLDS {
-                add(source, &format!("google.{tld}"));
-                add(source, &format!("www.google.{tld}"));
+        if let Some((family, tlds)) = engine.family {
+            for tld in tlds {
+                add(source, &format!("{family}.{tld}"));
+                add(source, &format!("www.{family}.{tld}"));
             }
         }
     }
@@ -101,8 +169,15 @@ fn build() -> Option<Table> {
     })
 }
 
-/// The safe host that `name` must be sent to, if it is a search host.
-pub(crate) fn target(name: &Name) -> Option<&'static Name> {
+fn target_from(target: &str) -> Option<Target> {
+    if let Ok(address) = target.parse::<Ipv4Addr>() {
+        return Some(Target::Address(address));
+    }
+    target.parse::<Name>().ok().map(Target::Name)
+}
+
+/// The safe target `name` must be sent to, if it is a search host.
+pub(crate) fn target(name: &Name) -> Option<&'static Target> {
     let table = table()?;
     match table.hosts.check(name, Sources::ALL) {
         Verdict::Blocked(found) => table.targets.get(found.source.index()),
@@ -115,7 +190,10 @@ mod tests {
     use super::*;
 
     fn target_of(name: &str) -> Option<String> {
-        target(&name.parse().unwrap()).map(ToString::to_string)
+        target(&name.parse().unwrap()).map(|target| match target {
+            Target::Name(name) => name.to_string(),
+            Target::Address(address) => address.to_string(),
+        })
     }
 
     #[test]
@@ -129,10 +207,18 @@ mod tests {
             ("youtubei.googleapis.com", "restrict.youtube.com."),
             ("www.bing.com", "strict.bing.com."),
             ("duckduckgo.com", "safe.duckduckgo.com."),
+            ("www.ecosia.org", "strict-safe-search.ecosia.org."),
+            ("pixabay.com", "safesearch.pixabay.com."),
+            ("ya.ru", "213.180.193.56"),
+            ("yandex.ru", "213.180.193.56"),
+            ("www.yandex.com.tr", "213.180.193.56"),
+            ("xn--d1acpjx3f.xn--p1ai", "213.180.193.56"),
+            ("www.xn--d1acpjx3f.xn--p1ai", "213.180.193.56"),
         ] {
             assert_eq!(target_of(host).as_deref(), Some(safe), "{host}");
         }
         assert!(GOOGLE_TLDS.len() > 150);
+        assert!(YANDEX_TLDS.len() > 20);
     }
 
     #[test]
@@ -143,11 +229,26 @@ mod tests {
             "restrict.youtube.com",
             "strict.bing.com",
             "safe.duckduckgo.com",
+            "ecosia.org",
+            "strict-safe-search.ecosia.org",
+            "mail.pixabay.com",
+            "safesearch.pixabay.com",
+            "mail.yandex.ru",
             "example.com",
             "google.example",
             "youtube.com",
         ] {
             assert_eq!(target_of(host), None, "{host}");
         }
+    }
+
+    #[test]
+    fn pinned_addresses_cover_a_queries_only() {
+        let address = Target::Address(Ipv4Addr::new(213, 180, 193, 56));
+        assert!(address.covers(RecordType::A));
+        assert!(!address.covers(RecordType::AAAA));
+        let name = Target::Name("safe.example.".parse().unwrap());
+        assert!(name.covers(RecordType::A));
+        assert!(name.covers(RecordType::AAAA));
     }
 }

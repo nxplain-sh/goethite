@@ -72,7 +72,7 @@ pub const TEST_ADDR: Ipv4Addr = Ipv4Addr::new(127, 0, 0, 53);
 /// Time to live of the built-in test record, in seconds.
 pub const TEST_TTL: u32 = 60;
 
-/// Time to live of the CNAME that sends a search host to its safe endpoint.
+/// Time to live of the answer that sends a search host to its safe endpoint.
 const SAFE_SEARCH_TTL: u32 = 60;
 
 /// The name `goethite vrrp` checks the server with, once a second. It is
@@ -560,6 +560,7 @@ impl Resolver {
         }
         if asker.safe_search
             && let Some(target) = safe_search::target(&question.name)
+            && target.covers(question.qtype)
         {
             return (
                 self.safe_search(query, target).await,
@@ -677,21 +678,35 @@ impl Resolver {
         (response, outcome)
     }
 
-    /// A CNAME from the asked name to `target`, followed by `target`'s own
-    /// answer for the same type.
-    async fn safe_search(&self, query: &Query, target: &Name) -> Response {
-        let mut inner = query.clone();
-        inner.question.name = target.clone();
-        let (answer, _) = self.cached_or_forwarded(&inner).await;
-        let mut response = Response::for_query(query, answer.rcode);
-        response.answers.push(Record::cname(
-            query.question.name.clone(),
-            SAFE_SEARCH_TTL,
-            target.clone(),
-        ));
-        response.answers.extend(answer.answers);
-        response.authority = answer.authority;
-        response
+    /// The safe answer for `query`: a CNAME to the engine's safe host
+    /// followed by its own records, or the engine's pinned address answered
+    /// directly.
+    async fn safe_search(&self, query: &Query, target: &safe_search::Target) -> Response {
+        match target {
+            safe_search::Target::Name(name) => {
+                let mut inner = query.clone();
+                inner.question.name = name.clone();
+                let (answer, _) = self.cached_or_forwarded(&inner).await;
+                let mut response = Response::for_query(query, answer.rcode);
+                response.answers.push(Record::cname(
+                    query.question.name.clone(),
+                    SAFE_SEARCH_TTL,
+                    name.clone(),
+                ));
+                response.answers.extend(answer.answers);
+                response.authority = answer.authority;
+                response
+            }
+            safe_search::Target::Address(address) => {
+                let mut response = Response::for_query(query, ResponseCode::NO_ERROR);
+                response.answers.push(Record::a(
+                    query.question.name.clone(),
+                    SAFE_SEARCH_TTL,
+                    *address,
+                ));
+                response
+            }
+        }
     }
 
     /// The IPv4 and IPv6 addresses of `name`, for goethite's own use (such as
