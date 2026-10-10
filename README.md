@@ -114,6 +114,8 @@ Benchmarks and how to record them are in [`bench/`](bench/README.md). The layout
 - [Threat model](docs/THREAT_MODEL.md)
 - [Architecture decision records](docs/adr/)
 - [Backlog](docs/BACKLOG.md): work noticed along the way and not scheduled yet
+- [Competitor features](docs/competitor-features.md): AdGuard Home, Pi-hole and Numa set against
+  goethite
 
 ## License
 
