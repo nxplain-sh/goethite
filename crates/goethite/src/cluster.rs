@@ -18,8 +18,8 @@ use axum::routing::post;
 use axum::{Extension, Json, Router};
 use goethite_api::{
     Api, ApiError, ApiListeners, ClusterRole, ClusterStatus, Forwarded, ForwardedAnswer,
-    MemberState, MemberStats, MemberStatus, Membership, PeerCertificate, PeerStatus, Serving,
-    SyncStatus, Writes, serve_router,
+    HANDSHAKE_TIMEOUT, MemberState, MemberStats, MemberStatus, Membership, PeerCertificate,
+    PeerStatus, Serving, SyncStatus, Writes, serve_router,
 };
 use goethite_cluster::raft::node::RaftNode;
 use goethite_cluster::raft::{Metrics, RaftId, matched_of, members_of, raft_id, state_of};
@@ -177,6 +177,7 @@ pub(crate) async fn start(
         router: server::router(shared).merge(forward),
         tls: Some(identity.server_config(cluster.peers.clone())?),
         max_connections: MAX_CONNECTIONS,
+        first_request_timeout: HANDSHAKE_TIMEOUT,
     };
     let until = crate::until(stopped.clone());
     tasks.spawn(async move {

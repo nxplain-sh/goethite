@@ -57,7 +57,10 @@ pub use cluster::{
 pub use docs::{EmbeddedDocs, SCALAR as DOCS_SCALAR};
 pub use error::{ApiError, ErrorBody, ErrorDetail};
 pub use openapi::{openapi, openapi_json};
-pub use serve::{ApiListeners, MAX_CONNECTIONS, PeerCertificate, Serving, serve, serve_router};
+pub use serve::{
+    ApiListeners, HANDSHAKE_TIMEOUT, MAX_CONNECTIONS, MAX_CONNECTIONS_PER_PEER, PeerCertificate,
+    Serving, serve, serve_router,
+};
 pub use web::{EmbeddedWeb, WebAssets};
 
 /// The checks made on every request's `Host`, `Origin` and path, for the
