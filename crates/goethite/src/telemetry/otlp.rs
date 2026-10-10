@@ -18,14 +18,19 @@ use goethite_resolver::{Resolver, TlsRoots, tls_client_config};
 use http_body_util::{BodyExt, Full, Limited};
 use hyper::header::{HeaderName, HeaderValue};
 use opentelemetry_http::{Bytes, HttpClient, HttpError, Request, Response};
-use opentelemetry_otlp::{LogExporter, MetricExporter, WithExportConfig, WithHttpConfig};
+use opentelemetry_otlp::{
+    LogExporter, MetricExporter, SpanExporter, WithExportConfig, WithHttpConfig,
+};
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::logs::SdkLoggerProvider;
 use opentelemetry_sdk::metrics::PeriodicReader;
+use opentelemetry_sdk::trace::BatchSpanProcessor;
 use rustls::pki_types::CertificateDer;
 use rustls::pki_types::pem::PemObject;
 use tokio::runtime::Handle;
 use tokio_rustls::TlsConnector;
+use tracing::instrument::WithSubscriber as _;
+use tracing::subscriber::NoSubscriber;
 use tracing::{info, warn};
 
 use crate::config::TelemetrySection;
@@ -132,11 +137,16 @@ impl HttpClient for OtlpClient {
         let client = self.clone();
         Box::pin(async move {
             let (signal, exports) = (client.signal, Arc::clone(&client.exports));
-            let task = client.runtime.clone().spawn(async move {
-                tokio::time::timeout(EXPORT_TIMEOUT, client.post(request))
-                    .await
-                    .map_err(|_| anyhow!("timed out after {} s", EXPORT_TIMEOUT.as_secs()))?
-            });
+            // Without a subscriber: the request's own lookups, connections
+            // and lines must not become telemetry that feeds it.
+            let task = client.runtime.clone().spawn(
+                async move {
+                    tokio::time::timeout(EXPORT_TIMEOUT, client.post(request))
+                        .await
+                        .map_err(|_| anyhow!("timed out after {} s", EXPORT_TIMEOUT.as_secs()))?
+                }
+                .with_subscriber(NoSubscriber::new()),
+            );
             let result = match task.await {
                 Ok(result) => result,
                 Err(err) => Err(anyhow!("the export was cancelled: {err}")),
@@ -154,6 +164,8 @@ pub(crate) struct Export {
     pub metrics: Option<PeriodicReader<MetricExporter>>,
     /// The provider that sends log records, in batches.
     pub logs: Option<SdkLoggerProvider>,
+    /// The processor that sends finished spans, in batches.
+    pub traces: Option<BatchSpanProcessor>,
     /// How the requests fare, by signal.
     pub requests: Vec<(&'static str, Arc<Exports>)>,
 }
@@ -219,6 +231,20 @@ pub(crate) fn export(
         })
         .transpose()
         .context("cannot set up the log export")?;
+    let traces = config
+        .signal_url("traces")
+        .filter(|_| config.traces)
+        .map(|url| {
+            SpanExporter::builder()
+                .with_http()
+                .with_http_client(client("traces"))
+                .with_endpoint(url)
+                .with_headers(headers.clone())
+                .with_timeout(EXPORT_TIMEOUT)
+                .build()
+        })
+        .transpose()
+        .context("cannot set up the trace export")?;
     if endpoint.scheme_str() == Some("http") && !endpoint.host().is_some_and(is_loopback) {
         warn!("telemetry goes to the collector over plain HTTP: it and its headers can be read");
     }
@@ -235,6 +261,7 @@ pub(crate) fn export(
             .with_batch_exporter(exporter)
             .build()
     });
+    export.traces = traces.map(|exporter| BatchSpanProcessor::builder(exporter).build());
     Ok(export)
 }
 

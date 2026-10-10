@@ -194,6 +194,18 @@ Phase 3's scope shipped in v0.3.0. These items came up along the way.
 - **[later] Learners that never vote,** for read-only members in another site, kept as learners
   even when they would make three voters.
 
+## OpenTelemetry (ADR 0034)
+
+- **[later] Trace context across processes:** W3C `traceparent` on the cluster's connections, so
+  a change forwarded to the leader is one trace across both members, and from API clients (the
+  TUI, scripts).
+- **[later] Tracing one query on demand:** resolve a name through the API and return each step
+  (policy, filter decision, cache, upstreams or recursion, DNSSEC), for home-lab users without a
+  collector.
+- **[later] Telemetry from `goethite witness` and `goethite vrrp`:** they have no resolver to
+  find a collector by name and read no files under their sandboxes; they log to standard error
+  only.
+
 ## Unscheduled / tooling
 
 - **[later] APT and DNF repositories** for `apt upgrade` and `dnf upgrade`: they need a

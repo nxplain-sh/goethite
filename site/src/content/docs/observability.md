@@ -12,7 +12,8 @@ ways, and both can be on at once:
   `[telemetry] endpoint` is set.
 
 With an endpoint set, goethite also sends its [log records](#log-records) to the collector, while
-still writing them to standard error.
+still writing them to standard error, and, with `traces = true`, [traces](#traces) of its slow
+paths.
 
 Both ways carry the same metrics. Pushed, they keep OpenTelemetry's names, such as
 `goethite.queries` and `goethite.query.duration`; at `/metrics` they have their Prometheus names,
@@ -52,6 +53,31 @@ If those must not leave the node, keep `logs = false`.
 
 **Turning it off.** `logs = false` stops sending them.
 
+## Traces
+
+**What is traced.** With `traces = true`, goethite opens a span wherever it waits for a network
+or does slow work:
+
+- **`resolve`:** a query that missed the cache. Inside it, one `upstream` span per attempt at an
+  upstream (its address, transport and result), or with [recursion](../recursion/) one
+  `authoritative` span per query sent, and `dnssec` for validation.
+- **`api`:** an API request, by method, route and status.
+- **The rest:** `lists.refresh` and `list.download`, `filter.build`, and `raft.call` with
+  `raft.append`, `raft.vote` and `raft.snapshot` between cluster members.
+
+**What is never traced.** Cache hits, blocked names and local answers, which are most queries,
+open no span at all.
+
+**Sampling.** `trace_sample_ratio` keeps a share of traces, 5% by default. The choice is made per
+trace, so a kept trace is whole.
+
+**What spans hold.** Record types, response codes, upstream addresses, API routes and timings.
+The name looked up, and with recursion the servers asked (which tell the name too), are added
+only with `query_details = true`. Client addresses never are.
+
+**Cost.** With traces off, a span costs an atomic load. With them on, each query that misses the
+cache builds its spans whether or not its trace is kept.
+
 ## Prometheus
 
 See [REST API](../api/#metrics) for the scrape configuration. `/metrics` needs the admin token
@@ -72,6 +98,7 @@ interval = 60
   goethite stops.
 - **Log records:** posted to `<endpoint>/v1/logs` in batches, within a second or so of being
   written.
+- **Traces:** posted to `<endpoint>/v1/traces` in batches, the same way.
 
 **What identifies the node.** Each export carries `service.name` = `goethite` and
 `service.version`. On a [cluster](../ha/) member it also carries `service.instance.id` = the node's
@@ -105,6 +132,9 @@ service:
     logs:
       receivers: [otlp]
       exporters: [debug]
+    traces:
+      receivers: [otlp]
+      exporters: [debug]
 ```
 
 **The collector's name.** goethite resolves it through its own upstreams and
@@ -116,8 +146,8 @@ or a local record answer. A container or Kubernetes service name answers only th
 
 - DNS is never affected. Exports run on threads of their own and give up after 10 seconds,
   retries included.
-- The next metrics export sends the counts so far. Log records wait in a bounded queue (2,048) and
-  are dropped when it is full; they are still in the journal.
+- The next metrics export sends the counts so far. Log records and spans wait in bounded queues
+  (2,048 each) and are dropped when they are full; the log lines are still in the journal.
 - goethite logs one warning when exports start failing, and one line when they work again.
 - `goethite_telemetry_export_failures_total` counts the failed requests, retries included.
 

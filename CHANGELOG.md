@@ -9,12 +9,17 @@ configuration format.
 
 ### Added
 
-- **Sending metrics and logs to an OpenTelemetry collector** over OTLP/HTTP, with a new
+- **Sending metrics, logs and traces to an OpenTelemetry collector** over OTLP/HTTP, with a new
   `[telemetry]` table: `endpoint`, a `headers_file` for an API key, a `ca_file` for a private CA,
-  `metrics`, `logs` and `interval`.
+  `metrics`, `logs`, `traces`, `trace_sample_ratio`, `query_details` and `interval`.
   - Nothing is sent without an endpoint, and `/metrics` stays as it was.
   - Log records are the lines at `INFO` and above. They also still go to standard error,
     unchanged.
+  - Traces are off by default. With them on, a sampled share (5% by default) of the slow paths
+    is traced: queries that missed the cache, with each upstream attempt or each query to an
+    authoritative server and DNSSEC validation; list downloads; filter builds; Raft calls; API
+    requests. Cache hits, blocks and local answers open no span. Names looked up are on spans
+    only with `query_details = true`.
   - goethite sends the requests with its own HTTP client: rustls with ring, names resolved
     through its own upstreams.
   - Exports never touch the DNS path. Failures are counted in

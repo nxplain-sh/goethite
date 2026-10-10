@@ -84,6 +84,7 @@ impl std::fmt::Debug for Connection {
 }
 
 impl Connection {
+    #[tracing::instrument(level = "debug", name = "raft.call", skip_all, fields(%path, target = self.target))]
     async fn call<Req, Resp, E>(
         &self,
         path: &str,

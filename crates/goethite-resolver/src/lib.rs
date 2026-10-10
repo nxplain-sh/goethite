@@ -28,7 +28,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use goethite_filter::{Action, Match, Sources, Verdict};
-use tracing::{debug, error};
+use tracing::{Instrument as _, debug, debug_span, error, field};
 
 use goethite_proto::{
     Edns, Name, NameError, Query, Question, Record, RecordClass, RecordType, Response, ResponseCode,
@@ -198,6 +198,8 @@ pub struct Resolver {
     recursor: Option<Recursor>,
     fail_mode: FailMode,
     filter_failures: AtomicU64,
+    /// Whether spans name the names looked up and the servers asked.
+    span_details: bool,
 }
 
 impl std::fmt::Debug for Resolver {
@@ -227,7 +229,21 @@ impl Resolver {
             recursor: None,
             fail_mode: FailMode::Open,
             filter_failures: AtomicU64::new(0),
+            span_details: false,
         }
+    }
+
+    /// Whether the spans of forwarded and recursive queries name the name
+    /// looked up and the servers asked (off by default). Spans go only to a
+    /// subscriber that wants them, such as the OpenTelemetry export.
+    #[must_use]
+    pub fn with_span_details(mut self, on: bool) -> Self {
+        self.span_details = on;
+        self.recursor = self
+            .recursor
+            .take()
+            .map(|recursor| recursor.with_span_details(on));
+        self
     }
 
     /// What to do with a query when filtering it fails (open by default).
@@ -316,7 +332,7 @@ impl Resolver {
     /// down with `recursor`, instead of forwarding.
     #[must_use]
     pub fn with_recursor(mut self, recursor: Recursor) -> Self {
-        self.recursor = Some(recursor);
+        self.recursor = Some(recursor.with_span_details(self.span_details));
         self
     }
 
@@ -581,21 +597,40 @@ impl Resolver {
         if let Some(response) = self.cache.as_ref().and_then(|cache| cache.get(query)) {
             return (response, Outcome::Cached);
         }
-        let (mut response, outcome) = if let Some(recursor) = &self.recursor {
-            let (response, server) = recursor.resolve(query).await;
-            (response, server.map_or(Outcome::Failed, Outcome::Recursive))
-        } else if let Some(forwarder) = &self.forwarder {
-            let (response, upstream) = forwarder.forward_from(query).await;
-            (
-                response,
-                upstream.map_or(Outcome::Failed, Outcome::Upstream),
-            )
-        } else {
-            return (
-                Response::for_query(query, ResponseCode::REFUSED),
-                Outcome::Rejected,
-            );
-        };
+        // The slow path, and the only one with a span: cache hits, blocks
+        // and local answers never get here.
+        let span = debug_span!(
+            "resolve",
+            qtype = %query.question.qtype,
+            name = field::Empty,
+            rcode = field::Empty,
+        );
+        if self.span_details {
+            span.record("name", field::display(&query.question.name));
+        }
+        let (mut response, outcome) = async {
+            if let Some(recursor) = &self.recursor {
+                let (response, server) = recursor.resolve(query).await;
+                (response, server.map_or(Outcome::Failed, Outcome::Recursive))
+            } else if let Some(forwarder) = &self.forwarder {
+                let (response, upstream) = forwarder.forward_from(query).await;
+                (
+                    response,
+                    upstream.map_or(Outcome::Failed, Outcome::Upstream),
+                )
+            } else {
+                (
+                    Response::for_query(query, ResponseCode::REFUSED),
+                    Outcome::Rejected,
+                )
+            }
+        }
+        .instrument(span.clone())
+        .await;
+        span.record("rcode", field::display(response.rcode));
+        if outcome == Outcome::Rejected {
+            return (response, outcome);
+        }
         if let Some(protection) = &self.rebinding {
             let removed = protection.apply(&query.question.name, &mut response);
             if removed > 0 {

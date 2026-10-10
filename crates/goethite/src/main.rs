@@ -286,6 +286,7 @@ fn init_logging() {
     let _ = tracing_subscriber::registry()
         .with(stderr)
         .with(telemetry::logs::LogExport.with_filter(telemetry::logs::filter()))
+        .with(telemetry::traces::layer())
         .try_init();
 }
 
@@ -427,7 +428,8 @@ fn resolver(config: &Config, state: &Arc<PolicyState>) -> Result<Resolver> {
     }
     let mut resolver = resolver
         .with_policy(Arc::clone(state))
-        .with_fail_mode(config.filter.on_failure.mode());
+        .with_fail_mode(config.filter.on_failure.mode())
+        .with_span_details(config.telemetry.query_details);
     if let Some(protection) = config.security.rebinding_protection()? {
         resolver = resolver.with_rebinding_protection(protection);
     } else {

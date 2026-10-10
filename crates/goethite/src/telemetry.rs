@@ -14,6 +14,7 @@
 pub(crate) mod logs;
 pub(crate) mod otlp;
 mod queries;
+pub(crate) mod traces;
 
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -79,9 +80,12 @@ impl Telemetry {
             .as_ref()
             .map(|cluster| cluster.node.to_string());
         let resource = resource(instance);
-        let export = otlp::export(&config.telemetry, secrets, resolver, &resource)?;
+        let mut export = otlp::export(&config.telemetry, secrets, resolver, &resource)?;
         if let Some(logs) = &export.logs {
             logs::export_to(logs);
+        }
+        if let Some(processor) = export.traces.take() {
+            traces::export_to(processor, config.telemetry.trace_sample_ratio, &resource);
         }
         Self::build(resource, export)
     }
@@ -188,6 +192,9 @@ impl Telemetry {
     pub(crate) fn shutdown(&self) {
         if let Err(err) = self.provider.shutdown() {
             warn!(%err, "could not send the metrics a last time");
+        }
+        if let Err(err) = traces::shutdown() {
+            warn!(%err, "could not send the last spans");
         }
         if let Some(logs) = &self.logs
             && let Err(err) = logs.shutdown()

@@ -1391,6 +1391,51 @@ mod serving {
         );
     }
 
+    /// With `traces = true`, the slow paths' spans reach the collector:
+    /// the forwarded query (`resolve`, `upstream`) and the API request (by
+    /// its route). The name looked up only with `query_details`.
+    #[test]
+    fn sends_traces_over_otlp() {
+        for details in [false, true] {
+            let (collector, requests) = collector();
+            let mut server = Running::start_with(
+                &format!("otlp_traces_{details}"),
+                upstream(),
+                &format!(
+                    "\n[telemetry]\nendpoint = \"http://{collector}\"\nmetrics = false\n\
+                     logs = false\ntraces = true\ntrace_sample_ratio = 1.0\n\
+                     query_details = {details}\n"
+                ),
+            );
+            let udp = field(&server.wait_for_log(DNS_LISTENING), "udp");
+            let api_addr = field(&server.find_log("API listening"), "address");
+            ask(udp, "traced.example.");
+            let (status, _) = api(api_addr, "GET /api/v1/status HTTP/1.1", "");
+            assert_eq!(status, 200);
+            server.signal("TERM");
+            assert!(server.wait_for_exit().success());
+
+            let mut traces = Vec::new();
+            while let Ok(request) = requests.recv_timeout(Duration::from_secs(2)) {
+                assert!(
+                    request.head.starts_with("POST /v1/traces "),
+                    "{}",
+                    request.head
+                );
+                traces.extend(request.body);
+            }
+            let contains = |text: &str| traces.windows(text.len()).any(|w| w == text.as_bytes());
+            for span in ["resolve", "upstream", "/api/v1/status", "service.name"] {
+                assert!(contains(span), "missing {span} (query_details = {details})");
+            }
+            assert_eq!(
+                contains("traced.example"),
+                details,
+                "query_details = {details}"
+            );
+        }
+    }
+
     #[test]
     fn serves_then_stops_on_sigterm() {
         serves_then_stops_on("TERM");

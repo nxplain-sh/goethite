@@ -37,7 +37,7 @@ use serde::{Deserialize, Deserializer};
 const MAX_CONFIG_LEN: usize = 1024 * 1024;
 
 /// The whole configuration file.
-#[derive(Debug, Default, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Default, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Config {
     /// The `[server]` table.
@@ -411,7 +411,11 @@ const TELEMETRY_INTERVAL: (u64, u64) = (10, 3600);
 
 /// The `[telemetry]` table: sending telemetry to an OpenTelemetry collector
 /// over OTLP/HTTP (ADR 0034). Nothing is sent without an endpoint.
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent on/off switches in the config file"
+)]
+#[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields, default)]
 pub(crate) struct TelemetrySection {
     /// The collector's OTLP/HTTP base URL, such as
@@ -427,6 +431,12 @@ pub(crate) struct TelemetrySection {
     pub metrics: bool,
     /// Whether log records (`INFO` and above) are sent.
     pub logs: bool,
+    /// Whether traces of the slow paths are sent.
+    pub traces: bool,
+    /// The share of traces kept, 0 to 1.
+    pub trace_sample_ratio: f64,
+    /// Whether spans name the names looked up and the servers asked.
+    pub query_details: bool,
     /// Seconds between metric exports.
     pub interval: u64,
 }
@@ -439,6 +449,9 @@ impl Default for TelemetrySection {
             ca_file: None,
             metrics: true,
             logs: true,
+            traces: false,
+            trace_sample_ratio: 0.05,
+            query_details: false,
             interval: 60,
         }
     }
@@ -485,6 +498,9 @@ impl TelemetrySection {
         let (min, max) = TELEMETRY_INTERVAL;
         if !(min..=max).contains(&self.interval) {
             bail!("telemetry.interval must be between {min} and {max} seconds");
+        }
+        if !(0.0..=1.0).contains(&self.trace_sample_ratio) {
+            bail!("telemetry.trace_sample_ratio must be between 0 and 1");
         }
         Ok(())
     }
@@ -1950,6 +1966,7 @@ mod tests {
         let default = Config::parse("").unwrap().telemetry;
         assert_eq!(default.endpoint().unwrap(), None);
         assert!(default.metrics && default.logs);
+        assert!(!default.traces && !default.query_details);
         assert_eq!(default.signal_url("metrics"), None);
         assert!(default.validate().is_ok());
 
@@ -1986,6 +2003,7 @@ mod tests {
                 "endpoint = \"https://c.example\"\ninterval = 5",
                 "between 10 and 3600",
             ),
+            ("trace_sample_ratio = 1.5", "between 0 and 1"),
         ] {
             let config = Config::parse(&format!("[telemetry]\n{bad}")).unwrap();
             let err = config.telemetry.validate().unwrap_err().to_string();

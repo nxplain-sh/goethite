@@ -237,17 +237,20 @@ anyone.
 
 ## `[telemetry]`
 
-Sends goethite's metrics and log records to an OpenTelemetry collector over OTLP/HTTP, as well as
-serving the metrics at `/metrics` and writing the log to standard error. Nothing is sent without
-`endpoint`. See [Metrics and telemetry](../observability/).
+Sends goethite's metrics, log records and, if turned on, traces to an OpenTelemetry collector over
+OTLP/HTTP, as well as serving the metrics at `/metrics` and writing the log to standard error.
+Nothing is sent without `endpoint`. See [Metrics and telemetry](../observability/).
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `endpoint` | unset | The collector's OTLP/HTTP base URL, `http://` or `https://`, such as `https://collector.example:4318`. goethite appends `/v1/metrics` and `/v1/logs`. |
+| `endpoint` | unset | The collector's OTLP/HTTP base URL, `http://` or `https://`, such as `https://collector.example:4318`. goethite appends `/v1/metrics`, `/v1/logs` and `/v1/traces`. |
 | `headers_file` | unset | A file of `Name: value` lines sent as headers with every export, such as an API key: at most 16 headers and 8 KiB. Blank lines and lines starting with `#` are skipped. |
 | `ca_file` | unset | CA certificates (PEM) to verify the collector with, instead of the public roots. |
 | `metrics` | `true` | Whether the metrics are sent. |
 | `logs` | `true` | Whether log records are sent: those at `INFO` and above, whatever `RUST_LOG` lets through to standard error. |
+| `traces` | `false` | Whether traces are sent: spans of forwarded and recursive queries, list downloads, filter builds, the cluster and API requests. |
+| `trace_sample_ratio` | `0.05` | The share of traces kept, 0 to 1. A trace is kept or dropped whole. |
+| `query_details` | `false` | Whether spans name the name looked up and, with recursion, the servers asked. |
 | `interval` | `60` | Seconds between exports, 10 to 3600. |
 
 goethite resolves the collector's name through its own upstreams and
