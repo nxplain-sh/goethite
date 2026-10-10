@@ -1,0 +1,23 @@
+# goethite's Helm chart: one node, DNS on port 53, its store and downloaded
+# lists on a PersistentVolumeClaim. values.yaml explains every setting and the
+# install guide shows the whole deployment:
+# https://nxplain-sh.github.io/goethite/install/
+apiVersion: v2
+name: goethite
+description: A self-hosted, security-hardened DNS filtering resolver
+type: application
+# The workspace version, bumped with a release like the crates' (docs/releases.md).
+version: "0.6.0"
+# The image tag the chart runs: the newest release of this minor version, as
+# the Compose files do, so a patch release arrives with `helm upgrade`. The
+# next minor needs a new chart; before 1.0 it may change the config format.
+# `cargo xtask versions` checks both fields against Cargo.toml.
+appVersion: "0.6"
+home: https://nxplain-sh.github.io/goethite/
+sources:
+  - https://github.com/nxplain-sh/goethite
+keywords:
+  - dns
+  - dns-filter
+  - adblock
+  - adguard
