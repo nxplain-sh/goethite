@@ -186,6 +186,21 @@ jobs:
             systemd-analyze verify "$RUNNER_TEMP/$unit.service"
           done
 
+  # Helm ships with the runner image. A template error would keep users from
+  # installing the chart; lint it, and render both shapes, unprivileged and on
+  # the host's network, and one with a user's config.
+  helm:
+    name: helm
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: helm lint deploy/helm/goethite
+      - run: helm template goethite deploy/helm/goethite > /dev/null
+      - run: helm template goethite deploy/helm/goethite --set-file config=deploy/container/goethite.toml > /dev/null
+      - run: helm template goethite deploy/helm/goethite --set hostNetwork=true --set persistence.enabled=false > /dev/null
+
   # Breaking changes to /api/v1 fail a pull request unless it carries the
   # `api-breaking` label. The committed openapi.json is checked against the
   # code by the test job; this compares it with the base branch's.

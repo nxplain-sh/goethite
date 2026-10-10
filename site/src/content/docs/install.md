@@ -101,6 +101,27 @@ and the web UI answer inside the container only until you set an admin token the
 publish port 8053. To upgrade, pull the new tag and recreate the container: unlike the packages, a
 container restart drops queries for a second or two.
 
+### On Kubernetes (Helm)
+
+The Helm chart in `deploy/helm/goethite` runs one node: DNS on port 53, the store and the
+downloaded lists on a PersistentVolumeClaim, and the image's own config until you set yours.
+
+```sh
+git clone --depth 1 https://github.com/nxplain-sh/goethite
+helm install goethite ./goethite/deploy/helm/goethite
+```
+
+By default the pod runs as 65532 with no capabilities and a sysctl that lets it bind port 53 in
+its own network namespace (the same shape as the Compose file above), and in-cluster clients
+point at the Service. `--set hostNetwork=true` answers on every node's port 53 instead, where your
+whole network can point at it and goethite sees each client's own address; that pod starts as
+root to bind the port, as the cluster's Compose files do. Paste a whole `goethite.toml` into the
+chart's `config` value to change anything. The [API and the web UI](../api/) listen inside the pod
+only, so add `[api] listen = "0.0.0.0:8053"` and a token hash there, then reach them with
+`kubectl port-forward`. The chart deploys one node: not the cluster or the witness of
+[High availability](../ha/). On Kubernetes those need a shape of their own, so until it exists,
+use the Compose files or the packages there.
+
 ### From source
 
 Install Rust with [rustup](https://rustup.rs), a C compiler (`build-essential` on Debian and

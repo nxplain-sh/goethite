@@ -1,0 +1,12 @@
+{{- if .Values.config }}
+# The user's goethite.toml, mounted over the image's own.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "goethite.fullname" . }}
+  labels:
+    {{- include "goethite.labels" . | nindent 4 }}
+data:
+  goethite.toml: |
+    {{- .Values.config | nindent 4 }}
+{{- end }}

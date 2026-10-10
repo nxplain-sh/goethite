@@ -1,0 +1,20 @@
+{{- if .Values.persistence.enabled }}
+# The store and the downloaded lists. ReadWriteOnce: one pod writes it, and
+# the Deployment recreates rather than rolls it, so no new pod meets the old
+# one's claim.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "goethite.fullname" . }}
+  labels:
+    {{- include "goethite.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.persistence.size }}
+  {{- with .Values.persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+{{- end }}

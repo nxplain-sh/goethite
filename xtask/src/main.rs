@@ -188,8 +188,9 @@ fn toolchain() -> Result {
 
 /// A release bumps one version in several places: the internal crates'
 /// `version` in `[workspace.dependencies]`, the web UI's package.json and
-/// its lockfile, whose version names the web UI in its SBOM, and the image
-/// tag in the Compose files, which is the minor version.
+/// its lockfile, whose version names the web UI in its SBOM, the Helm
+/// chart's `version`, and the image tag in the Compose files and the chart's
+/// `appVersion`, which is the minor version.
 fn versions() -> Result {
     let root = root()?;
     let manifest = root.join("Cargo.toml");
@@ -232,6 +233,26 @@ fn versions() -> Result {
         for tag in tags.into_iter().filter(|tag| *tag != minor) {
             wrong.push(format!("{name} runs {tag}, not {minor}"));
         }
+    }
+    // The Helm chart carries the workspace version, and, as the Compose files
+    // run the newest release of this minor version, `appVersion` is its image
+    // tag.
+    let chart = root.join("deploy/helm/goethite/Chart.yaml");
+    let chart_name = chart.strip_prefix(&root)?.display().to_string();
+    let chart_text = fs::read_to_string(&chart)?;
+    let chart_version = quoted_after(&chart_text, "version: ");
+    if chart_version.as_deref() != Some(version.as_str()) {
+        wrong.push(format!(
+            "{chart_name} has chart version {}",
+            chart_version.as_deref().unwrap_or("none")
+        ));
+    }
+    let app_version = quoted_after(&chart_text, "appVersion: ");
+    if app_version.as_deref() != Some(minor.as_str()) {
+        wrong.push(format!(
+            "{chart_name} runs {}, not {minor}",
+            app_version.as_deref().unwrap_or("no image tag")
+        ));
     }
     if wrong.is_empty() {
         say(&format!("everything carries version {version}"));

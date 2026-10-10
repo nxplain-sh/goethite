@@ -39,10 +39,11 @@ the workflow does (it needs docker or podman), if you want to try the build firs
 
    - Bump the version: `workspace.package.version` and the internal crates in
      `[workspace.dependencies]` in `Cargo.toml`, `version` in `web/package.json` and both places
-     in `web/package-lock.json`, and, for a minor, the image tag (`X.Y`) in every `compose.yaml`
-     under `deploy/container/`. `cargo xtask versions` checks they agree. Regenerate the OpenAPI
-     document (`GOETHITE_UPDATE_OPENAPI=1 cargo test -p goethite-api --test openapi`), whose
-     version follows.
+     in `web/package-lock.json`, the Helm chart's `version` and, for a minor, its `appVersion` in
+     `deploy/helm/goethite/Chart.yaml`, and, for a minor, the image tag (`X.Y`) in every
+     `compose.yaml` under `deploy/container/`. `cargo xtask versions` checks they agree.
+     Regenerate the OpenAPI document (`GOETHITE_UPDATE_OPENAPI=1 cargo test -p goethite-api
+     --test openapi`), whose version follows.
    - In `CHANGELOG.md`, turn `## [Unreleased]` into `## [X.Y.Z] - <date>`, add a new empty
      `## [Unreleased]` above it, and update the compare links at the bottom. The release notes are
      taken from this section, so it reads as sentences for users, not as a list of commits.

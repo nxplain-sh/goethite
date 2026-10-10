@@ -7,6 +7,16 @@ configuration format.
 
 ## [Unreleased]
 
+### Added
+
+- **A Helm chart**, in `deploy/helm/goethite`: one node on Kubernetes, DNS on port 53 (UDP and
+  TCP), the store and the downloaded lists on a PersistentVolumeClaim, and the image's own config
+  until you paste a `goethite.toml` into the chart's `config`. By default the pod runs
+  unprivileged (65532, no capabilities) with a pod sysctl to bind port 53; `--set
+  hostNetwork=true` answers on every node's port 53 instead, with real client addresses. CI lints
+  the chart and renders its shapes. See
+  [Install on Linux](https://nxplain-sh.github.io/goethite/install/#on-kubernetes-helm).
+
 ## [0.6.0] - 2026-10-10
 
 ### Added

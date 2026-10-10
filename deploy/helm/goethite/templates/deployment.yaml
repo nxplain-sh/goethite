@@ -1,0 +1,120 @@
+# One goethite node. The store is one redb file on one volume, so the
+# Deployment recreates its pod instead of rolling it: two pods must never
+# write the same store, and a recreate stops DNS for a second or two, as a
+# container restart does (ADR 0036).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "goethite.fullname" . }}
+  labels:
+    {{- include "goethite.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "goethite.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "goethite.selectorLabels" . | nindent 8 }}
+      {{- if .Values.config }}
+      annotations:
+        # A changed config rolls the pod out.
+        checksum/config: {{ .Values.config | sha256sum }}
+      {{- end }}
+    spec:
+      # goethite needs nothing from the API server.
+      automountServiceAccountToken: false
+      {{- if .Values.hostNetwork }}
+      hostNetwork: true
+      # A host-network pod resolves with the node's resolver by default;
+      # goethite downloads its filter lists by name.
+      dnsPolicy: ClusterFirstWithHostNet
+      {{- end }}
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+        {{- if .Values.hostNetwork }}
+        # Port 53 on the host's network: the sysctl below would belong to the
+        # host and a pod cannot set it, so the image starts as root, binds,
+        # switches to 65532 itself and gives the capabilities up, as the
+        # cluster's Compose file does.
+        runAsUser: 0
+        {{- else }}
+        runAsUser: 65532
+        runAsGroup: 65532
+        runAsNonRoot: true
+        # The volume goes to the user goethite runs as.
+        fsGroup: 65532
+        # Lets 65532 bind port 53 in the pod's network namespace only, as
+        # compose.yaml does; the host's setting is untouched.
+        sysctls:
+          - name: net.ipv4.ip_unprivileged_port_start
+            value: "53"
+        {{- end }}
+      containers:
+        - name: goethite
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: dns-udp
+              containerPort: 53
+              protocol: UDP
+            - name: dns-tcp
+              containerPort: 53
+              protocol: TCP
+          # No image can be probed for health yet (ADR 0036); a TCP connect
+          # says the listener answers.
+          livenessProbe:
+            tcpSocket:
+              port: dns-tcp
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+              {{- if .Values.hostNetwork }}
+              add:
+                - NET_BIND_SERVICE
+                - SETUID
+                - SETGID
+              {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/goethite
+            {{- if .Values.config }}
+            - name: config
+              mountPath: /etc/goethite/goethite.toml
+              subPath: goethite.toml
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: data
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "goethite.fullname" . }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        {{- if .Values.config }}
+        - name: config
+          configMap:
+            name: {{ include "goethite.fullname" . }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

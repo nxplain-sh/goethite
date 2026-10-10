@@ -1,6 +1,6 @@
 # ADR 0036: Compose files for one node and for a cluster, each as unprivileged as its network allows, on Debian 13
 
-- **Status:** Accepted, extends [ADR 0027](0027-packages-and-container-image.md)
+- **Status:** Accepted, extends [ADR 0027](0027-packages-and-container-image.md), extended by [ADR 0037](0037-helm-chart.md)
 - **Date:** 2026-10-10
 
 ## Context

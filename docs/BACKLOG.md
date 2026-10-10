@@ -575,6 +575,13 @@ Phase 3's scope shipped in v0.3.0. These items came up along the way.
   much slower under goethite's multi-threaded load, so this needs another allocator (a new
   dependency) and a bench against the glibc build first (see ADR 0026).
 
+- **[later] A chart repository for the Helm chart,** so `helm install` needs no clone, and an
+  Artifact Hub listing (ADR 0037). OCI on ghcr.io is the obvious home; it needs release
+  automation like the packages' and the image's.
+- **[later] The cluster and the witness in the Helm chart.** The chart deploys one node
+  (ADR 0037); a Kubernetes cluster wants several members behind one address and no floating IP,
+  which is a different shape from Raft plus VRRP and needs its own ADR and HA guide section.
+
 - **[later] Continuous private fuzzing** (a private repository on a schedule, or OSS-Fuzz) once
   goethite has users who would feel a regression between releases (ADR 0028).
 - **[later] CI canary job** on `beta` or the latest stable toolchain, to catch upcoming lint and
