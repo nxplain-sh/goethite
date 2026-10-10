@@ -51,7 +51,11 @@ impl RebindingProtection {
             .additional
             .retain(|record| !record.ip().is_some_and(is_private));
         let mut removed = before.saturating_sub(response.answers.len());
-        for record in response.answers.iter_mut().chain(response.additional.iter_mut()) {
+        for record in response
+            .answers
+            .iter_mut()
+            .chain(response.additional.iter_mut())
+        {
             removed = removed.saturating_add(record.prune_svc_hints(is_private));
         }
         removed

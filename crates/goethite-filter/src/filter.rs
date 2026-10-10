@@ -753,7 +753,8 @@ mod tests {
         // `$badfilter` names the same modifiers too.
         let important_left = filter("||ads.example^$important\n||ads.example^$badfilter\n");
         assert_eq!(kind(&important_left, "ads.example"), "blocked");
-        let important_gone = filter("||ads.example^$important\n||ads.example^$important,badfilter\n");
+        let important_gone =
+            filter("||ads.example^$important\n||ads.example^$important,badfilter\n");
         assert_eq!(kind(&important_gone, "ads.example"), "pass");
         // It reaches an exception, across lists.
         let mut builder = FilterBuilder::new();

@@ -58,11 +58,9 @@ fn blocked_ip_response(
     let name = query.question.name.clone();
     match query.question.qtype {
         RecordType::A => {
-            response.answers.push(Record::a(
-                name,
-                ttl,
-                ipv4.unwrap_or(Ipv4Addr::UNSPECIFIED),
-            ));
+            response
+                .answers
+                .push(Record::a(name, ttl, ipv4.unwrap_or(Ipv4Addr::UNSPECIFIED)));
         }
         RecordType::AAAA => {
             response.answers.push(Record::aaaa(
