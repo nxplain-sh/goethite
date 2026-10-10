@@ -84,9 +84,11 @@ sudo tests/chaos/chaos.sh target/release/goethite
 
 CI (`.github/workflows/ci.yaml`) runs fmt, clippy and rustdoc with `-D warnings`, shellcheck, the
 tests on linux amd64 (`ubuntu-24.04`) and arm64 (`ubuntu-24.04-arm`), an MSRV check, `cargo deny`
-and `cargo audit`.
-The fuzz and chaos workflows run weekly and on demand. All actions are pinned to commit SHAs. Keep
-it that way when you edit workflows.
+and `cargo audit`. It runs on pull requests, weekly and on demand, but not on pushes: a pull
+request's run already tests the merge result. A pull request that only changes Markdown files,
+`docs/` or `site/` runs no CI at all.
+The fuzz targets build on pull requests that change the parsers; the chaos lab runs weekly and on
+demand. All actions are pinned to commit SHAs. Keep it that way when you edit workflows.
 
 ## Fuzzing
 

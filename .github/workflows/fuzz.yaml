@@ -6,9 +6,9 @@ name: Fuzz targets
 # log and the artifacts, before its fix. Maintainers fuzz with
 # `cargo xtask fuzz` before every release (docs/adr/0028-fuzzing-off-public-ci.md).
 
+# No `push` trigger, for the reason in ci.yaml: the pull request's run has
+# already built the merge result.
 on:
-  push:
-    branches: [main, development]
   pull_request:
     paths:
       - fuzz/**
