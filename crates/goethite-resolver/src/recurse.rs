@@ -13,7 +13,8 @@
 //! Everything is bounded: [`MAX_SENT`] queries and the configured time for
 //! one client query, all lookups included; [`MAX_REFERRALS`] referrals for
 //! one name; name server address lookups nested [`MAX_DEPTH`] deep; the
-//! CNAME chain; exchanges in flight; and the infrastructure tables.
+//! CNAME chain; exchanges in flight, per server and per zone too; and the
+//! infrastructure tables.
 //!
 //! Answers are validated with DNSSEC (RFC 4033 to 4035, RFC 5155) unless
 //! that is turned off or the client sets CD: secure ones get the AD bit,
@@ -221,6 +222,20 @@ impl Budget {
             return Err(RecurseError::Deadline);
         }
         Ok(left)
+    }
+}
+
+/// A fetch slot claimed for one server and zone, released when the query
+/// ends either way.
+struct Fetch<'a> {
+    infra: &'a Infra,
+    ip: IpAddr,
+    zone: Name,
+}
+
+impl Drop for Fetch<'_> {
+    fn drop(&mut self) {
+        self.infra.release_fetch(self.ip, &self.zone);
     }
 }
 
@@ -681,7 +696,7 @@ impl Recursor {
                 }
                 tried.insert(ip);
                 let server = SocketAddr::new(ip, self.config.port);
-                let response = match self.query(server, name, qtype, budget).await {
+                let response = match self.query(zone, server, name, qtype, budget).await {
                     Ok(response) => response,
                     Err(err) if err.is_fatal() => return Err(err),
                     Err(_) => continue,
@@ -752,6 +767,7 @@ impl Recursor {
     /// Sends one query to `server`, in a span of its own.
     async fn query(
         &self,
+        zone: &Name,
         server: SocketAddr,
         name: &Name,
         qtype: RecordType,
@@ -769,7 +785,7 @@ impl Recursor {
             span.record("name", field::display(name));
         }
         let result = self
-            .query_unspanned(server, name, qtype, budget)
+            .query_unspanned(zone, server, name, qtype, budget)
             .instrument(span.clone())
             .await;
         match &result {
@@ -783,22 +799,31 @@ impl Recursor {
     /// again without 0x20 if the server does not keep case.
     async fn query_unspanned(
         &self,
+        zone: &Name,
         server: SocketAddr,
         name: &Name,
         qtype: RecordType,
         budget: &mut Budget,
     ) -> Result<Response, RecurseError> {
         let ip = server.ip();
+        // A server, or a zone, that stalls may not take the whole pool of
+        // in-flight exchanges: refuse rather than queue.
+        if !self.infra.claim_fetch(ip, zone) {
+            debug!(%server, %zone, "too many fetches in flight; not asking");
+            return Err(RecurseError::NoServer);
+        }
+        let _fetch = Fetch {
+            infra: &self.infra,
+            ip,
+            zone: zone.clone(),
+        };
         let mut randomize = self.infra.keeps_case(ip);
         let mut tcp = false;
         loop {
             let left = budget.spend()?;
             let outgoing = outgoing(name, qtype, randomize, self.config.dnssec);
-            let wait = if tcp {
-                left
-            } else {
-                self.infra.attempt_timeout(ip).min(left)
-            };
+            // TCP too waits a few round-trip times, not the whole budget.
+            let wait = self.infra.attempt_timeout(ip).min(left);
             let started = Instant::now();
             let result = timeout(wait, async {
                 let _permit = self.in_flight.acquire().await;

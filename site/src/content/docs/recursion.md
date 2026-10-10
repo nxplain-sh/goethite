@@ -36,7 +36,9 @@ for a name nearby goes straight to the right server.
   the name in random case (0x20) that the answer must repeat exactly, and TCP when an answer
   is truncated. A server that does not repeat the case is asked without it.
 - **Servers** that answer slowly or not at all are tried last; one that fails three times in a
-  row is set aside for a minute.
+  row is set aside for a minute. Waits follow each server's round-trip time, TCP retries too,
+  and only a few dozen queries may be in flight to one server, or a few hundred to one zone, so
+  one stalling server cannot take the whole recursion budget.
 - **No self-queries.** Recursion never asks loopback, unspecified, multicast or broadcast
   addresses, or any of the node's own listen addresses, whatever a referral's glue says. A
   delegation pointing there fails instead of resolving against goethite itself.

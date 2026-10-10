@@ -30,6 +30,16 @@ const FAILURES_BEFORE_DOWN: u32 = 3;
 /// How long.
 const DOWN_FOR: Duration = Duration::from_secs(60);
 
+/// The most queries in flight to one server address at once: a server that
+/// stalls must not take the whole recursion pool (BIND's
+/// `fetches-per-server`).
+pub(super) const MAX_FETCHES_PER_SERVER: u32 = 32;
+
+/// The most queries in flight for one zone at once (BIND's
+/// `fetches-per-zone`): a zone delegated to many stalling servers must not
+/// either.
+pub(super) const MAX_FETCHES_PER_ZONE: u32 = 128;
+
 /// The time to keep something with `ttl`.
 fn keep_for(ttl: u32) -> Duration {
     Duration::from_secs(u64::from(ttl.clamp(MIN_TTL, MAX_TTL)))
@@ -156,12 +166,20 @@ struct Trusted {
     expires: Instant,
 }
 
+/// Queries in flight right now, by server address and by zone.
+#[derive(Default)]
+struct Fetches {
+    servers: HashMap<IpAddr, u32>,
+    zones: HashMap<Name, u32>,
+}
+
 /// The infrastructure tables.
 pub(super) struct Infra {
     delegations: Mutex<Bounded<Name, Delegation>>,
     addresses: Mutex<Bounded<Name, Addresses>>,
     servers: Mutex<Bounded<IpAddr, Server>>,
     trust: Mutex<Bounded<Name, Trusted>>,
+    fetches: Mutex<Fetches>,
 }
 
 impl Infra {
@@ -172,6 +190,40 @@ impl Infra {
             addresses: Mutex::new(Bounded::new(entries)),
             servers: Mutex::new(Bounded::new(entries)),
             trust: Mutex::new(Bounded::new(entries)),
+            fetches: Mutex::new(Fetches::default()),
+        }
+    }
+
+    /// Claims one fetch slot for `ip` and `zone`; false when either limit is
+    /// already reached. Released with [`Infra::release_fetch`].
+    pub(super) fn claim_fetch(&self, ip: IpAddr, zone: &Name) -> bool {
+        let mut fetches = self.fetches.lock().unwrap_or_else(PoisonError::into_inner);
+        if fetches.servers.get(&ip).copied().unwrap_or(0) >= MAX_FETCHES_PER_SERVER
+            || fetches.zones.get(zone).copied().unwrap_or(0) >= MAX_FETCHES_PER_ZONE
+        {
+            return false;
+        }
+        let server = fetches.servers.entry(ip).or_default();
+        *server = server.saturating_add(1);
+        let zoned = fetches.zones.entry(zone.clone()).or_default();
+        *zoned = zoned.saturating_add(1);
+        true
+    }
+
+    /// Releases a slot claimed with [`Infra::claim_fetch`].
+    pub(super) fn release_fetch(&self, ip: IpAddr, zone: &Name) {
+        let mut fetches = self.fetches.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(count) = fetches.servers.get_mut(&ip) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                fetches.servers.remove(&ip);
+            }
+        }
+        if let Some(count) = fetches.zones.get_mut(zone) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                fetches.zones.remove(zone);
+            }
         }
     }
 

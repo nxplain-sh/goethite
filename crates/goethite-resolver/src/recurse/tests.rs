@@ -10,6 +10,7 @@
 
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -17,7 +18,8 @@ use goethite_proto::{
     Edns, Name, Query, Question, Record, RecordClass, RecordType, Response, ResponseCode,
 };
 
-use super::{Exchanged, Network, Recursor, RecursorConfig};
+use super::infra::MAX_FETCHES_PER_SERVER;
+use super::{Budget, Exchanged, Network, Recursor, RecursorConfig};
 use crate::exchange::ExchangeError;
 
 fn name(text: &str) -> Name {
@@ -35,6 +37,9 @@ struct Quirks {
     silent: bool,
     /// Truncates every UDP answer.
     truncates: bool,
+    /// Never answers over TCP: pairs with `truncates` to stall the TCP
+    /// fallback.
+    tcp_silent: bool,
     /// Lowercases the question, so 0x20 fails.
     lowercases: bool,
     /// Says NXDOMAIN for names that only have names below them.
@@ -109,6 +114,9 @@ struct Server {
 struct Fake {
     servers: HashMap<IpAddr, Server>,
     log: Mutex<Vec<(IpAddr, String, RecordType, bool)>>,
+    /// Exchanges running right now, and the most seen at once.
+    in_flight: AtomicUsize,
+    max_in_flight: AtomicUsize,
 }
 
 impl Fake {
@@ -135,9 +143,13 @@ impl Fake {
         self.log.lock().unwrap().clone()
     }
 
+    fn max_in_flight(&self) -> usize {
+        self.max_in_flight.load(Ordering::Relaxed)
+    }
+
     fn answer(&self, server: IpAddr, query: &Query, tcp: bool) -> Option<Response> {
         let server = self.servers.get(&server)?;
-        if server.quirks.silent {
+        if server.quirks.silent || (tcp && server.quirks.tcp_silent) {
             return None;
         }
         let qname = &query.question.name;
@@ -328,6 +340,15 @@ impl Fake {
 impl Network for Fake {
     fn exchange<'a>(&'a self, server: SocketAddr, query: &'a Query, tcp: bool) -> Exchanged<'a> {
         Box::pin(async move {
+            struct Running<'a>(&'a AtomicUsize);
+            impl Drop for Running<'_> {
+                fn drop(&mut self) {
+                    self.0.fetch_sub(1, Ordering::Relaxed);
+                }
+            }
+            let running = self.in_flight.fetch_add(1, Ordering::Relaxed) + 1;
+            self.max_in_flight.fetch_max(running, Ordering::Relaxed);
+            let _running = Running(&self.in_flight);
             self.log.lock().unwrap().push((
                 server.ip(),
                 query.question.name.to_string().to_lowercase(),
@@ -547,6 +568,96 @@ async fn loopback_and_local_addresses_are_never_queried() {
             .iter()
             .all(|(address, ..)| *address != ip("10.0.3.1")),
         "the node's own address is never queried"
+    );
+}
+
+/// A root server that truncates every UDP answer and never answers the TCP
+/// retry: every query to it stalls until its timeout.
+fn stalled_root() -> Fake {
+    let mut fake = Fake::default();
+    fake.serve(
+        "10.0.0.1",
+        ".",
+        vec![
+            Record::ns(Name::root(), 172_800, name("a.root.")),
+            Record::a(name("a.root."), 172_800, Ipv4Addr::new(10, 0, 0, 1)),
+        ],
+    )
+    .quirks(
+        "10.0.0.1",
+        Quirks {
+            truncates: true,
+            tcp_silent: true,
+            ..Quirks::default()
+        },
+    );
+    fake
+}
+
+#[tokio::test]
+async fn fetches_to_one_server_are_capped() {
+    let mut config = config();
+    config.total_timeout = Duration::from_millis(500);
+    let (recursor, fake) = recursor(stalled_root(), config);
+    let recursor = Arc::new(recursor);
+    let mut tasks = Vec::new();
+    for i in 0..64 {
+        let recursor = Arc::clone(&recursor);
+        tasks.push(tokio::spawn(async move {
+            recursor
+                .resolve(&query(&format!("n{i}.example."), RecordType::A))
+                .await
+        }));
+    }
+    for task in tasks {
+        let (response, _) = task.await.unwrap();
+        assert_eq!(response.rcode, ResponseCode::SERV_FAIL);
+    }
+    let peak = fake.max_in_flight();
+    assert!(peak > 0);
+    assert!(
+        peak <= usize::try_from(MAX_FETCHES_PER_SERVER).unwrap(),
+        "a stalling server held {peak} exchanges at once"
+    );
+}
+
+#[tokio::test]
+async fn tcp_fallback_waits_the_server_timeout_not_the_whole_budget() {
+    let mut fake = Fake::default();
+    fake.serve(
+        "10.0.9.9",
+        "example.",
+        vec![Record::a(
+            name("www.example."),
+            300,
+            Ipv4Addr::new(192, 0, 2, 1),
+        )],
+    )
+    .quirks(
+        "10.0.9.9",
+        Quirks {
+            truncates: true,
+            tcp_silent: true,
+            ..Quirks::default()
+        },
+    );
+    let (recursor, _) = recursor(fake, config());
+    let mut budget = Budget::new(Duration::from_secs(10));
+    let started = std::time::Instant::now();
+    let result = recursor
+        .query_unspanned(
+            &name("example."),
+            SocketAddr::new(ip("10.0.9.9"), 53),
+            &name("www.example."),
+            RecordType::A,
+            &mut budget,
+        )
+        .await;
+    assert!(result.is_err());
+    assert!(
+        started.elapsed() < Duration::from_millis(2_500),
+        "TCP waited the whole budget: {:?}",
+        started.elapsed()
     );
 }
 
