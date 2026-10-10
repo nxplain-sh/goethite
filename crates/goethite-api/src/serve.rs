@@ -105,6 +105,8 @@ fn bind_listener(addr: SocketAddr) -> io::Result<StdListener> {
     socket.set_reuse_address(true)?;
     socket.bind(&SockAddr::from(addr))?;
     socket.listen(TCP_BACKLOG)?;
+    // Tokio takes the listener over as it is.
+    socket.set_nonblocking(true)?;
     Ok(socket.into())
 }
 
