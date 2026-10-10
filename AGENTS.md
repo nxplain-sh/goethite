@@ -48,7 +48,7 @@ tests/chaos/          chaos lab: two nodes, a witness and a client in network na
 tests/packages/       installs the .deb and .rpm on each supported distribution
 deploy/               hardened systemd units, server config, package and container image definitions
 config/               example config
-docs/                 architecture, threat model, ADRs
+docs/                 architecture, threat model, branching and releases, ADRs
 ```
 
 The layout follows the [standard Rust project layout](https://github.com/miguelmartens/standard-rust-project-layout); [ADR 0025](docs/adr/0025-standard-rust-project-layout.md) records where goethite deviates and why. Read it before adding a crate, a top-level directory or a workspace lint.
@@ -108,7 +108,7 @@ Shared by the web UI and (where possible) the TUI.
 ## How to work in this repo
 
 - Plan before coding: for any non-trivial task, outline the approach and files to touch first.
-- Branch from and target `development`; `main` takes pull requests from `development` only ([Branches](CONTRIBUTING.md#branches)).
+- Branch from `development` as `<kind>/<what>` (`feature/`, `fix/`, `refactor/`, `chore/`, `docs/`) and target `development`; rename a tool-generated branch before its first push. Only releases target `main`. Names, merging and hotfixes: [`docs/branching.md`](docs/branching.md); cutting a release: [`docs/releases.md`](docs/releases.md).
 - Keep each change to its task. Note other work you notice in [`docs/BACKLOG.md`](docs/BACKLOG.md) instead of building it.
 - Ask before adding a dependency, changing the public API, or changing anything in the security rules above.
 - Before saying a task is done: `cargo xtask ci` and (for parser changes) a short fuzz run pass. Summarize what changed and what is left.
