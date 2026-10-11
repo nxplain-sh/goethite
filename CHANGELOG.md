@@ -9,6 +9,10 @@ configuration format.
 
 ### Added
 
+- **`$dnsrewrite` rules**: the short forms answer a name with an address (`$dnsrewrite=192.0.2.10`,
+  or an IPv6 one for `AAAA`) or a response code (`NXDOMAIN`, `REFUSED`, `NOERROR`), before any
+  other rule, blocking included. `@@…$dnsrewrite` disables the rewrite for the name, and a
+  `$badfilter` names one to drop. The full `RCODE;RRTYPE;VALUE` form stays unsupported.
 - **Blocked names can answer with an address of your own**: `block_response = "custom_ip"` with
   `blocking_ipv4` and `blocking_ipv6` (through the API or the web UI's Settings), for a block page
   server. A family left unset answers the null address.

@@ -44,6 +44,8 @@ fn rule() -> impl Strategy<Value = (Source, Rule)> {
                     action,
                     important,
                     badfilter,
+                    rewrite: None,
+                    rewrite_off: false,
                 },
             )
         })

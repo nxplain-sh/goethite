@@ -27,7 +27,7 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use goethite_filter::{Action, Match, Sources, Verdict};
+use goethite_filter::{Action, Match, Rewrite, Sources, Verdict};
 use tracing::{Instrument as _, debug, debug_span, error, field};
 
 use goethite_proto::{
@@ -366,6 +366,8 @@ impl Resolver {
     ///   for every client and before the filter, CNAMEs followed; a CNAME
     ///   that leaves the local records is followed by its target's answer,
     ///   resolved as below;
+    /// - a name a `$dnsrewrite` rule applies to: that address (for the
+    ///   query's own family) or response code, before any other rule;
     /// - a name the filter blocks for the client's group: the configured
     ///   block response, even if an answer is cached;
     /// - a search host, when the group has safe search on: a CNAME to the
@@ -521,6 +523,16 @@ impl Resolver {
     ) -> (Response, Outcome, Option<FilterHit>) {
         let question = &query.question;
         let rejected = |rcode| (Response::for_query(query, rcode), Outcome::Rejected, None);
+        // A `$dnsrewrite` rule answers instead of resolving, and outranks
+        // every other rule, blocking included.
+        if asker.filtering
+            && let Some(policy) = &asker.policy
+            && let Some(rewrite) =
+                guard::guarded(|| policy.filter().rewrite(&question.name, asker.sources)).flatten()
+            && let Some(answer) = rewritten(query, policy, rewrite)
+        {
+            return answer;
+        }
         let mut exception = None;
         if let (true, Some(policy)) = (asker.filtering, &asker.policy) {
             // A blocked service is the group's own choice: no list's
@@ -780,6 +792,38 @@ impl Resolver {
 }
 
 /// The block response for `query`, with the rule that decided it.
+/// The answer a `$dnsrewrite` rule gives, if it applies to this query's
+/// type: an address for its own family, or a response code for any. The
+/// other family is left to resolve as usual.
+fn rewritten(
+    query: &Query,
+    policy: &Policy,
+    rewrite: Rewrite,
+) -> Option<(Response, Outcome, Option<FilterHit>)> {
+    match rewrite {
+        Rewrite::Rcode(code) => Some((Response::for_query(query, code), Outcome::Local, None)),
+        Rewrite::Address(address) => {
+            let question = &query.question;
+            let mut response = Response::for_query(query, ResponseCode::NO_ERROR);
+            let ttl = policy.blocked_ttl();
+            match (address, question.qtype) {
+                (IpAddr::V4(address), RecordType::A) => {
+                    response
+                        .answers
+                        .push(Record::a(question.name.clone(), ttl, address));
+                }
+                (IpAddr::V6(address), RecordType::AAAA) => {
+                    response
+                        .answers
+                        .push(Record::aaaa(question.name.clone(), ttl, address));
+                }
+                _ => return None,
+            }
+            Some((response, Outcome::Local, None))
+        }
+    }
+}
+
 fn blocked(
     query: &Query,
     policy: &Policy,
@@ -874,6 +918,79 @@ mod tests {
         assert_eq!((outcome, hit), (Outcome::Failed, None));
         closed.filter_failed(&query);
         assert_eq!(closed.filter_failures(), 2);
+    }
+
+    /// A resolver whose default group filters `list`, with no upstream: a
+    /// name the rules do not answer is REFUSED at once.
+    fn rewriting_resolver(list: &str) -> Resolver {
+        use goethite_filter::{FilterBuilder, Source};
+
+        let mut builder = FilterBuilder::new();
+        builder.add_list(Source::new(0).unwrap(), list);
+        let policy = Policy::new(PolicyParts {
+            filter: Arc::new(builder.build().unwrap()),
+            source_ids: vec!["custom".into()],
+            groups: vec![GroupPolicy::new("default", Sources::ALL)],
+            clients: Vec::new(),
+            block_response: BlockResponse::NullIp,
+            blocked_ttl: 10,
+            protection: true,
+            services: Arc::new(ServiceFilter::empty()),
+            access: Access::default(),
+            records: LocalRecords::default(),
+        })
+        .unwrap();
+        Resolver::new(vec![test_record().unwrap()]).with_policy(Arc::new(PolicyState::new(policy)))
+    }
+
+    #[test]
+    fn dnsrewrite_answers_instead_of_resolving() {
+        let resolver = rewriting_resolver("||ads.example^$dnsrewrite=192.0.2.10\n");
+        let response = resolve(
+            &resolver,
+            &query("ads.example.", RecordType::A, RecordClass::IN),
+        );
+        assert_eq!(response.rcode, ResponseCode::NO_ERROR);
+        assert_eq!(response.answers.len(), 1);
+        assert_eq!(
+            response.answers[0].ip(),
+            Some("192.0.2.10".parse().unwrap())
+        );
+        // The other family has no rewrite and no upstream: REFUSED.
+        let response = resolve(
+            &resolver,
+            &query("ads.example.", RecordType::AAAA, RecordClass::IN),
+        );
+        assert_eq!(response.rcode, ResponseCode::REFUSED);
+
+        // An RCODE rewrite applies to every type.
+        let resolver = rewriting_resolver("||ads.example^$dnsrewrite=NXDOMAIN\n");
+        let response = resolve(
+            &resolver,
+            &query("ads.example.", RecordType::A, RecordClass::IN),
+        );
+        assert_eq!(response.rcode, ResponseCode::NX_DOMAIN);
+
+        // A rewrite outranks a block for the same name.
+        let resolver = rewriting_resolver("||ads.example^\n||ads.example^$dnsrewrite=192.0.2.10\n");
+        let response = resolve(
+            &resolver,
+            &query("ads.example.", RecordType::A, RecordClass::IN),
+        );
+        assert_eq!(
+            response.answers[0].ip(),
+            Some("192.0.2.10".parse().unwrap())
+        );
+
+        // An `@@` marker takes it away again: the block applies.
+        let resolver = rewriting_resolver(
+            "||ads.example^\n||ads.example^$dnsrewrite=192.0.2.10\n@@||ads.example^$dnsrewrite\n",
+        );
+        let response = resolve(
+            &resolver,
+            &query("ads.example.", RecordType::A, RecordClass::IN),
+        );
+        assert_eq!(response.answers[0].ip(), Some(Ipv4Addr::UNSPECIFIED.into()));
     }
 
     /// Resolves without a runtime: the paths tested here never wait.

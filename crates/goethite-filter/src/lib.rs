@@ -17,4 +17,4 @@ pub use filter::{
     Filter, FilterBuilder, FilterError, ListStats, MAX_RULES, MAX_SOURCES, Match, Source, Sources,
     Verdict, reference_check,
 };
-pub use rule::{Action, LineKind, Rule, Scope, parse_line};
+pub use rule::{Action, LineKind, Rewrite, Rule, Scope, parse_line};
