@@ -377,8 +377,8 @@ Phase 3's scope shipped in v0.3.0. These items came up along the way.
   needs goethite to report `RELOADING=1` and `READY=1` around a reload.
 - **[later] Presets in the API and TUI:** presets are applied by the web UI, one change at a
   time; an API call would apply one in a single store transaction, for the TUI and scripts.
-- **[later] `$dnsrewrite=NXDOMAIN` rules,** which only block: the services catalog's iCloud
-  Private Relay uses nothing else, so goethite leaves that service out today.
+- **[later] The iCloud Private Relay service in the catalog:** it uses only `$dnsrewrite=NXDOMAIN`
+  rules, which goethite now supports, so the service can be added.
 - **[P5] Local records in the TUI:** a read-only Records tab (ADR 0029).
 - **[later] More local record types** (TXT, MX, SRV), automatic PTR answers for local `A` and
   `AAAA` records, and local records per group.
@@ -437,8 +437,8 @@ what "match AdGuard Home on everyday filtering" ([`AGENTS.md`](../AGENTS.md)) st
   answers, in the response pass CNAME uncloaking already runs.
 - **[later] A rule tester:** which rule blocks a name, for which client, as an API endpoint and a
   page (AdGuard Home's `check_host`; the TUI could use it too).
-- **[later] `$ctag`, and the rest of `$dnsrewrite`** beyond the `$dnsrewrite=NXDOMAIN` rules noted
-  in Phase 4: answer records and the other RCODEs.
+- **[later] `$ctag`, and the full `$dnsrewrite=RCODE;RRTYPE;VALUE` form:** answer records beyond
+  the short forms.
 - **[later] Per-domain upstreams while forwarding,** the counterpart of the recursing item in
   Phase 4.
 - **[later] Hedged upstream requests:** send a second query after a short delay instead of waiting

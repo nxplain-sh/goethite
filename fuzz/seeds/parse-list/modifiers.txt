@@ -3,3 +3,9 @@
 ||ads.example^$important,badfilter
 @@||good.example^$important
 ||ads.example^$client=1.2.3.4
+||ads.example^$dnsrewrite=192.0.2.10
+||ads.example^$dnsrewrite=2001:db8::10
+||ads.example^$dnsrewrite=NXDOMAIN
+@@||ads.example^$dnsrewrite
+@@||ads.example^$dnsrewrite=192.0.2.10
+||ads.example^$dnsrewrite=NOERROR;A;192.0.2.10

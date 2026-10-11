@@ -24,7 +24,7 @@
 
 use std::net::IpAddr;
 
-use goethite_proto::Name;
+use goethite_proto::{Name, ResponseCode};
 
 /// The longest line accepted; longer lines are invalid.
 pub const MAX_LINE_LEN: usize = 4096;
@@ -49,6 +49,16 @@ pub enum Action {
     Allow,
 }
 
+/// What a `$dnsrewrite` rule answers instead of resolving: the short forms
+/// of the modifier.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Rewrite {
+    /// An IP address: `A` queries for an IPv4 one, `AAAA` for an IPv6 one.
+    Address(IpAddr),
+    /// A response code, such as `NXDOMAIN`.
+    Rcode(ResponseCode),
+}
+
 /// One parsed rule.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Rule {
@@ -64,6 +74,12 @@ pub struct Rule {
     /// The `$badfilter` modifier: the rule disables the rule it names
     /// instead of matching names itself.
     pub badfilter: bool,
+    /// The `$dnsrewrite` modifier with a value: the answer for the name.
+    pub rewrite: Option<Rewrite>,
+    /// The `@@…$dnsrewrite` marker: disables rewrites for the name — every
+    /// one of them when the modifier has no value, and the one with the
+    /// same value when it has one.
+    pub rewrite_off: bool,
 }
 
 impl Rule {
@@ -75,6 +91,8 @@ impl Rule {
             action,
             important: false,
             badfilter: false,
+            rewrite: None,
+            rewrite_off: false,
         }
     }
 
@@ -255,6 +273,17 @@ fn parse_adblock(pattern: &str, action: Action, add: &mut impl FnMut(Rule)) -> L
     if body.contains('^') || body.contains('|') {
         return LineKind::Unsupported("separator inside a pattern");
     }
+    let (rewrite, rewrite_off) = match (action, modifiers.dnsrewrite) {
+        (_, DnsRewrite::Absent) => (None, false),
+        // `@@…$dnsrewrite` disables rewrites; without a value it means
+        // nothing on a blocking rule.
+        (Action::Allow, DnsRewrite::Off) => (None, true),
+        (Action::Block, DnsRewrite::Off) => return LineKind::Unsupported("dnsrewrite form"),
+        // An exception with a value disables that one rewrite; a blocking
+        // rule applies it.
+        (Action::Allow, DnsRewrite::Value(rewrite)) => (Some(rewrite), true),
+        (Action::Block, DnsRewrite::Value(rewrite)) => (Some(rewrite), false),
+    };
     match parse_pattern(body) {
         Ok((name, wildcard)) => {
             let scope = match (wildcard, anchored_subtree) {
@@ -268,11 +297,25 @@ fn parse_adblock(pattern: &str, action: Action, add: &mut impl FnMut(Rule)) -> L
                 action,
                 important: modifiers.important,
                 badfilter: modifiers.badfilter,
+                rewrite,
+                rewrite_off,
             });
             LineKind::Rules(1)
         }
         Err(kind) => kind,
     }
+}
+
+/// The `$dnsrewrite` modifier's three states.
+#[derive(Clone, Copy, Debug, Default)]
+enum DnsRewrite {
+    /// Not present.
+    #[default]
+    Absent,
+    /// `$dnsrewrite` without a value: the `@@` disable marker.
+    Off,
+    /// `$dnsrewrite=VALUE`.
+    Value(Rewrite),
 }
 
 /// The rule modifiers goethite understands. Anything else makes the line
@@ -284,6 +327,8 @@ struct Modifiers {
     important: bool,
     /// `$badfilter`: the rule disables the rule it names.
     badfilter: bool,
+    /// `$dnsrewrite`: a rewrite, a disable marker, or absent.
+    dnsrewrite: DnsRewrite,
 }
 
 impl Modifiers {
@@ -291,16 +336,39 @@ impl Modifiers {
     fn parse(list: &str) -> Result<Self, LineKind> {
         let mut out = Self::default();
         for modifier in list.split(',') {
-            // A value (`$client=1.2.3.4`) is not supported yet either.
-            let name = modifier.split_once('=').map_or(modifier, |(name, _)| name);
-            match name.trim() {
+            let (name, value) = match modifier.split_once('=') {
+                Some((name, value)) => (name.trim(), Some(value.trim())),
+                None => (modifier.trim(), None),
+            };
+            match name {
                 "important" => out.important = true,
                 "badfilter" => out.badfilter = true,
+                "dnsrewrite" => {
+                    out.dnsrewrite = match value {
+                        None => DnsRewrite::Off,
+                        Some(value) => DnsRewrite::Value(parse_rewrite(value)?),
+                    };
+                }
                 _ => return Err(LineKind::Unsupported("modifier")),
             }
         }
         Ok(out)
     }
+}
+
+/// The short forms of `$dnsrewrite=`: an IP address or an RCODE keyword.
+fn parse_rewrite(value: &str) -> Result<Rewrite, LineKind> {
+    if let Ok(address) = value.parse::<IpAddr>() {
+        return Ok(Rewrite::Address(address));
+    }
+    let rcode = match value.to_ascii_uppercase().as_str() {
+        "NXDOMAIN" => ResponseCode::NX_DOMAIN,
+        "REFUSED" => ResponseCode::REFUSED,
+        "NOERROR" => ResponseCode::NO_ERROR,
+        // The full `RCODE;RRTYPE;VALUE` form is not supported yet.
+        _ => return Err(LineKind::Unsupported("dnsrewrite form")),
+    };
+    Ok(Rewrite::Rcode(rcode))
 }
 
 fn parse_hosts<'a>(
@@ -537,11 +605,49 @@ mod tests {
             Action::Allow
         );
         assert!(with("||ads.example^$important,badfilter", true, true).badfilter);
+        // `$dnsrewrite` values, in both short forms.
+        let rewrite = |line: &str| parse(line).1[0].rewrite;
+        assert_eq!(
+            rewrite("||ads.example^$dnsrewrite=192.0.2.10"),
+            Some(Rewrite::Address("192.0.2.10".parse().unwrap()))
+        );
+        assert_eq!(
+            rewrite("||ads.example^$dnsrewrite=2001:db8::10"),
+            Some(Rewrite::Address("2001:db8::10".parse().unwrap()))
+        );
+        assert_eq!(
+            rewrite("||ads.example^$dnsrewrite=nxdomain"),
+            Some(Rewrite::Rcode(ResponseCode::NX_DOMAIN))
+        );
+        assert_eq!(
+            rewrite("||ads.example^$dnsrewrite=REFUSED"),
+            Some(Rewrite::Rcode(ResponseCode::REFUSED))
+        );
+        // `@@…$dnsrewrite` is the disable marker, with or without a value.
+        let off = parse("@@||ads.example^$dnsrewrite");
+        assert_eq!(off.0, LineKind::Rules(1));
+        assert!(off.1[0].rewrite_off);
+        assert_eq!(off.1[0].rewrite, None);
+        let off = parse("@@||ads.example^$dnsrewrite=192.0.2.10");
+        assert!(off.1[0].rewrite_off);
+        assert_eq!(
+            off.1[0].rewrite,
+            Some(Rewrite::Address("192.0.2.10".parse().unwrap()))
+        );
+        // A value-less `$dnsrewrite` on a blocking rule means nothing, and
+        // the full `RCODE;RRTYPE;VALUE` form is not supported yet.
+        assert_eq!(
+            parse("||ads.example^$dnsrewrite").0,
+            LineKind::Unsupported("dnsrewrite form")
+        );
+        assert_eq!(
+            parse("||ads.example^$dnsrewrite=NOERROR;A;192.0.2.10").0,
+            LineKind::Unsupported("dnsrewrite form")
+        );
         // Unknown modifiers (with or without a value) are unsupported, so the
         // rule is ignored rather than misread.
         for line in [
             "||ads.example^$client=1.2.3.4",
-            "||ads.example^$dnsrewrite=NXDOMAIN",
             "||ads.example^$",
             "||ads.example^$important,ctag=os_windows",
         ] {

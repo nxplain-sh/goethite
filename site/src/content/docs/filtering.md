@@ -22,19 +22,24 @@ by line, so lists can be mixed freely.
 | `\|\|ads.example^$important` | a block that outranks exceptions |
 | `@@\|\|good.example^$important` | an exception that outranks `$important` blocks |
 | `\|\|ads.example^$badfilter` | disables the rule it names (`\|\|ads.example^`), from any list |
+| `\|\|ads.example^$dnsrewrite=192.0.2.10` | answers `A` queries with that address (`AAAA` for an IPv6 one) |
+| `\|\|ads.example^$dnsrewrite=NXDOMAIN` | answers with that code, also `REFUSED` and `NOERROR` |
+| `@@\|\|ads.example^$dnsrewrite` | disables rewrites for the name (`=192.0.2.10` disables just that one) |
 
 An `$important` exception wins over everything, then an `$important` block, then an exception,
 then a block. Between two rules of the same kind the more specific one decides, so a regular
-exception still beats a regular block whatever the order of the rules. Matching ignores case.
+exception still beats a regular block whatever the order of the rules. A `$dnsrewrite` rule
+answers instead of resolving, before any other rule, blocking included. Matching ignores case.
 Lines starting with `!` or `#`, `[Adblock Plus 2.0]`-style headers and blank lines are ignored,
 and hosts files may end lines with a `# comment`. Hosts entries for `localhost` and similar
 system names are skipped.
 
 Not supported yet, so counted and skipped rather than guessed at: regular expressions
-(`/ads[0-9]+/`), modifiers other than `$important` and `$badfilter` (`$client`, `$dnsrewrite`,
-`$denyallow`…), patterns without a `||` or `|` anchor, wildcards inside a name, names with
-non-ASCII characters, and hosts entries with a real address (those are rewrites, not blocks). The
-log shows how many lines of each list were used, unsupported and invalid.
+(`/ads[0-9]+/`), modifiers other than `$important`, `$badfilter` and `$dnsrewrite` (`$client`,
+`$denyallow`…), the full `$dnsrewrite=RCODE;RRTYPE;VALUE` form, patterns without a `||` or `|`
+anchor, wildcards inside a name, names with non-ASCII characters, and hosts entries with a real
+address (those are rewrites, not blocks). The log shows how many lines of each list were used,
+unsupported and invalid.
 
 ## Configuration
 

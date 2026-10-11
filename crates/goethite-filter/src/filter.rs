@@ -29,7 +29,7 @@ use fst::{Map, MapBuilder};
 use goethite_proto::Name;
 
 use crate::bloom::Bloom;
-use crate::rule::{Action, LineKind, Rule, Scope, parse_line};
+use crate::rule::{Action, LineKind, Rewrite, Rule, Scope, parse_line};
 
 /// The most rules one filter accepts; more are counted and dropped.
 pub const MAX_RULES: usize = 5_000_000;
@@ -247,7 +247,26 @@ pub struct FilterBuilder {
     rules: Vec<(Vec<u8>, Source, u8)>,
     /// The `$badfilter` rules, by the key and slot of the rule each disables.
     badfilters: Vec<(Vec<u8>, u8)>,
+    /// The `$dnsrewrite` rules and their `@@` markers.
+    rewrites: Vec<RewriteRule>,
+    /// The `$badfilter` rules naming a `$dnsrewrite` rule: key, scope,
+    /// importance, and the rewrite they name (`None` for any).
+    rewrite_badfilters: Vec<(Vec<u8>, Scope, bool, Option<Rewrite>)>,
     stats: ListStats,
+}
+
+/// One compiled `$dnsrewrite` rule.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RewriteRule {
+    key: Vec<u8>,
+    source: Source,
+    scope: Scope,
+    important: bool,
+    /// What it answers; `None` on an `@@…$dnsrewrite` marker without a
+    /// value, which disables every rewrite for the name.
+    rewrite: Option<Rewrite>,
+    /// The `@@…$dnsrewrite` marker: disables instead of applying.
+    off: bool,
 }
 
 impl std::fmt::Debug for FilterBuilder {
@@ -255,6 +274,8 @@ impl std::fmt::Debug for FilterBuilder {
         f.debug_struct("FilterBuilder")
             .field("rules", &self.rules.len())
             .field("badfilters", &self.badfilters.len())
+            .field("rewrites", &self.rewrites.len())
+            .field("rewrite_badfilters", &self.rewrite_badfilters.len())
             .field("stats", &self.stats)
             .finish()
     }
@@ -275,16 +296,42 @@ impl FilterBuilder {
             self.stats.invalid = self.stats.invalid.saturating_add(1);
             return false;
         }
-        if self.rules.len().saturating_add(self.badfilters.len()) >= MAX_RULES {
+        let count = self
+            .rules
+            .len()
+            .saturating_add(self.badfilters.len())
+            .saturating_add(self.rewrites.len())
+            .saturating_add(self.rewrite_badfilters.len());
+        if count >= MAX_RULES {
             self.stats.over_limit = self.stats.over_limit.saturating_add(1);
             return false;
         }
         let slot = u8::try_from(slot(rule.action, rule.scope, rule.important)).unwrap_or(0);
-        if rule.badfilter {
-            self.badfilters.push((key(&rule.name), slot));
+        let key = key(&rule.name);
+        // A `$dnsrewrite` rule lives beside the FST, whether it applies a
+        // rewrite or disables one.
+        if rule.rewrite.is_some() || rule.rewrite_off {
+            if rule.badfilter {
+                self.rewrite_badfilters
+                    .push((key, rule.scope, rule.important, rule.rewrite));
+                return true;
+            }
+            self.rewrites.push(RewriteRule {
+                key,
+                source,
+                scope: rule.scope,
+                important: rule.important,
+                rewrite: rule.rewrite,
+                off: rule.rewrite_off,
+            });
+            self.stats.rules = self.stats.rules.saturating_add(1);
             return true;
         }
-        self.rules.push((key(&rule.name), source, slot));
+        if rule.badfilter {
+            self.badfilters.push((key, slot));
+            return true;
+        }
+        self.rules.push((key, source, slot));
         self.stats.rules = self.stats.rules.saturating_add(1);
         true
     }
@@ -342,6 +389,23 @@ impl FilterBuilder {
             let removed = before.saturating_sub(self.rules.len());
             self.stats.rules = self.stats.rules.saturating_sub(removed);
         }
+        // The same for `$dnsrewrite` rules: a `$badfilter` naming one drops
+        // it.
+        if !self.rewrite_badfilters.is_empty() {
+            let badfilters = std::mem::take(&mut self.rewrite_badfilters);
+            let before = self.rewrites.len();
+            self.rewrites.retain(|rule| {
+                !badfilters.iter().any(|(key, scope, important, rewrite)| {
+                    key == &rule.key
+                        && scope == &rule.scope
+                        && important == &rule.important
+                        && rewrite.is_none_or(|rewrite| Some(rewrite) == rule.rewrite)
+                })
+            });
+            let removed = before.saturating_sub(self.rewrites.len());
+            self.stats.rules = self.stats.rules.saturating_sub(removed);
+        }
+        self.rewrites.sort_unstable_by(|a, b| a.key.cmp(&b.key));
         self.rules.sort_unstable_by(|a, b| a.0.cmp(&b.0));
         let mut entries: Vec<Entry> = Vec::new();
         let mut index_of: HashMap<Entry, u64> = HashMap::new();
@@ -372,6 +436,7 @@ impl FilterBuilder {
             map: builder.into_map(),
             entries: entries.into_boxed_slice(),
             bloom,
+            rewrites: self.rewrites.into_boxed_slice(),
             rules: self.stats.rules,
             keys,
         })
@@ -393,6 +458,8 @@ pub struct Filter {
     map: Map<Vec<u8>>,
     entries: Box<[Entry]>,
     bloom: Bloom,
+    /// The `$dnsrewrite` rules, sorted by key.
+    rewrites: Box<[RewriteRule]>,
     rules: usize,
     keys: usize,
 }
@@ -414,6 +481,7 @@ impl Filter {
             map: Map::default(),
             entries: Box::default(),
             bloom: Bloom::with_capacity(0),
+            rewrites: Box::default(),
             rules: 0,
             keys: 0,
         }
@@ -464,6 +532,71 @@ impl Filter {
             return Verdict::Pass;
         }
         self.walk(key, sources)
+    }
+
+    /// What a `$dnsrewrite` rule answers for `name`, if one applies among
+    /// the rules from `sources` and no `@@…$dnsrewrite` marker disables it.
+    ///
+    /// A rewrite takes priority over blocking. Among the rules that match,
+    /// an `$important` one comes first, then the longest name, then exact
+    /// before subtree before subdomains, then the lowest source. A marker
+    /// disables every rewrite it covers when it has no value, and the one
+    /// with its value when it has one.
+    pub fn rewrite(&self, name: &Name, sources: Sources) -> Option<Rewrite> {
+        if sources.is_empty() || self.rewrites.is_empty() {
+            return None;
+        }
+        let mut buffer = [0_u8; MAX_KEY_LEN];
+        let key = key_into(name, &mut buffer)?;
+        // Every label boundary of the key is the key of a name this one is
+        // within; the last is the name itself.
+        let mut bounds = [0_usize; 128];
+        let mut count = 0_usize;
+        let mut at = 0_usize;
+        while at < key.len() {
+            let len = usize::from(*key.get(at)?);
+            at = at.saturating_add(1).saturating_add(len);
+            *bounds.get_mut(count)? = at;
+            count = count.saturating_add(1);
+        }
+        let mut best: Option<&RewriteRule> = None;
+        let mut best_rank = None;
+        for &end in bounds.get(..count)?.iter().rev() {
+            let prefix = key.get(..end)?;
+            let start = self
+                .rewrites
+                .partition_point(|rule| rule.key.as_slice() < prefix);
+            for rule in self.rewrites.get(start..)? {
+                if rule.key.as_slice() != prefix {
+                    break;
+                }
+                if !sources.contains(rule.source)
+                    || rule.off
+                    || !covers(rule.scope, end == key.len())
+                {
+                    continue;
+                }
+                let rank = (
+                    !rule.important,
+                    std::cmp::Reverse(end),
+                    rank(rule.scope),
+                    rule.source,
+                );
+                if best_rank.is_none_or(|current| rank < current) {
+                    best = Some(rule);
+                    best_rank = Some(rank);
+                }
+            }
+        }
+        let best = best?;
+        let disabled = self.rewrites.iter().any(|rule| {
+            rule.off
+                && sources.contains(rule.source)
+                && (rule.rewrite.is_none() || rule.rewrite == best.rewrite)
+                && key.starts_with(rule.key.as_slice())
+                && covers(rule.scope, rule.key.len() == key.len())
+        });
+        if disabled { None } else { best.rewrite }
     }
 
     /// Walks the FST along `key`, keeping the deepest match of each action
@@ -533,6 +666,25 @@ impl Filter {
             }
         }
         decide(block, allow, important_block, important_allow)
+    }
+}
+
+/// Whether a rule of `scope` matches a name whose key ends at the full
+/// length (`full`): exact only then, subtree always, subdomains only before.
+fn covers(scope: Scope, full: bool) -> bool {
+    match scope {
+        Scope::Exact => full,
+        Scope::Subtree => true,
+        Scope::Subdomains => !full,
+    }
+}
+
+/// Exact before subtree before subdomains, for picking among matches.
+fn rank(scope: Scope) -> usize {
+    match scope {
+        Scope::Exact => 0,
+        Scope::Subtree => 1,
+        Scope::Subdomains => 2,
     }
 }
 
@@ -610,11 +762,6 @@ fn anchor(key: &[u8]) -> &[u8] {
 /// This is the definition [`Filter::check`] must agree with; tests and
 /// fuzzing compare the two.
 pub fn reference_check(rules: &[(Source, Rule)], name: &Name, sources: Sources) -> Verdict {
-    let rank = |scope| match scope {
-        Scope::Exact => 0,
-        Scope::Subtree => 1,
-        Scope::Subdomains => 2,
-    };
     // A `$badfilter` rule disables every rule it names: the same name,
     // scope, action and importance, from any source.
     let disabled = |rule: &Rule| {
@@ -765,6 +912,90 @@ mod tests {
         // A badfilter for a rule nobody wrote changes nothing.
         let stray = filter("||ads.example^\n||other.example^$badfilter\n");
         assert_eq!(kind(&stray, "ads.example"), "blocked");
+    }
+
+    #[test]
+    fn dnsrewrite_rules_answer_and_can_be_disabled() {
+        use goethite_proto::ResponseCode;
+
+        let address = |s: &str| Some(Rewrite::Address(s.parse().unwrap()));
+        let only = filter("||ads.example^$dnsrewrite=192.0.2.10\n");
+        assert_eq!(
+            only.rewrite(&name("ads.example"), Sources::ALL),
+            address("192.0.2.10")
+        );
+        // The rule's scope applies: names below it too.
+        assert_eq!(
+            only.rewrite(&name("x.ads.example"), Sources::ALL),
+            address("192.0.2.10")
+        );
+        assert_eq!(only.rewrite(&name("other.example"), Sources::ALL), None);
+
+        // A rewrite outranks a block: check() blocks, rewrite() still answers.
+        let blocked = filter("||ads.example^\n||ads.example^$dnsrewrite=192.0.2.10\n");
+        assert!(
+            blocked
+                .check(&name("ads.example"), Sources::ALL)
+                .is_blocked()
+        );
+        assert_eq!(
+            blocked.rewrite(&name("ads.example"), Sources::ALL),
+            address("192.0.2.10")
+        );
+
+        // An `@@` marker without a value disables every rewrite for the name.
+        let off = filter("||ads.example^$dnsrewrite=192.0.2.10\n@@||ads.example^$dnsrewrite\n");
+        assert_eq!(off.rewrite(&name("ads.example"), Sources::ALL), None);
+        // With a value it disables only that one.
+        let same = filter(
+            "||ads.example^$dnsrewrite=192.0.2.10\n@@||ads.example^$dnsrewrite=192.0.2.10\n",
+        );
+        assert_eq!(same.rewrite(&name("ads.example"), Sources::ALL), None);
+        let other = filter(
+            "||ads.example^$dnsrewrite=192.0.2.10\n@@||ads.example^$dnsrewrite=192.0.2.11\n",
+        );
+        assert_eq!(
+            other.rewrite(&name("ads.example"), Sources::ALL),
+            address("192.0.2.10")
+        );
+
+        // RCODE rewrites.
+        let nx = filter("||ads.example^$dnsrewrite=NXDOMAIN\n");
+        assert_eq!(
+            nx.rewrite(&name("ads.example"), Sources::ALL),
+            Some(Rewrite::Rcode(ResponseCode::NX_DOMAIN))
+        );
+
+        // The longest name wins; an important one beats a longer one.
+        let long = filter("||example^$dnsrewrite=192.0.2.1\n||ads.example^$dnsrewrite=192.0.2.2\n");
+        assert_eq!(
+            long.rewrite(&name("ads.example"), Sources::ALL),
+            address("192.0.2.2")
+        );
+        let important = filter(
+            "||example^$dnsrewrite=192.0.2.1,important\n||ads.example^$dnsrewrite=192.0.2.2\n",
+        );
+        assert_eq!(
+            important.rewrite(&name("ads.example"), Sources::ALL),
+            address("192.0.2.1")
+        );
+
+        // A badfilter naming the rewrite drops it.
+        let gone = filter(
+            "||ads.example^$dnsrewrite=192.0.2.10\n\
+             ||ads.example^$dnsrewrite=192.0.2.10,badfilter\n",
+        );
+        assert_eq!(gone.rewrite(&name("ads.example"), Sources::ALL), None);
+
+        // Only the sources that apply are consulted.
+        let mut builder = FilterBuilder::new();
+        builder.add_list(source(5), "||ads.example^$dnsrewrite=192.0.2.10\n");
+        let sourced = builder.build().unwrap();
+        assert_eq!(sourced.rewrite(&name("ads.example"), Sources::NONE), None);
+        assert_eq!(
+            sourced.rewrite(&name("ads.example"), Sources::NONE.with(source(5))),
+            address("192.0.2.10")
+        );
     }
 
     #[test]
